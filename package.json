@@ -1,0 +1,9 @@
+{
+  "name": "cmp",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sanitize": "node runner/sanitize.js",
+    "run": "node runner/run.js"
+  }
+}
