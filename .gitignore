@@ -6,3 +6,4 @@ results/
 lean-env/
 problems/*
 !problems/dev.txt
+vendor/

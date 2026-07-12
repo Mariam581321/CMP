@@ -101,6 +101,26 @@ results/                    per-run dirs + results.jsonl (gitignored)
 2. `sanitize.ts` + `run.ts` baseline on 1 problem end-to-end.
 3. `lean-search.ts` → baseline vs +search on the dev subset. First real datapoint.
 
+## Speed plan (post-first-run)
+
+Where time goes today: every `lake env lean` deserializes all of Mathlib (~6 GB, 12–50 s)
+to check a 20-line file (~1–5 s), ~11×/problem, serialized (one slot fits in RAM).
+
+1. **Persistent Lean REPL** (`vendor/repl`, pinned v4.27.0): import Mathlib once into a
+   resident process; each check = JSON cmd against that env (~1–5 s, no re-import).
+   Serve it from a small local HTTP daemon (`runner/lean-server.js`) so the grader and
+   every pi subprocess share one warm REPL — this replaces the mkdir slot semaphore.
+   Watchdog: per-cmd timeout, auto-restart on crash/hang. Expected ~10× on the lean side.
+2. **maxHeartbeats cap** per check — bounds runaway tactic searches (`decide`, etc.).
+3. **lean_check memo** — hash the file, return the cached verdict when the agent re-checks
+   an unchanged file.
+4. **After the 12 GB WSL bump**: oleans stay in page cache; optionally try 2 REPL workers.
+5. **Full-673 runs**: with fast checks the LLM becomes the bottleneck → agent concurrency
+   8–16; ballpark drops from ~45 h/arm (current) to ~3–5 h/arm.
+
+Not doing: minimal per-problem imports (changes the benchmark — import hints are premise
+hints), skipping independent grading, parallel arms while wall-time matters.
+
 ## Punted (deliberately)
 
 Turn caps (timeout only), retries/resume, dashboards, lean4checker kernel re-verification
