@@ -30,17 +30,17 @@ reads `DEEPSEEK_API_KEY` (in `.env`, gitignored). No OpenAI-compat shim needed.
   precheck + batched **[Lean REPL](https://github.com/leanprover-community/repl)**
   verification (sorry/error detection via the REPL, parallelized). Port its verify module
   to point at our PutnamBench workspace; we don't use its generation side.
-- Plus the one check FATE-Eval won't know about: **statement preserved** — ~/lean2's
-  `verify.py` already implements this (line-level diff vs original, handles `:= sorry`
-  abbrevs) along with no-sorry/no-axiom prechecks; port it rather than rewrite.
+- Plus the one check FATE-Eval won't know about: **statement preserved** — line-level diff
+  of the theorem/abbrev statement vs the sanitized original (the only check we write
+  ourselves; ~30 lines, agent-specific attack surface).
 - Axiom soundness: check via REPL `#print axioms <thm>` (catches `native_decide` etc.),
   not by grepping.
 
 ## Lean without pain
 
-One shared pre-built project. **~/lean2 already has exactly this**: a PutnamBench lean4
-checkout with mathlib cache pulled and known-good `lake build` — reuse it as `lean-env/`
-instead of building a new one. Agent-facing `lean_check` copies the file in and compiles
+One shared pre-built project: `lean-env/` built fresh from
+`benchmarks/PutnamBench/lean4` (its lakefile + toolchain), `lake exe cache get` once
+(~mins, not hours). Agent-facing `lean_check` copies the file in and compiles
 (`lake env lean <file>`); each invocation is an independent process, so it parallelizes.
 
 ## Concurrency
@@ -70,20 +70,19 @@ is computable later without re-running.
 
 `extensions/lean-search.ts` registers `search_mathlib(query)` → calls the public
 **[LeanSearch](https://leansearch.net)** API (natural-language → mathlib lemmas; community-
-standard, zero indexing infra on our side). ~/lean2's `lean-search` skill already has the
-exact API call working (`POST https://leansearch.net/search`). Fallbacks if the API is
-flaky: [LeanExplore](https://arxiv.org/abs/2506.11085) (Python API, self-hostable) or
-Loogle (symbolic — that's a separate future arm).
+standard, zero indexing infra on our side; `POST https://leansearch.net/search`). Fallbacks
+if the API is flaky: [LeanExplore](https://arxiv.org/abs/2506.11085) (Python API,
+self-hostable) or Loogle (symbolic — that's a separate future arm).
 
 ## Files
 
 ```
 runner/run.ts               spawn pi per problem, worker pool, logging (~250 lines TS)
 runner/sanitize.ts          PutnamBench src/*.lean -> problems/*.lean (strip `--` answer comments)
-runner/verify/              ported from FATE-Eval (REPL check) + lean2 (statement check)
+runner/verify/              ported from FATE-Eval (REPL check) + our statement check
 extensions/lean-check.ts    always-on agent-facing compile tool
 extensions/lean-search.ts   arm #1: LeanSearch API
-lean-env/                   shared Lean project, reused from ~/lean2 (gitignored)
+lean-env/                   shared Lean project built from benchmarks/PutnamBench/lean4 (gitignored)
 problems/                   sanitized statements + dev.txt / all.txt
 results/                    per-run dirs + results.jsonl (gitignored)
 ```
@@ -98,7 +97,7 @@ results/                    per-run dirs + results.jsonl (gitignored)
 
 ## Build order
 
-1. `lean-env/` from ~/lean2 + verifier port — grade a hand-written proof correctly.
+1. `lean-env/` setup + verifier port — grade a hand-written proof correctly.
 2. `sanitize.ts` + `run.ts` baseline on 1 problem end-to-end.
 3. `lean-search.ts` → baseline vs +search on the dev subset. First real datapoint.
 
