@@ -8,7 +8,7 @@
 //        --concurrency <n> (4) --model <id> --thinking <level> --run-id <s>
 
 import { spawn, execSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync, appendFileSync, copyFileSync, createWriteStream, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, appendFileSync, copyFileSync, createWriteStream, existsSync, rmSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { grade } from "./grade.js";
@@ -22,7 +22,7 @@ function arg(name, dflt) {
 }
 const COMBO = (arg("combo", "") || "").split(",").map((s) => s.trim()).filter(Boolean);
 const PROBLEMS_FILE = arg("problems", join(ROOT, "problems/dev.txt"));
-const TIMEOUT_S = parseInt(arg("timeout", "600"));
+const TIMEOUT_S = parseInt(arg("timeout", "1500"));
 const CONCURRENCY = parseInt(arg("concurrency", "4"));
 const MODEL = arg("model", "deepseek/deepseek-v4-flash");
 const THINKING = arg("thinking", "off");
@@ -37,6 +37,8 @@ if (existsSync(dotenv))
   }
 process.env.PATH = `${process.env.HOME}/.local/node/bin:${process.env.HOME}/.elan/bin:${process.env.PATH}`;
 process.env.CMP_LEAN_ENV = join(ROOT, "lean-env");
+// clear any leaked lean-slot locks from a previous (killed) run
+rmSync(join(ROOT, "lean-env", "_locks"), { recursive: true, force: true });
 
 for (const ext of COMBO)
   if (!existsSync(join(ROOT, "extensions", `${ext}.ts`))) {
@@ -120,6 +122,9 @@ async function attempt(name, idx) {
         const line = buf.slice(0, nl);
         buf = buf.slice(nl + 1);
         if (!line.trim()) continue;
+        // message_update fires per token and embeds the full accumulated message —
+        // hundreds of MB per problem. message_end carries everything we need.
+        if (line.includes('"type":"message_update"')) continue;
         events.write(line + "\n");
         try {
           const e = JSON.parse(line);

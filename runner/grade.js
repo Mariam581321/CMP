@@ -8,6 +8,7 @@ import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync } from "node
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
+import { withLeanSlot } from "./lean-slots.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const LEAN_ENV = process.env.CMP_LEAN_ENV ?? join(ROOT, "lean-env");
@@ -86,7 +87,7 @@ export async function grade(problemName, solutionPath, originalPath) {
   const probes = decls.map((d) => `#print axioms ${d}`).join("\n");
   writeFileSync(tmp, `${solution}\n\n${probes}\n`);
   try {
-    const { out, code } = await runLean(tmp);
+    const { out, code } = await withLeanSlot(LEAN_ENV, () => runLean(tmp));
     if (code !== 0) return { solved: false, reason: "compile_error", detail: out.slice(0, 4000) };
 
     const axioms = {};

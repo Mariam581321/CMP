@@ -8,6 +8,7 @@ import { execFile } from "node:child_process";
 import { copyFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { withLeanSlot } from "../runner/lean-slots.js";
 
 const LEAN_ENV =
   process.env.CMP_LEAN_ENV ??
@@ -37,7 +38,7 @@ export default function (pi: ExtensionAPI) {
     description:
       "Compile problem.lean with Lean 4 + Mathlib and return the compiler output. " +
       "This is the ground truth for whether your proof is accepted. " +
-      "Takes ~1 minute; make each check count.",
+      "Checks are queued and can take a few minutes; make each check count.",
     promptSnippet: "lean_check - compile problem.lean and get Lean compiler errors/warnings",
     parameters: Type.Object({}),
     async execute(_toolCallId, _params, signal, _onUpdate, ctx) {
@@ -50,7 +51,7 @@ export default function (pi: ExtensionAPI) {
       const tmp = join(dir, `check_${process.pid}_${++counter}.lean`);
       copyFileSync(src, tmp);
       try {
-        const { out, code } = await runLean(tmp, LEAN_ENV, signal);
+        const { out, code } = await withLeanSlot(LEAN_ENV, () => runLean(tmp, LEAN_ENV, signal), signal);
         const text =
           code === 0 && out === ""
             ? "compiled successfully: no errors, no warnings"
