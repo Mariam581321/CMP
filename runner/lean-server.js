@@ -14,27 +14,28 @@ import { createServer } from "node:http";
 import { createHash } from "node:crypto";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { LEAN_PORT } from "./common.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const LEAN_ENV = process.env.CMP_LEAN_ENV ?? join(ROOT, "lean-env");
 const REPL_BIN = process.env.CMP_REPL_BIN ?? join(ROOT, "vendor/repl/.lake/build/bin/repl");
-const PORT = parseInt(process.env.CMP_LEAN_PORT ?? "8787");
+const PORT = parseInt(LEAN_PORT);
 const DEFAULT_TIMEOUT_MS = 240_000;
 const IMPORT_TIMEOUT_MS = 420_000;
 const MAX_HEARTBEATS = 400_000; // 2x lean default; bounds runaway tactic searches
+const MEMO_MAX = 2000;
 
 let repl = null;
 let ready = false;
-let buf = "";
 let onResponse = null; // resolver for the in-flight REPL command
 const memo = new Map();
 let queue = Promise.resolve();
 
 const log = (...a) => console.error(new Date().toISOString(), ...a);
 
-// Extract complete top-level JSON objects from the stream (brace-depth scan,
-// string-aware — the REPL pretty-prints multi-line JSON).
-function extractJson() {
+// Extract complete top-level JSON objects from a buffer (brace-depth scan,
+// string-aware — the REPL pretty-prints multi-line JSON). Returns [json, rest].
+function extractJson(buf) {
   const start = buf.indexOf("{");
   if (start < 0) return null;
   let depth = 0, inStr = false, esc = false;
@@ -46,9 +47,7 @@ function extractJson() {
     if (inStr) continue;
     if (ch === "{") depth++;
     if (ch === "}" && --depth === 0) {
-      const text = buf.slice(start, i + 1);
-      buf = buf.slice(i + 1);
-      return JSON.parse(text);
+      return [JSON.parse(buf.slice(start, i + 1)), buf.slice(i + 1)];
     }
   }
   return null;
@@ -72,16 +71,24 @@ function sendToRepl(obj, timeoutMs) {
 
 async function startRepl() {
   ready = false;
-  buf = "";
-  repl = spawn("lake", ["env", REPL_BIN], { cwd: LEAN_ENV, env: process.env, stdio: ["pipe", "pipe", "pipe"] });
-  repl.stdout.on("data", (d) => {
+  // proc identity guard: after a restart, a half-dead old REPL can still emit
+  // output/close events; those must never reach the current onResponse resolver
+  // (seen in practice: a stale check response consumed as the import response).
+  const proc = spawn("lake", ["env", REPL_BIN], { cwd: LEAN_ENV, env: process.env, stdio: ["pipe", "pipe", "pipe"] });
+  repl = proc;
+  let buf = "";
+  proc.stdout.on("data", (d) => {
+    if (repl !== proc) return;
     buf += d;
-    let json;
-    while ((json = extractJson()) !== null) onResponse?.(json);
+    let hit;
+    while ((hit = extractJson(buf)) !== null) {
+      buf = hit[1];
+      onResponse?.(hit[0]);
+    }
   });
-  repl.stderr.on("data", (d) => log("repl stderr:", String(d).trim().slice(0, 300)));
-  repl.on("close", (code) => {
-    if (ready) restartRepl(`repl exited (code ${code})`);
+  proc.stderr.on("data", (d) => log("repl stderr:", String(d).trim().slice(0, 300)));
+  proc.on("close", (code) => {
+    if (repl === proc && ready) restartRepl(`repl exited (code ${code})`);
   });
   log("importing Mathlib...");
   const t0 = Date.now();
@@ -119,8 +126,12 @@ function prepare(code) {
       capPlaced = true;
     }
   }
-  if (!capPlaced) lines.unshift(`set_option maxHeartbeats ${MAX_HEARTBEATS}`); // note: shifts lines by 1
-  return { text: lines.join("\n"), shifted: !capPlaced ? 1 : 0 };
+  let shifted = 0;
+  if (!capPlaced) {
+    lines.unshift(`set_option maxHeartbeats ${MAX_HEARTBEATS}`);
+    shifted = 1;
+  }
+  return { text: lines.join("\n"), shifted };
 }
 
 function render(resp, shifted) {
@@ -151,6 +162,7 @@ async function handleCheck(body) {
   try {
     const resp = await sendToRepl({ cmd: text, env: 0 }, body.timeoutMs ?? DEFAULT_TIMEOUT_MS);
     const result = render(resp, shifted);
+    if (memo.size >= MEMO_MAX) memo.delete(memo.keys().next().value); // bounded, oldest-first
     memo.set(key, result);
     return result;
   } catch (e) {

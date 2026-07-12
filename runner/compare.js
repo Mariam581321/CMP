@@ -4,10 +4,7 @@
 
 import { readFileSync, existsSync } from "node:fs";
 import { join, basename, resolve } from "node:path";
-
-const tty = process.stdout.isTTY;
-const c = (code, s) => (tty ? `\x1b[${code}m${s}\x1b[0m` : s);
-const green = (s) => c(32, s), red = (s) => c(31, s), yellow = (s) => c(33, s), dim = (s) => c(2, s), bold = (s) => c(1, s);
+import { green, red, yellow, dim, bold } from "./common.js";
 
 const dirs = process.argv.slice(2).map((d) => resolve(d));
 if (dirs.length < 1) {

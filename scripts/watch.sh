@@ -55,9 +55,14 @@ if active:
     for name, age, last in active:
         print(f"  {name:<20}{last:<22}{D}last event {age}s ago{N}")
 
-locks = glob.glob("lean-env/_locks/slot*")
+import urllib.request
+try:
+    with urllib.request.urlopen(f"http://127.0.0.1:{os.environ.get('CMP_LEAN_PORT','8787')}/health", timeout=2) as r:
+        srv = "ready" if json.load(r).get("ready") else "importing/restarting"
+except Exception:
+    srv = "DOWN"
 mem = os.popen("free -m | awk 'NR==2{printf \"%d/%dMB\", $3, $2}'").read()
-print(f"\n{D}lean slot: {'BUSY' if locks else 'idle'}   mem {mem}{N}")
+print(f"\n{D}lean server: {srv}   mem {mem}{N}")
 EOF
   )
   clear

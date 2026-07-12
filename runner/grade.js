@@ -7,9 +7,9 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { LEAN_URL, classifyLines } from "./common.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const PORT = process.env.CMP_LEAN_PORT ?? "8787";
 const ALLOWED_AXIOMS = new Set(["propext", "Classical.choice", "Quot.sound"]);
 const GRADE_TIMEOUT_MS = 480_000;
 
@@ -24,22 +24,14 @@ export function benchmarkDecls(originalSource) {
 
 // Every code line of the original (except bare `sorry`) must survive verbatim in the
 // solution; for `... := sorry` lines the `... :=` prefix must survive as a line prefix.
-// Docstrings /-- ... -/ are comments: deleting them is harmless, so they're not required.
+// Docstrings/comments/blanks are not required — deleting them is harmless.
 export function checkStatementPreserved(original, solution) {
   const solLines = solution.split("\n");
   const solSet = new Set(solLines.map((l) => l.trimEnd()));
-  let inDocstring = false;
-  for (const line of original.split("\n")) {
+  for (const { line, kind } of classifyLines(original)) {
+    if (kind !== "code") continue;
     const stripped = line.trim();
-    if (inDocstring) {
-      if (stripped.endsWith("-/")) inDocstring = false;
-      continue;
-    }
-    if (stripped.startsWith("/--")) {
-      if (!stripped.endsWith("-/") || stripped === "/--") inDocstring = true;
-      continue;
-    }
-    if (stripped === "sorry" || stripped === "") continue;
+    if (stripped === "sorry") continue;
     if (stripped.includes(":= sorry")) {
       const prefix = line.replace(/:=\s*sorry.*$/, ":=").trimEnd();
       if (!solLines.some((sl) => sl.trimEnd().startsWith(prefix.trim()) || sl.trimEnd() === prefix))
@@ -52,8 +44,8 @@ export function checkStatementPreserved(original, solution) {
   return { ok: true };
 }
 
-async function serverCheck(code, timeoutMs = GRADE_TIMEOUT_MS) {
-  const resp = await fetch(`http://127.0.0.1:${PORT}/check`, {
+export async function serverCheck(code, timeoutMs = GRADE_TIMEOUT_MS) {
+  const resp = await fetch(`${LEAN_URL}/check`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ code, timeoutMs }),

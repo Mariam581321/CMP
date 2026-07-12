@@ -8,18 +8,15 @@
 //        --concurrency <n> (4) --model <id> --thinking <level> --run-id <s>
 
 import { spawn, execSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync, appendFileSync, copyFileSync, createWriteStream, existsSync, rmSync, readdirSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, appendFileSync, copyFileSync, createWriteStream, existsSync, readdirSync, statSync, openSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { grade } from "./grade.js";
+import { grade, serverCheck } from "./grade.js";
+import { arg, LEAN_PORT, LEAN_URL, green, red, yellow, dim, bold, cyan, money, secs } from "./common.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 // ---------- args ----------
-function arg(name, dflt) {
-  const i = process.argv.indexOf(`--${name}`);
-  return i >= 0 ? process.argv[i + 1] : dflt;
-}
 const COMBO = (arg("combo", "") || "").split(",").map((s) => s.trim()).filter(Boolean);
 const PROBLEMS_FILE = arg("problems", join(ROOT, "problems/dev.txt"));
 const TIMEOUT_S = parseInt(arg("timeout", "1500"));
@@ -30,23 +27,18 @@ const RUN_ID = arg("run-id", `${COMBO.join("+") || "baseline"}-${new Date().toIS
 
 // ---------- setup ----------
 const dotenv = join(ROOT, ".env");
-if (existsSync(dotenv))
-  for (const line of readFileSync(dotenv, "utf8").split("\n")) {
-    const m = line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);
-    if (m && !process.env[m[1]]) process.env[m[1]] = m[2];
-  }
+if (existsSync(dotenv)) process.loadEnvFile(dotenv);
 process.env.PATH = `${process.env.HOME}/.local/node/bin:${process.env.HOME}/.elan/bin:${process.env.PATH}`;
 process.env.CMP_LEAN_ENV = join(ROOT, "lean-env");
-process.env.CMP_LEAN_PORT = process.env.CMP_LEAN_PORT ?? "8787";
+process.env.CMP_LEAN_PORT = LEAN_PORT;
 
 // Persistent lean server: reuse one that's already up, else spawn and wait for
 // Mathlib to load (~1-2 min). Spawned server is killed when this run exits.
 async function ensureLeanServer(logPath) {
   const health = () =>
-    fetch(`http://127.0.0.1:${process.env.CMP_LEAN_PORT}/health`, { signal: AbortSignal.timeout(2000) })
+    fetch(`${LEAN_URL}/health`, { signal: AbortSignal.timeout(2000) })
       .then((r) => r.json()).then((j) => j.ready).catch(() => null);
   if (await health()) return null;
-  const { openSync } = await import("node:fs");
   const fd = openSync(logPath, "a");
   const child = spawn("node", [join(ROOT, "runner/lean-server.js")], { env: process.env, stdio: ["ignore", fd, fd] });
   process.stdout.write(dim("  starting lean server (importing Mathlib)... "));
@@ -92,13 +84,6 @@ const PROMPT = "Prove the theorem in problem.lean. Read it first, then work unti
 const NUDGE_PROMPT = "You are not done: problem.lean still contains `sorry` or has not been verified. Continue working on the proof. Edit the file and run lean_check; do not stop until it passes.";
 const MAX_NUDGES = 3;
 
-// ---------- pretty printing ----------
-const tty = process.stdout.isTTY;
-const c = (code, s) => (tty ? `\x1b[${code}m${s}\x1b[0m` : s);
-const green = (s) => c(32, s), red = (s) => c(31, s), yellow = (s) => c(33, s), dim = (s) => c(2, s), bold = (s) => c(1, s), cyan = (s) => c(36, s);
-const money = (x) => `$${x.toFixed(3)}`;
-const secs = (ms) => `${Math.round(ms / 1000)}s`;
-
 console.log(bold(`\nrun ${RUN_ID}`));
 console.log(dim(`  combo:       ${COMBO.length ? COMBO.join(" + ") : "(baseline)"}`));
 console.log(dim(`  model:       ${MODEL} (thinking: ${THINKING})`));
@@ -131,6 +116,7 @@ async function attempt(name, idx) {
   ];
 
   const events = createWriteStream(join(probDir, "events.jsonl"));
+  const stderrLog = createWriteStream(join(probDir, "stderr.log"));
   const started = Date.now();
   const deadline = started + TIMEOUT_S * 1000;
   const stats = { turns: 0, toolCalls: {}, tokens: { in: 0, out: 0 }, cost: 0 };
@@ -175,34 +161,31 @@ async function attempt(name, idx) {
           } catch {}
         }
       });
-      child.stderr.on("data", (d) => appendFileSync(join(probDir, "stderr.log"), d));
+      child.stderr.on("data", (d) => stderrLog.write(d));
       child.on("close", (code) => {
         clearTimeout(killer);
         resolveExit(code);
       });
     });
 
-  const newestSession = () => {
-    const files = readdirSync(sessionDir).filter((f) => f.endsWith(".jsonl"));
-    if (!files.length) return null;
-    return join(sessionDir, files.map((f) => [f, statSync(join(sessionDir, f)).mtimeMs]).sort((a, b) => b[1] - a[1])[0][0]);
-  };
-
-  // The model sometimes ends its turn with analysis instead of working. If the file
-  // still contains `sorry` and budget remains, resume the session and tell it to
-  // continue (same policy for every combo, so comparisons stay fair).
+  // The model sometimes ends its turn with analysis instead of working. If the proof
+  // doesn't actually check out (real server check, memoized ≈ free) and budget remains,
+  // resume the session and tell it to continue (same policy for every combo).
   let exitCode = await spawnPi([...baseArgs, "--session-dir", sessionDir, PROMPT]);
   let nudges = 0;
   while (nudges < MAX_NUDGES && !timedOut && Date.now() < deadline - 30_000) {
     let content;
     try { content = readFileSync(join(work, "problem.lean"), "utf8"); } catch { break; }
-    if (!content.includes("sorry")) break;
-    const sess = newestSession();
-    if (!sess) break;
+    const check = await serverCheck(content).catch(() => null);
+    if (check?.ok && (check.sorries ?? []).length === 0) break;
+    const sessions = readdirSync(sessionDir).filter((f) => f.endsWith(".jsonl"));
+    if (!sessions.length) break;
+    const sess = sessions.reduce((a, b) => (statSync(join(sessionDir, a)).mtimeMs > statSync(join(sessionDir, b)).mtimeMs ? a : b));
     nudges++;
-    exitCode = await spawnPi([...baseArgs, "--session", sess, NUDGE_PROMPT]);
+    exitCode = await spawnPi([...baseArgs, "--session", join(sessionDir, sess), NUDGE_PROMPT]);
   }
   events.end();
+  stderrLog.end();
 
   const wallMs = Date.now() - started;
   const verdict = await grade(name, join(work, "problem.lean"), join(ROOT, "problems", `${name}.lean`));
