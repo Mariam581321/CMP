@@ -7,7 +7,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { LEAN_URL, classifyLines } from "./common.js";
+import { postCheck, classifyLines } from "./common.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ALLOWED_AXIOMS = new Set(["propext", "Classical.choice", "Quot.sound"]);
@@ -44,14 +44,9 @@ export function checkStatementPreserved(original, solution) {
   return { ok: true };
 }
 
-export async function serverCheck(code, timeoutMs = GRADE_TIMEOUT_MS) {
-  const resp = await fetch(`${LEAN_URL}/check`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ code, timeoutMs }),
-    signal: AbortSignal.timeout(timeoutMs + 120_000),
-  });
-  return resp.json();
+// timeoutMs bounds REPL execution; the client waits longer since queueing is unbounded.
+export function serverCheck(code, timeoutMs = GRADE_TIMEOUT_MS) {
+  return postCheck({ code, timeoutMs }, 30 * 60_000);
 }
 
 /**

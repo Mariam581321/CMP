@@ -7,9 +7,9 @@ import { Type } from "typebox";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { checkStatementPreserved } from "../runner/grade.js";
+import { postCheck } from "../runner/common.js";
 
-const PORT = process.env.CMP_LEAN_PORT ?? "8787";
-const CLIENT_TIMEOUT_MS = 600_000; // server queues requests; be patient
+const CLIENT_TIMEOUT_MS = 30 * 60_000; // server queue is serialized; be patient
 
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
@@ -26,17 +26,8 @@ export default function (pi: ExtensionAPI) {
       if (!existsSync(src)) {
         return { content: [{ type: "text", text: "error: problem.lean not found in working directory" }], isError: true };
       }
-      const ac = new AbortController();
-      const t = setTimeout(() => ac.abort(), CLIENT_TIMEOUT_MS);
-      signal?.addEventListener("abort", () => ac.abort());
       try {
-        const resp = await fetch(`http://127.0.0.1:${PORT}/check`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ code: readFileSync(src, "utf8") }),
-          signal: ac.signal,
-        });
-        const r = (await resp.json()) as any;
+        const r = (await postCheck({ code: readFileSync(src, "utf8") }, CLIENT_TIMEOUT_MS)) as any;
         // early tamper feedback: grading enforces this either way, but telling the
         // agent now makes it recoverable instead of a silent disqualification
         let text = r.pretty ?? "no output";
@@ -48,9 +39,7 @@ export default function (pi: ExtensionAPI) {
         }
         return { content: [{ type: "text", text }], details: { ok: r.ok, cached: r.cached }, isError: r.error != null };
       } catch (e: any) {
-        return { content: [{ type: "text", text: `lean_check unavailable: ${e?.message ?? e} (is the lean server running?)` }], isError: true };
-      } finally {
-        clearTimeout(t);
+        return { content: [{ type: "text", text: `lean_check temporarily unavailable (${e?.message ?? e}) — try again` }], isError: true };
       }
     },
   });

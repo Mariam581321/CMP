@@ -27,7 +27,7 @@ const MEMO_MAX = 2000;
 
 let repl = null;
 let ready = false;
-let onResponse = null; // resolver for the in-flight REPL command
+let pending = null; // {resolve, reject} for the in-flight REPL command
 const memo = new Map();
 let queue = Promise.resolve();
 
@@ -56,14 +56,21 @@ function extractJson(buf) {
 function sendToRepl(obj, timeoutMs) {
   return new Promise((res, rej) => {
     const t = setTimeout(() => {
-      onResponse = null;
+      pending = null;
       rej(new Error(`REPL timed out after ${Math.round(timeoutMs / 1000)}s`));
       restartRepl("watchdog timeout");
     }, timeoutMs);
-    onResponse = (json) => {
-      clearTimeout(t);
-      onResponse = null;
-      res(json);
+    pending = {
+      resolve: (json) => {
+        clearTimeout(t);
+        pending = null;
+        res(json);
+      },
+      reject: (err) => {
+        clearTimeout(t);
+        pending = null;
+        rej(err);
+      },
     };
     repl.stdin.write(JSON.stringify(obj) + "\n\n");
   });
@@ -83,12 +90,16 @@ async function startRepl() {
     let hit;
     while ((hit = extractJson(buf)) !== null) {
       buf = hit[1];
-      onResponse?.(hit[0]);
+      pending?.resolve(hit[0]);
     }
   });
   proc.stderr.on("data", (d) => log("repl stderr:", String(d).trim().slice(0, 300)));
   proc.on("close", (code) => {
-    if (repl === proc && ready) restartRepl(`repl exited (code ${code})`);
+    if (repl !== proc) return;
+    // fail the in-flight command immediately (e.g. stack-overflow abort) instead of
+    // letting it stall the queue until the watchdog fires
+    pending?.reject(new Error(`REPL crashed while checking (exit ${code})`));
+    if (ready) restartRepl(`repl exited (code ${code})`);
   });
   log("importing Mathlib...");
   const t0 = Date.now();
