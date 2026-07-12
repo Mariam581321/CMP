@@ -47,7 +47,7 @@ for d in sorted(glob.glob(f"{run}/*/")):
                 try: e = json.loads(line)
                 except Exception: continue
                 if e.get("type") == "tool_execution_start": last = f"-> {e.get('toolName')}"
-                elif e.get("type") == "turn_end": last = f"turn done {last.split('->')[-1].strip() and '' or ''}".strip() or "thinking"
+                elif e.get("type") == "turn_end": last = "turn done"
     except Exception: pass
     active.append((name, age, last or "starting"))
 if active:
