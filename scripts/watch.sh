@@ -39,21 +39,26 @@ for d in sorted(glob.glob(f"{run}/*/")):
     name = os.path.basename(d.rstrip("/"))
     if os.path.exists(f"{d}attempt.json") or not os.path.exists(f"{d}events.jsonl"): continue
     age = int(time.time() - os.path.getmtime(f"{d}events.jsonl"))
-    last = ""
+    last, snippet = "", ""
     try:
         with open(f"{d}events.jsonl", "rb") as f:
-            f.seek(max(0, os.path.getsize(f"{d}events.jsonl") - 65536))
+            f.seek(max(0, os.path.getsize(f"{d}events.jsonl") - 262144))
             for line in f.read().decode(errors="ignore").splitlines():
                 try: e = json.loads(line)
                 except Exception: continue
                 if e.get("type") == "tool_execution_start": last = f"-> {e.get('toolName')}"
                 elif e.get("type") == "turn_end": last = "turn done"
+                if e.get("type") == "message_end" and e.get("message", {}).get("role") == "assistant":
+                    txt = " ".join(" ".join(c.get("text", "") for c in e["message"].get("content", []) if c.get("type") == "text").split())
+                    if txt: snippet = txt
     except Exception: pass
-    active.append((name, age, last or "starting"))
+    active.append((name, age, last or "starting", snippet))
 if active:
     print(f"\n{B}in flight:{N}")
-    for name, age, last in active:
+    for name, age, last, snippet in active:
         print(f"  {name:<20}{last:<22}{D}last event {age}s ago{N}")
+        if snippet:
+            print(f"    {D}“{snippet[:110]}{'…' if len(snippet) > 110 else ''}”{N}")
 
 import urllib.request
 try:

@@ -19,7 +19,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 // ---------- args ----------
 const COMBO = (arg("combo", "") || "").split(",").map((s) => s.trim()).filter(Boolean);
 const PROBLEMS_FILE = arg("problems", join(ROOT, "problems/dev.txt"));
-const TIMEOUT_S = parseInt(arg("timeout", "1500"));
+const TIMEOUT_S = parseInt(arg("timeout", "7200"));
 const CONCURRENCY = parseInt(arg("concurrency", "6"));
 const MODEL = arg("model", "deepseek/deepseek-v4-flash");
 const THINKING = arg("thinking", "off");
