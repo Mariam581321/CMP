@@ -1,44 +1,24 @@
-// Always-on tool: compile the agent's problem.lean against mathlib and report errors.
-// The Lean project lives in lean-env/ (env CMP_LEAN_ENV overrides); the agent's file is
-// copied there so the agent never needs (or gets) access to the project itself.
+// Always-on tool: compile the agent's problem.lean against Mathlib and report errors.
+// Checks go to the persistent lean server (runner/lean-server.js), which keeps Mathlib
+// resident so a check takes seconds instead of a full olean reload.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { execFile } from "node:child_process";
-import { copyFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
-import { join, resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import { withLeanSlot } from "../runner/lean-slots.js";
+import { readFileSync, existsSync } from "node:fs";
+import { join } from "node:path";
+import { checkStatementPreserved } from "../runner/grade.js";
 
-const LEAN_ENV =
-  process.env.CMP_LEAN_ENV ??
-  resolve(dirname(fileURLToPath(import.meta.url)), "../lean-env");
-const TIMEOUT_MS = 300_000;
-
-function runLean(file: string, cwd: string, signal?: AbortSignal): Promise<{ out: string; code: number }> {
-  return new Promise((res) => {
-    const child = execFile(
-      "lake",
-      ["env", "lean", file],
-      { cwd, timeout: TIMEOUT_MS, signal, maxBuffer: 10 * 1024 * 1024 },
-      (err, stdout, stderr) => {
-        const code = err ? ((err as any).code ?? 1) : 0;
-        res({ out: `${stdout ?? ""}${stderr ?? ""}`.trim(), code: typeof code === "number" ? code : 1 });
-      },
-    );
-    void child;
-  });
-}
+const PORT = process.env.CMP_LEAN_PORT ?? "8787";
+const CLIENT_TIMEOUT_MS = 600_000; // server queues requests; be patient
 
 export default function (pi: ExtensionAPI) {
-  let counter = 0;
   pi.registerTool({
     name: "lean_check",
     label: "Lean check",
     description:
       "Compile problem.lean with Lean 4 + Mathlib and return the compiler output. " +
       "This is the ground truth for whether your proof is accepted. " +
-      "Checks are queued and can take a few minutes; make each check count.",
+      "Checks are queued; make each check count.",
     promptSnippet: "lean_check - compile problem.lean and get Lean compiler errors/warnings",
     parameters: Type.Object({}),
     async execute(_toolCallId, _params, signal, _onUpdate, ctx) {
@@ -46,21 +26,31 @@ export default function (pi: ExtensionAPI) {
       if (!existsSync(src)) {
         return { content: [{ type: "text", text: "error: problem.lean not found in working directory" }], isError: true };
       }
-      const dir = join(LEAN_ENV, "_check");
-      mkdirSync(dir, { recursive: true });
-      const tmp = join(dir, `check_${process.pid}_${++counter}.lean`);
-      copyFileSync(src, tmp);
+      const ac = new AbortController();
+      const t = setTimeout(() => ac.abort(), CLIENT_TIMEOUT_MS);
+      signal?.addEventListener("abort", () => ac.abort());
       try {
-        const { out, code } = await withLeanSlot(LEAN_ENV, () => runLean(tmp, LEAN_ENV, signal), signal);
-        const text =
-          code === 0 && out === ""
-            ? "compiled successfully: no errors, no warnings"
-            : code === 0
-              ? `compiled (exit 0) with output:\n${out}`
-              : `compilation FAILED (exit ${code}):\n${out}`;
-        return { content: [{ type: "text", text }], details: { exitCode: code } };
+        const resp = await fetch(`http://127.0.0.1:${PORT}/check`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ code: readFileSync(src, "utf8") }),
+          signal: ac.signal,
+        });
+        const r = (await resp.json()) as any;
+        // early tamper feedback: grading enforces this either way, but telling the
+        // agent now makes it recoverable instead of a silent disqualification
+        let text = r.pretty ?? "no output";
+        const origPath = process.env.CMP_ORIGINAL_FILE;
+        if (origPath && existsSync(origPath)) {
+          const stmt = checkStatementPreserved(readFileSync(origPath, "utf8"), readFileSync(src, "utf8"));
+          if (!stmt.ok)
+            text += `\n\nWARNING: you have modified the theorem statement (${stmt.detail}). This attempt will NOT count as solved unless you restore the original statement exactly (you may still add helper lemmas above it and fill in sorries).`;
+        }
+        return { content: [{ type: "text", text }], details: { ok: r.ok, cached: r.cached }, isError: r.error != null };
+      } catch (e: any) {
+        return { content: [{ type: "text", text: `lean_check unavailable: ${e?.message ?? e} (is the lean server running?)` }], isError: true };
       } finally {
-        rmSync(tmp, { force: true });
+        clearTimeout(t);
       }
     },
   });

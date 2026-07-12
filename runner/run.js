@@ -23,7 +23,7 @@ function arg(name, dflt) {
 const COMBO = (arg("combo", "") || "").split(",").map((s) => s.trim()).filter(Boolean);
 const PROBLEMS_FILE = arg("problems", join(ROOT, "problems/dev.txt"));
 const TIMEOUT_S = parseInt(arg("timeout", "1500"));
-const CONCURRENCY = parseInt(arg("concurrency", "4"));
+const CONCURRENCY = parseInt(arg("concurrency", "6"));
 const MODEL = arg("model", "deepseek/deepseek-v4-flash");
 const THINKING = arg("thinking", "off");
 const RUN_ID = arg("run-id", `${COMBO.join("+") || "baseline"}-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "")}`);
@@ -37,8 +37,26 @@ if (existsSync(dotenv))
   }
 process.env.PATH = `${process.env.HOME}/.local/node/bin:${process.env.HOME}/.elan/bin:${process.env.PATH}`;
 process.env.CMP_LEAN_ENV = join(ROOT, "lean-env");
-// clear any leaked lean-slot locks from a previous (killed) run
-rmSync(join(ROOT, "lean-env", "_locks"), { recursive: true, force: true });
+process.env.CMP_LEAN_PORT = process.env.CMP_LEAN_PORT ?? "8787";
+
+// Persistent lean server: reuse one that's already up, else spawn and wait for
+// Mathlib to load (~1-2 min). Spawned server is killed when this run exits.
+async function ensureLeanServer(logPath) {
+  const health = () =>
+    fetch(`http://127.0.0.1:${process.env.CMP_LEAN_PORT}/health`, { signal: AbortSignal.timeout(2000) })
+      .then((r) => r.json()).then((j) => j.ready).catch(() => null);
+  if (await health()) return null;
+  const { openSync } = await import("node:fs");
+  const fd = openSync(logPath, "a");
+  const child = spawn("node", [join(ROOT, "runner/lean-server.js")], { env: process.env, stdio: ["ignore", fd, fd] });
+  process.stdout.write(dim("  starting lean server (importing Mathlib)... "));
+  for (let i = 0; i < 180; i++) {
+    await new Promise((r) => setTimeout(r, 3000));
+    if (await health()) { console.log(dim("ready")); return child; }
+    if (child.exitCode != null) throw new Error(`lean server died; see ${logPath}`);
+  }
+  throw new Error("lean server did not become ready in 9 min");
+}
 
 for (const ext of COMBO)
   if (!existsSync(join(ROOT, "extensions", `${ext}.ts`))) {
@@ -88,6 +106,11 @@ console.log(dim(`  problems:    ${problems.length} from ${PROBLEMS_FILE}`));
 console.log(dim(`  timeout:     ${TIMEOUT_S}s/problem   concurrency: ${CONCURRENCY}`));
 console.log(dim(`  results:     results/${RUN_ID}/\n`));
 
+const leanServer = await ensureLeanServer(join(runDir, "lean-server.log"));
+const stopServer = () => { try { leanServer?.kill("SIGTERM"); } catch {} };
+process.on("exit", stopServer);
+process.on("SIGINT", () => { stopServer(); process.exit(130); });
+
 // ---------- one attempt ----------
 async function attempt(name, idx) {
   const probDir = join(runDir, name);
@@ -115,7 +138,12 @@ async function attempt(name, idx) {
 
   const spawnPi = (args) =>
     new Promise((resolveExit) => {
-      const child = spawn("pi", args, { cwd: work, env: process.env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+      const child = spawn("pi", args, {
+        cwd: work,
+        env: { ...process.env, CMP_ORIGINAL_FILE: join(ROOT, "problems", `${name}.lean`) },
+        detached: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
       const killer = setTimeout(() => {
         timedOut = true;
         try { process.kill(-child.pid, "SIGKILL"); } catch {}

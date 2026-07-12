@@ -1,19 +1,17 @@
 // Independent grading of a finished attempt. Never trusts the agent's own lean_check.
 // Checks: (1) theorem statement preserved vs the sanitized original,
-//         (2) file compiles under Lean+Mathlib,
+//         (2) file compiles (via the persistent lean server),
 //         (3) #print axioms for every benchmark declaration is clean
 //             (catches sorry via sorryAx, custom axioms, native_decide via ofReduceBool).
 
-import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { execFile } from "node:child_process";
-import { withLeanSlot } from "./lean-slots.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-export const LEAN_ENV = process.env.CMP_LEAN_ENV ?? join(ROOT, "lean-env");
+const PORT = process.env.CMP_LEAN_PORT ?? "8787";
 const ALLOWED_AXIOMS = new Set(["propext", "Classical.choice", "Quot.sound"]);
-const GRADE_TIMEOUT_MS = 600_000;
+const GRADE_TIMEOUT_MS = 480_000;
 
 // Names of the declarations the benchmark expects (theorem + optional _solution abbrev).
 export function benchmarkDecls(originalSource) {
@@ -54,17 +52,14 @@ export function checkStatementPreserved(original, solution) {
   return { ok: true };
 }
 
-function runLean(file) {
-  return new Promise((res) => {
-    execFile(
-      "lake",
-      ["env", "lean", file],
-      { cwd: LEAN_ENV, timeout: GRADE_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 },
-      (err, stdout, stderr) => {
-        res({ out: `${stdout ?? ""}\n${stderr ?? ""}`.trim(), code: err ? ((err.code ?? 1)) : 0 });
-      },
-    );
+async function serverCheck(code, timeoutMs = GRADE_TIMEOUT_MS) {
+  const resp = await fetch(`http://127.0.0.1:${PORT}/check`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ code, timeoutMs }),
+    signal: AbortSignal.timeout(timeoutMs + 120_000),
   });
+  return resp.json();
 }
 
 /**
@@ -81,36 +76,35 @@ export async function grade(problemName, solutionPath, originalPath) {
   const decls = benchmarkDecls(original);
   if (decls.length === 0) return { solved: false, reason: "grader_error", detail: "no declarations found in original" };
 
-  const dir = join(LEAN_ENV, "_grade");
-  mkdirSync(dir, { recursive: true });
-  const tmp = join(dir, `${problemName}_${Date.now()}_${Math.floor(Math.random() * 1e6)}.lean`);
   const probes = decls.map((d) => `#print axioms ${d}`).join("\n");
-  writeFileSync(tmp, `${solution}\n\n${probes}\n`);
+  let r;
   try {
-    const { out, code } = await withLeanSlot(LEAN_ENV, () => runLean(tmp));
-    if (code !== 0) return { solved: false, reason: "compile_error", detail: out.slice(0, 4000) };
-
-    const axioms = {};
-    for (const d of decls) {
-      const esc = d.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const m =
-        out.match(new RegExp(`'${esc}' depends on axioms: \\[([^\\]]*)\\]`)) ??
-        (out.match(new RegExp(`'${esc}' does not depend on any axioms`)) ? [null, ""] : null);
-      if (!m) return { solved: false, reason: "grader_error", detail: `no axiom report for ${d}\n${out.slice(0, 2000)}` };
-      axioms[d] = m[1] === "" ? [] : m[1].split(",").map((s) => s.trim());
-      const bad = axioms[d].filter((a) => !ALLOWED_AXIOMS.has(a));
-      if (bad.length > 0) {
-        const reason = bad.includes("sorryAx") ? "uses_sorry" : "bad_axioms";
-        return { solved: false, reason, detail: `${d}: [${bad.join(", ")}]`, axioms };
-      }
-    }
-    return { solved: true, axioms };
-  } finally {
-    rmSync(tmp, { force: true });
+    r = await serverCheck(`${solution}\n\n${probes}\n`);
+  } catch (e) {
+    return { solved: false, reason: "grader_error", detail: `lean server unreachable: ${e.message}` };
   }
+  if (r.error) return { solved: false, reason: "grader_error", detail: r.error };
+  if (!r.ok) return { solved: false, reason: "compile_error", detail: (r.pretty ?? "").slice(0, 4000) };
+
+  const allText = (r.messages ?? []).map((m) => m.text).join("\n");
+  const axioms = {};
+  for (const d of decls) {
+    const esc = d.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const m =
+      allText.match(new RegExp(`'${esc}' depends on axioms: \\[([^\\]]*)\\]`)) ??
+      (allText.match(new RegExp(`'${esc}' does not depend on any axioms`)) ? [null, ""] : null);
+    if (!m) return { solved: false, reason: "grader_error", detail: `no axiom report for ${d}\n${allText.slice(0, 2000)}` };
+    axioms[d] = m[1] === "" ? [] : m[1].split(",").map((s) => s.trim());
+    const bad = axioms[d].filter((a) => !ALLOWED_AXIOMS.has(a));
+    if (bad.length > 0) {
+      const reason = bad.includes("sorryAx") ? "uses_sorry" : "bad_axioms";
+      return { solved: false, reason, detail: `${d}: [${bad.join(", ")}]`, axioms };
+    }
+  }
+  return { solved: true, axioms };
 }
 
-// CLI: node runner/grade.js <problem_name> <solution.lean>
+// CLI: node runner/grade.js <problem_name> <solution.lean>   (needs the lean server up)
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const [name, sol] = process.argv.slice(2);
   const orig = join(ROOT, "problems", `${name}.lean`);
