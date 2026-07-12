@@ -1,3 +1,5 @@
 pi/
 benchmarks/
 node_modules/
+.env
+results/
