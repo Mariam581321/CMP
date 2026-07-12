@@ -8,7 +8,7 @@
 //        --concurrency <n> (4) --model <id> --thinking <level> --run-id <s>
 
 import { spawn, execSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync, appendFileSync, copyFileSync, createWriteStream, existsSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, appendFileSync, copyFileSync, createWriteStream, existsSync, rmSync, readdirSync, statSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { grade } from "./grade.js";
@@ -56,6 +56,7 @@ const runDir = join(ROOT, "results", RUN_ID);
 mkdirSync(runDir, { recursive: true });
 let gitSha = "unknown";
 try { gitSha = execSync("git rev-parse --short HEAD", { cwd: ROOT }).toString().trim(); } catch {}
+writeFileSync(join(runDir, "run.json"), JSON.stringify({ run_id: RUN_ID, combo: COMBO, model: MODEL, thinking: THINKING, timeout_s: TIMEOUT_S, concurrency: CONCURRENCY, problems, git_sha: gitSha, started_at: new Date().toISOString() }, null, 2));
 
 const SYSTEM_PROMPT = `You are proving a theorem from a mathematics competition, formalized in Lean 4 with Mathlib.
 
@@ -66,9 +67,12 @@ Rules:
 - NEVER modify the theorem statement, imports, or \`open\` lines. Only replace what comes after \`:=\` / fill in sorries. You may add helper lemmas ABOVE the theorem.
 - No new \`axiom\` declarations. No \`native_decide\`.
 - Use the lean_check tool to compile and verify your work. You are NOT done until lean_check reports no errors and no 'declaration uses sorry' warnings.
-- Work efficiently: think before checking, since each check takes about a minute.`;
+- Work efficiently: think before checking, since each check takes about a minute.
+- NEVER end your response without a tool call unless lean_check has passed. Analysis alone is not an answer — put your reasoning into the proof and verify it.`;
 
 const PROMPT = "Prove the theorem in problem.lean. Read it first, then work until lean_check passes with no errors and no sorry warnings.";
+const NUDGE_PROMPT = "You are not done: problem.lean still contains `sorry` or has not been verified. Continue working on the proof. Edit the file and run lean_check; do not stop until it passes.";
+const MAX_NUDGES = 3;
 
 // ---------- pretty printing ----------
 const tty = process.stdout.isTTY;
@@ -88,65 +92,89 @@ console.log(dim(`  results:     results/${RUN_ID}/\n`));
 async function attempt(name, idx) {
   const probDir = join(runDir, name);
   const work = join(probDir, "work");
+  const sessionDir = join(probDir, "session");
   mkdirSync(work, { recursive: true });
+  mkdirSync(sessionDir, { recursive: true });
   copyFileSync(join(ROOT, "problems", `${name}.lean`), join(work, "problem.lean"));
 
-  const args = [
-    "--mode", "json", "--session-dir", probDir,
+  const baseArgs = [
+    "--mode", "json",
     "--no-extensions", "--no-skills", "-nc", "--no-prompt-templates", "--no-themes",
     "--model", MODEL, "--thinking", THINKING,
     "--tools", toolList.join(","),
     "-e", join(ROOT, "extensions", "lean-check.ts"),
     ...COMBO.flatMap((x) => ["-e", join(ROOT, "extensions", `${x}.ts`)]),
     "--system-prompt", SYSTEM_PROMPT,
-    PROMPT,
   ];
 
   const events = createWriteStream(join(probDir, "events.jsonl"));
   const started = Date.now();
+  const deadline = started + TIMEOUT_S * 1000;
   const stats = { turns: 0, toolCalls: {}, tokens: { in: 0, out: 0 }, cost: 0 };
   let timedOut = false;
 
-  const exitCode = await new Promise((resolveExit) => {
-    const child = spawn("pi", args, { cwd: work, env: process.env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
-    const killer = setTimeout(() => {
-      timedOut = true;
-      try { process.kill(-child.pid, "SIGKILL"); } catch {}
-    }, TIMEOUT_S * 1000);
+  const spawnPi = (args) =>
+    new Promise((resolveExit) => {
+      const child = spawn("pi", args, { cwd: work, env: process.env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+      const killer = setTimeout(() => {
+        timedOut = true;
+        try { process.kill(-child.pid, "SIGKILL"); } catch {}
+      }, Math.max(deadline - Date.now(), 1000));
 
-    let buf = "";
-    child.stdout.on("data", (d) => {
-      buf += d;
-      let nl;
-      while ((nl = buf.indexOf("\n")) >= 0) {
-        const line = buf.slice(0, nl);
-        buf = buf.slice(nl + 1);
-        if (!line.trim()) continue;
-        // message_update fires per token and embeds the full accumulated message —
-        // hundreds of MB per problem. message_end carries everything we need.
-        if (line.includes('"type":"message_update"')) continue;
-        events.write(line + "\n");
-        try {
-          const e = JSON.parse(line);
-          if (e.type === "turn_end") stats.turns++;
-          if (e.type === "tool_execution_start")
-            stats.toolCalls[e.toolName] = (stats.toolCalls[e.toolName] ?? 0) + 1;
-          if (e.type === "message_end" && e.message?.role === "assistant" && e.message?.usage) {
-            const u = e.message.usage;
-            stats.tokens.in += u.input ?? 0;
-            stats.tokens.out += u.output ?? 0;
-            stats.cost += u.cost?.total ?? 0;
-          }
-        } catch {}
-      }
+      let buf = "";
+      child.stdout.on("data", (d) => {
+        buf += d;
+        let nl;
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl);
+          buf = buf.slice(nl + 1);
+          if (!line.trim()) continue;
+          // message_update fires per token and embeds the full accumulated message —
+          // hundreds of MB per problem. message_end carries everything we need.
+          if (line.includes('"type":"message_update"')) continue;
+          events.write(line + "\n");
+          try {
+            const e = JSON.parse(line);
+            if (e.type === "turn_end") stats.turns++;
+            if (e.type === "tool_execution_start")
+              stats.toolCalls[e.toolName] = (stats.toolCalls[e.toolName] ?? 0) + 1;
+            if (e.type === "message_end" && e.message?.role === "assistant" && e.message?.usage) {
+              const u = e.message.usage;
+              stats.tokens.in += u.input ?? 0;
+              stats.tokens.out += u.output ?? 0;
+              stats.cost += u.cost?.total ?? 0;
+            }
+          } catch {}
+        }
+      });
+      child.stderr.on("data", (d) => appendFileSync(join(probDir, "stderr.log"), d));
+      child.on("close", (code) => {
+        clearTimeout(killer);
+        resolveExit(code);
+      });
     });
-    child.stderr.on("data", (d) => appendFileSync(join(probDir, "stderr.log"), d));
-    child.on("close", (code) => {
-      clearTimeout(killer);
-      events.end();
-      resolveExit(code);
-    });
-  });
+
+  const newestSession = () => {
+    const files = readdirSync(sessionDir).filter((f) => f.endsWith(".jsonl"));
+    if (!files.length) return null;
+    return join(sessionDir, files.map((f) => [f, statSync(join(sessionDir, f)).mtimeMs]).sort((a, b) => b[1] - a[1])[0][0]);
+  };
+
+  // The model sometimes ends its turn with analysis instead of working. If the file
+  // still contains `sorry` and budget remains, resume the session and tell it to
+  // continue (same policy for every combo, so comparisons stay fair).
+  let exitCode = await spawnPi([...baseArgs, "--session-dir", sessionDir, PROMPT]);
+  let nudges = 0;
+  while (nudges < MAX_NUDGES && !timedOut && Date.now() < deadline - 30_000) {
+    let content;
+    try { content = readFileSync(join(work, "problem.lean"), "utf8"); } catch { break; }
+    if (!content.includes("sorry")) break;
+    const sess = newestSession();
+    if (!sess) break;
+    nudges++;
+    exitCode = await spawnPi([...baseArgs, "--session", sess, NUDGE_PROMPT]);
+  }
+  events.end();
 
   const wallMs = Date.now() - started;
   const verdict = await grade(name, join(work, "problem.lean"), join(ROOT, "problems", `${name}.lean`));
@@ -156,7 +184,7 @@ async function attempt(name, idx) {
     run_id: RUN_ID, problem: name, combo: COMBO, model: MODEL, thinking: THINKING,
     started_at: new Date(started).toISOString(), wall_s: Math.round(wallMs / 1000),
     turns: stats.turns, tokens: stats.tokens, cost_usd: +stats.cost.toFixed(5),
-    tool_calls: stats.toolCalls, exit_code: exitCode, timed_out: timedOut,
+    tool_calls: stats.toolCalls, exit_code: exitCode, timed_out: timedOut, nudges,
     solved: verdict.solved, fail_reason: verdict.solved ? null : verdict.reason,
     fail_detail: verdict.solved ? null : (verdict.detail ?? "").slice(0, 500),
     axioms: verdict.axioms ?? null, harness_git_sha: gitSha,
