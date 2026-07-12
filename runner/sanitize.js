@@ -48,6 +48,7 @@ function main() {
   const args = process.argv.slice(2);
   const pick = args.includes("--pick") ? parseInt(args[args.indexOf("--pick") + 1]) : 0;
   const seed = args.includes("--seed") ? parseInt(args[args.indexOf("--seed") + 1]) : 42;
+  const outFile = args.includes("--out") ? resolve(args[args.indexOf("--out") + 1]) : join(OUT, "dev.txt");
 
   mkdirSync(OUT, { recursive: true });
   const names = readdirSync(SRC).filter((f) => f.endsWith(".lean")).sort();
@@ -73,8 +74,8 @@ function main() {
       [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
     }
     const dev = shuffled.slice(0, pick).sort();
-    writeFileSync(join(OUT, "dev.txt"), dev.join("\n") + "\n");
-    console.log(`dev subset (seed ${seed}): ${dev.join(", ")}`);
+    writeFileSync(outFile, dev.join("\n") + "\n");
+    console.log(`subset of ${pick} (seed ${seed}) -> ${outFile}`);
   }
 }
 
