@@ -63,6 +63,10 @@ const toolList = ["read", "edit", "write", ...EXT_TOOLS["lean-check"], ...COMBO.
 
 const problems = readFileSync(PROBLEMS_FILE, "utf8").split("\n").map((s) => s.trim()).filter(Boolean);
 const runDir = join(ROOT, "results", RUN_ID);
+if (existsSync(join(runDir, "results.jsonl"))) {
+  console.error(`results/${RUN_ID}/ already has results — pick a new --run-id or move the old run aside`);
+  process.exit(1);
+}
 mkdirSync(runDir, { recursive: true });
 let gitSha = "unknown";
 try { gitSha = execSync("git rev-parse --short HEAD", { cwd: ROOT }).toString().trim(); } catch {}
@@ -81,8 +85,9 @@ Rules:
 - NEVER end your response without a tool call unless lean_check has passed. Analysis alone is not an answer — put your reasoning into the proof and verify it.`;
 
 const PROMPT = "Prove the theorem in problem.lean. Read it first, then work until lean_check passes with no errors and no sorry warnings.";
-const NUDGE_PROMPT = "You are not done: problem.lean still contains `sorry` or has not been verified. Continue working on the proof. Edit the file and run lean_check; do not stop until it passes.";
 const MAX_NUDGES = 3;
+const nudgePrompt = (check) =>
+  `You are not done. Checking your current problem.lean reports:\n\n${(check?.pretty ?? "no check result available").slice(0, 3000)}\n\nFix this and run lean_check; do not stop until it passes with no errors and no sorries.`;
 
 console.log(bold(`\nrun ${RUN_ID}`));
 console.log(dim(`  combo:       ${COMBO.length ? COMBO.join(" + ") : "(baseline)"}`));
@@ -182,7 +187,7 @@ async function attempt(name, idx) {
     if (!sessions.length) break;
     const sess = sessions.reduce((a, b) => (statSync(join(sessionDir, a)).mtimeMs > statSync(join(sessionDir, b)).mtimeMs ? a : b));
     nudges++;
-    exitCode = await spawnPi([...baseArgs, "--session", join(sessionDir, sess), NUDGE_PROMPT]);
+    exitCode = await spawnPi([...baseArgs, "--session", join(sessionDir, sess), nudgePrompt(check)]);
   }
   events.end();
   stderrLog.end();

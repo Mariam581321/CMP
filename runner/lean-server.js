@@ -81,7 +81,9 @@ async function startRepl() {
   // proc identity guard: after a restart, a half-dead old REPL can still emit
   // output/close events; those must never reach the current onResponse resolver
   // (seen in practice: a stale check response consumed as the import response).
-  const proc = spawn("lake", ["env", REPL_BIN], { cwd: LEAN_ENV, env: process.env, stdio: ["pipe", "pipe", "pipe"] });
+  // detached => repl gets its own process group, so killing -pid takes down the
+  // lake wrapper AND the repl binary (otherwise restarts leak 6 GB orphans)
+  const proc = spawn("lake", ["env", REPL_BIN], { cwd: LEAN_ENV, env: process.env, stdio: ["pipe", "pipe", "pipe"], detached: true });
   repl = proc;
   let buf = "";
   proc.stdout.on("data", (d) => {
@@ -109,13 +111,18 @@ async function startRepl() {
   log(`ready in ${Math.round((Date.now() - t0) / 1000)}s`);
 }
 
+function killRepl() {
+  if (!repl) return;
+  try { process.kill(-repl.pid, "SIGKILL"); } catch {}
+}
+
 let restarting = false;
 async function restartRepl(why) {
   if (restarting) return;
   restarting = true;
   ready = false;
   log(`restarting REPL: ${why}`);
-  try { repl?.kill("SIGKILL"); } catch {}
+  killRepl();
   try {
     await startRepl();
   } catch (e) {
@@ -202,7 +209,7 @@ const server = createServer((req, res) => {
   res.writeHead(404).end();
 });
 
-process.on("exit", () => { try { repl?.kill("SIGKILL"); } catch {} });
+process.on("exit", () => killRepl());
 for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => process.exit(0));
 
 server.listen(PORT, "127.0.0.1", () => log(`lean server on 127.0.0.1:${PORT}`));

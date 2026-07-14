@@ -28,16 +28,22 @@ export default function (pi: ExtensionAPI) {
       }
       try {
         const r = (await postCheck({ code: readFileSync(src, "utf8") }, CLIENT_TIMEOUT_MS)) as any;
-        // early tamper feedback: grading enforces this either way, but telling the
-        // agent now makes it recoverable instead of a silent disqualification
+        // A tampered statement is reported as a FAILED check, not a footnote after
+        // "compiled successfully" — weak models skim past appended warnings.
         let text = r.pretty ?? "no output";
+        let ok = r.ok;
         const origPath = process.env.CMP_ORIGINAL_FILE;
         if (origPath && existsSync(origPath)) {
           const stmt = checkStatementPreserved(readFileSync(origPath, "utf8"), readFileSync(src, "utf8"));
-          if (!stmt.ok)
-            text += `\n\nWARNING: you have modified the theorem statement (${stmt.detail}). This attempt will NOT count as solved unless you restore the original statement exactly (you may still add helper lemmas above it and fill in sorries).`;
+          if (!stmt.ok) {
+            ok = false;
+            text =
+              `CHECK FAILED: you modified the theorem statement (${stmt.detail}). ` +
+              `Proofs of a modified statement do not count. Restore the original statement exactly — ` +
+              `you may only add helper lemmas above it and fill in sorries.\n\nCompiler output:\n${text}`;
+          }
         }
-        return { content: [{ type: "text", text }], details: { ok: r.ok, cached: r.cached }, isError: r.error != null };
+        return { content: [{ type: "text", text }], details: { ok, cached: r.cached }, isError: r.error != null };
       } catch (e: any) {
         return { content: [{ type: "text", text: `lean_check temporarily unavailable (${e?.message ?? e}) — try again` }], isError: true };
       }
