@@ -54,8 +54,7 @@ parallel work additive. Unablated: the main agent's contribution on its own.
 - **Iteration against the verifier is the dominant factor** in both prover papers
   (AxProver's ablation says it outright; Goedel-Architect's initial blueprint solves
   only 29.8% and refinement lifts it to 75.6%). Everything else is a modifier on the
-  loop → our baseline is primitive #1, plus a one-shot control arm so this isn't
-  silently assumed.
+  loop → our baseline is arm 0.
 - **Mapping to primitives** (PLAN.md): AxProverBase ≈ iterate + context management;
   Goedel-Architect ≈ iterate + plan artifact + per-lemma workers, scripted loop;
   Danus ≈ iterate + workers + verified fact store, LLM-owned loop. Our combos:
@@ -87,7 +86,7 @@ Downstream eval swaps only the retriever inside a fixed reflection-loop prover: 
 on FATE-H vs 16% next-best and 4% with no retrieval — retrieval quality propagates
 to proof success.
 
-For us: the basis of the proposed `filter` arm (PLAN.md, architecture decomposition) —
+For us: the basis of the proposed `replan` arm (PLAN.md arm 3) —
 filter+judge collapsed into one blank-context vetting pass over the `plan` skeleton,
 with a "no support ≠ false" modification (bespoke helper lemmas are legal; ∅ is a
 flag, not a falsification — in their task unsupported *means* failed, since the goal

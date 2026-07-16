@@ -45,10 +45,11 @@ One shared pre-built project: `lean-env/` built fresh from
 
 ## Concurrency
 
-`--concurrency N` worker pool over problems (default 8): each attempt = own scratch dir +
+`--concurrency N` worker pool over problems (default 6): each attempt = own scratch dir +
 own pi subprocess; verification is batched REPL, also parallel. LLM calls are I/O-bound and
 DeepSeek is rate-limit-friendly; Lean compiles (~1–2 min each) are the real bottleneck —
-budget cores accordingly. Ballpark: 673 problems × ~5 min / 8 workers ≈ 7 h per combo.
+budget cores accordingly. Ballpark: #problems × ~5 min / 8 workers (≈ 7 h per combo on
+full PutnamBench).
 
 ## Logging (stats computed after the fact, never during)
 
@@ -93,7 +94,7 @@ results/                    per-run dirs + results.jsonl (gitignored)
 
 ```
 --combo a,b          extension names = filenames in extensions/ ("" = baseline)
---problems <file>    problem list | --timeout <s> (600) | --concurrency <n> (8)
+--problems <file>    problem list | --timeout <s> (600) | --concurrency <n> (6)
 --model <id>         deepseek/deepseek-v4-flash | --run-id <s> (default combo+timestamp)
 ```
 
@@ -117,7 +118,7 @@ to check a 20-line file (~1–5 s), ~11×/problem, serialized (one slot fits in 
 3. **lean_check memo** — hash the file, return the cached verdict when the agent re-checks
    an unchanged file.
 4. **After the 12 GB WSL bump**: oleans stay in page cache; optionally try 2 REPL workers.
-5. **Full-673 runs**: with fast checks the LLM becomes the bottleneck → agent concurrency
+5. **Full-benchmark runs**: with fast checks the LLM becomes the bottleneck → agent concurrency
    8–16; ballpark drops from ~45 h/arm (current) to ~3–5 h/arm.
 
 Not doing: minimal per-problem imports (changes the benchmark — import hints are premise
@@ -134,7 +135,7 @@ Turn caps (timeout only), retries/resume, dashboards, lean4checker kernel re-ver
 
 Everything above is built (deviations: grader is our own `runner/grade.js` on the
 persistent lean server, not a FATE-Eval port; runner is plain JS). New arms follow the
-architecture decomposition in PLAN.md; tool-level designs:
+arm decomposition in PLAN.md; tool-level designs:
 
 **`plan`** (`extensions/lean-plan.ts`): registers `plan_check` — validates that
 `problem.lean` is currently a *skeleton*: compiles, statement preserved, every helper
@@ -146,12 +147,12 @@ per-combo prompt addenda (SYSTEM_PROMPT is currently fixed in run.js) — e.g. a
 Soft gate only: `lean_check` never refuses; planning behavior stays observable in
 `tool_calls`.
 
-**`filter`** (`extensions/lean-filter.ts`; only meaningful with `plan` — see PLAN.md
-primitive 6): registers `vet_skeleton()` — reads `problem.lean`, extracts the
+**`replan`** (`extensions/lean-replan.ts`; only meaningful with `plan` — see PLAN.md
+arm 3): registers `vet_skeleton()` — reads `problem.lean`, extracts the
 `sorry`'d helper lemma statements, retrieves top-k candidates per lemma from
 LeanSearch internally (no dependence on the `lean-search` combo), then issues one
 **blank-context** vetting call (fixed prompt, no conversation history — the
-independence property; bare completion for now, a worker pi only if primitive 3 lands)
+independence property; bare completion for now, a worker pi only if the workers arm lands)
 and returns one structured verdict per helper lemma:
 `{support: strong|weak|none, verdict: keep|flag|reroute,
 reason: missing_premise|different_route|type_mismatch|bespoke_ok,
@@ -162,7 +163,7 @@ all of it; don't strip to name+signature the way the agent-facing `search_mathli
 currently does — the metadata is what makes the relevance judgment possible). The
 prompt encodes ∅-is-a-flag-not-a-falsification: `support: none` with
 `verdict: keep, reason: bespoke_ok` is a legal answer. Per-arm prompt addendum
-(`extensions/lean-filter.prompt.md`): after a green `plan_check`, call
+(`extensions/lean-replan.prompt.md`): after a green `plan_check`, call
 `vet_skeleton`; on flag/reroute verdicts, consider revising the skeleton before
 filling bodies. Soft gate, same philosophy as `plan`. Vetting-call tokens/cost roll
 into the parent attempt's record (trivial here: the extension issues the call itself).
@@ -173,10 +174,6 @@ the lemma in isolation (against the bank) via the lean server; if green, appends
 Prompt addendum explains the workflow and that the final `problem.lean` must be
 self-contained (copy needed facts above the theorem) — grading is unchanged. Isolated
 checks are memoized server-side, so re-verification is ~free.
-
-**One-shot control** (measures iteration itself): same tools, prompt variant demanding
-the complete proof in the first response with a single `lean_check`; no nudges. Cheapest
-arm; anchors every curve.
 
 **Accounting note for future worker-style arms:** any extension that spawns a pi
 subprocess must surface that subprocess's tokens/cost into the parent attempt's record,

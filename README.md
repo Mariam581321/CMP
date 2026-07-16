@@ -41,7 +41,7 @@ node runner/run.js --problems problems/dev.txt                      # baseline
 node runner/run.js --combo lean-search --problems problems/dev.txt  # + semantic search
 ```
 
-Flags: `--combo a,b` `--problems <file>` `--timeout <s>` (600) `--concurrency <n>` (4)
+Flags: `--combo a,b` `--problems <file>` `--timeout <s>` (600) `--concurrency <n>` (6)
 `--model <id>` (deepseek/deepseek-v4-flash) `--thinking <level>` (off) `--run-id <s>`.
 
 Each problem runs in an isolated scratch dir containing only the sanitized statement

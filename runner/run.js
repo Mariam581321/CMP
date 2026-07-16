@@ -5,7 +5,7 @@
 //   node runner/run.js --combo lean-search --problems problems/dev.txt
 //
 // Flags: --combo a,b ("" = baseline) --problems <file> --timeout <s> (600)
-//        --concurrency <n> (4) --model <id> --thinking <level> --run-id <s>
+//        --concurrency <n> (6) --model <id> --thinking <level> --run-id <s>
 //        --problems-dir <dir> (problems/; e.g. problems-nl/ for statements with
 //        the informal NL docstring kept)
 
