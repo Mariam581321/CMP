@@ -15,6 +15,10 @@ combinations of them on PutnamBench. See `PLAN.md` (research plan) and `SKELETON
   copy `lean-toolchain` + `lake-manifest.json`, minimal lakefile requiring mathlib
   `v4.27.0`, then `lake exe cache get`.
 - `node runner/sanitize.js --pick 10 --seed 42` → `problems/` + `problems/dev.txt`.
+  Sanitization strips `--` comments (answers) AND `/-- -/` docstrings (informal NL
+  statement) — by default the agent sees only the formal Lean. For an NL arm:
+  `node runner/sanitize.js --keep-nl --out-dir problems-nl`, then run with
+  `--problems-dir problems-nl`.
 
 ## Running an experiment
 

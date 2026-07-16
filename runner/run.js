@@ -6,6 +6,8 @@
 //
 // Flags: --combo a,b ("" = baseline) --problems <file> --timeout <s> (600)
 //        --concurrency <n> (4) --model <id> --thinking <level> --run-id <s>
+//        --problems-dir <dir> (problems/; e.g. problems-nl/ for statements with
+//        the informal NL docstring kept)
 
 import { spawn, execSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync, appendFileSync, copyFileSync, createWriteStream, existsSync, readdirSync, statSync, openSync } from "node:fs";
@@ -19,6 +21,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 // ---------- args ----------
 const COMBO = (arg("combo", "") || "").split(",").map((s) => s.trim()).filter(Boolean);
 const PROBLEMS_FILE = arg("problems", join(ROOT, "problems/dev.txt"));
+const PROBLEMS_DIR = resolve(arg("problems-dir", join(ROOT, "problems")));
 const TIMEOUT_S = parseInt(arg("timeout", "7200"));
 const CONCURRENCY = parseInt(arg("concurrency", "6"));
 const MODEL = arg("model", "deepseek/deepseek-v4-flash");
@@ -70,7 +73,7 @@ if (existsSync(join(runDir, "results.jsonl"))) {
 mkdirSync(runDir, { recursive: true });
 let gitSha = "unknown";
 try { gitSha = execSync("git rev-parse --short HEAD", { cwd: ROOT }).toString().trim(); } catch {}
-writeFileSync(join(runDir, "run.json"), JSON.stringify({ run_id: RUN_ID, combo: COMBO, model: MODEL, thinking: THINKING, timeout_s: TIMEOUT_S, concurrency: CONCURRENCY, problems, git_sha: gitSha, started_at: new Date().toISOString() }, null, 2));
+writeFileSync(join(runDir, "run.json"), JSON.stringify({ run_id: RUN_ID, combo: COMBO, model: MODEL, thinking: THINKING, timeout_s: TIMEOUT_S, concurrency: CONCURRENCY, problems, problems_dir: PROBLEMS_DIR, git_sha: gitSha, started_at: new Date().toISOString() }, null, 2));
 
 const SYSTEM_PROMPT = `You are proving a theorem from a mathematics competition, formalized in Lean 4 with Mathlib.
 
@@ -108,7 +111,7 @@ async function attempt(name, idx) {
   const sessionDir = join(probDir, "session");
   mkdirSync(work, { recursive: true });
   mkdirSync(sessionDir, { recursive: true });
-  copyFileSync(join(ROOT, "problems", `${name}.lean`), join(work, "problem.lean"));
+  copyFileSync(join(PROBLEMS_DIR, `${name}.lean`), join(work, "problem.lean"));
 
   const baseArgs = [
     "--mode", "json",
@@ -131,7 +134,7 @@ async function attempt(name, idx) {
     new Promise((resolveExit) => {
       const child = spawn("pi", args, {
         cwd: work,
-        env: { ...process.env, CMP_ORIGINAL_FILE: join(ROOT, "problems", `${name}.lean`) },
+        env: { ...process.env, CMP_ORIGINAL_FILE: join(PROBLEMS_DIR, `${name}.lean`) },
         detached: true,
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -193,7 +196,7 @@ async function attempt(name, idx) {
   stderrLog.end();
 
   const wallMs = Date.now() - started;
-  const verdict = await grade(name, join(work, "problem.lean"), join(ROOT, "problems", `${name}.lean`));
+  const verdict = await grade(name, join(work, "problem.lean"), join(PROBLEMS_DIR, `${name}.lean`));
   if (timedOut && !verdict.solved) verdict.reason = "timeout";
 
   const record = {

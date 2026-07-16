@@ -3,7 +3,12 @@ benchmarks/
 node_modules/
 .env
 results/
-lean-env/
+lean-env/*
+!lean-env/lakefile.lean
+!lean-env/lean-toolchain
+!lean-env/lake-manifest.json
+!lean-env/Cmp.lean
 problems/*
 !problems/dev.txt
+problems-nl/
 vendor/
