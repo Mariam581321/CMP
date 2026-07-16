@@ -11,4 +11,6 @@ lean-env/*
 problems/*
 !problems/dev.txt
 problems-nl/
+papers/*
+!papers/INDEX.md
 vendor/

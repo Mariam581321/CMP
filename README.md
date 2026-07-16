@@ -3,8 +3,22 @@
 Which agent-harness features actually matter for proving competition math in Lean 4?
 We fix one harness ([pi](https://github.com/earendil-works/pi)), implement candidate
 features as independently-toggleable pi extensions, and measure solve rate + cost for
-combinations of them on PutnamBench. See `PLAN.md` (research plan) and `SKELETON.md`
-(implementation plan).
+combinations of them on PutnamBench (first experiments; benchmark choice beyond that
+is open).
+
+## Docs
+
+- [`PLAN.md`](PLAN.md) — the research plan: motivation, factorial design, what's
+  decided (protocol, model, metrics), the decomposition of the reference systems into
+  testable arms, and open questions.
+- [`SKELETON.md`](SKELETON.md) — the implementation architecture: how one attempt runs
+  end-to-end (sanitized workspace, pi subprocess, independent grading, persistent lean
+  server), logging format, and tool-level designs for the next arms.
+- [`NOTES.md`](NOTES.md) — raw research-question backlog (proof style, creativity,
+  Mathlib search, autoformalization); unpolished, feeds PLAN.md.
+- [`papers/INDEX.md`](papers/INDEX.md) — annotated index of the reference papers and of
+  candidate benchmarks with open-source verification notes (PDFs are gitignored; the
+  index is the record).
 
 ## Setup
 

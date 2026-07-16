@@ -125,3 +125,37 @@ hints), skipping independent grading, parallel arms while wall-time matters.
 
 Turn caps (timeout only), retries/resume, dashboards, lean4checker kernel re-verification
 (add before publishing numbers), FATE, all other extension arms.
+
+---
+
+## Addendum: status + next arms
+
+Everything above is built (deviations: grader is our own `runner/grade.js` on the
+persistent lean server, not a FATE-Eval port; runner is plain JS). New arms follow the
+architecture decomposition in PLAN.md; tool-level designs:
+
+**`plan`** (`extensions/lean-plan.ts`): registers `plan_check` — validates that
+`problem.lean` is currently a *skeleton*: compiles, statement preserved, every helper
+lemma body is `sorry`. Plus a per-arm system-prompt addendum: "first get a green
+`plan_check` on a skeleton of helper lemmas, then fill bodies one at a time; if a lemma
+keeps failing, revise the skeleton, not the proof." Needs a small runner mechanism for
+per-combo prompt addenda (SYSTEM_PROMPT is currently fixed in run.js) — e.g. append
+`extensions/<name>.prompt.md` if it exists, so prompt deltas are versioned per arm.
+Soft gate only: `lean_check` never refuses; planning behavior stays observable in
+`tool_calls`.
+
+**`facts`** (`extensions/lean-facts.ts`): registers `submit_fact(lemma_code)` — checks
+the lemma in isolation (against the bank) via the lean server; if green, appends to
+`facts.lean` in the scratch dir; returns the verdict either way. And `list_facts()`.
+Prompt addendum explains the workflow and that the final `problem.lean` must be
+self-contained (copy needed facts above the theorem) — grading is unchanged. Isolated
+checks are memoized server-side, so re-verification is ~free.
+
+**One-shot control** (measures iteration itself): same tools, prompt variant demanding
+the complete proof in the first response with a single `lean_check`; no nudges. Cheapest
+arm; anchors every curve.
+
+**Accounting note for future worker-style arms:** any extension that spawns a pi
+subprocess must surface that subprocess's tokens/cost into the parent attempt's record,
+and the per-problem budget must be shared — otherwise parallel arms get free compute
+and the comparison is broken.

@@ -1,4 +1,4 @@
-State of the Art: Putnam saturated + cheaper open source provers do very well. Try to recreate that on a higher level. For example Numina or GodelProver don’t say what their score on FATE is. Also, found a couple other benchmarks (sets of problems), hopefully with smaller contamination risks (FATE was released in Jan 2026).
+State of the Art: Putnam saturated + cheaper open source provers do very well. Try to recreate that on a higher level. For example Numina or GodelProver don’t say what their score on FATE is. Also, found a couple other benchmarks (sets of problems), hopefully with smaller contamination risks — see papers/INDEX.md § Benchmarks.
 
 Questions I would like to answer:
 What kind of proofs are generated?

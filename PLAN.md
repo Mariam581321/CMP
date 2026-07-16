@@ -27,9 +27,11 @@ factorial answer instead.
 - **Harness:** pi agent, extended via its extension API; driven headlessly via its SDK/RPC.
 - **Model:** DeepSeek V4 Flash — cheap enough to afford full-benchmark runs across all
   extension combinations.
-- **Benchmark:** PutnamBench (cloned at `benchmarks/PutnamBench`). FATE also cloned for
-  reference (`benchmarks/FATE`, from [frenzymath/FATE](https://github.com/frenzymath/FATE))
-  — grad/PhD-level algebra, a possible later target.
+- **Benchmark:** open-ended. PutnamBench (cloned at `benchmarks/PutnamBench`) is the
+  starting point for the first experiments — cheap, well-known, directly comparable to
+  Goedel-Architect's numbers — not a commitment. Candidates for later phases are
+  collected in `papers/INDEX.md` § Benchmarks (FATE, Formal Conjectures, …); which
+  benchmark(s) carry the headline results is an open decision.
 - **Success metric:** proof accepted by the Lean compiler (sorry-free), per problem.
 - **No budget parity:** we don't equalize budgets across combos — we report *(solve rate,
   cost)* per combination and let the tradeoff be part of the result. Only a hard cap
@@ -43,39 +45,90 @@ factorial answer instead.
   a *sanitized* problem file (comments/solutions stripped) in an isolated workspace with no
   path to the benchmark repo.
 
+## Architecture decomposition
+
+The three reference systems (AxProver-Base, Goedel-Architect, Danus — see
+`papers/INDEX.md`) are monolithic architectures and can't be compared as-is. But they
+decompose into orthogonal primitives, and *those* fit our factorial design. Key
+implementation insight: a pi extension's `execute()` is arbitrary code, so an arm can
+encapsulate control flow (e.g. spawn a worker pi), not just add a tool — every arm
+stays a `--combo` flag on the one harness.
+
+1. **Iterate against the verifier** — the baseline loop (pi + `lean_check`), and the
+   dominant factor in both prover papers. Decisions about the baseline:
+   - Baseline tools stay read/edit/write + `lean_check`; hard cap = wall-clock timeout;
+     nudge policy identical across arms.
+   - pi's auto-compaction is ON by default (on context overflow it summarizes older
+     messages, keeping ~20k recent tokens) — so the baseline silently contains a memory
+     policy. Constant across arms, so it doesn't confound; a future `memory` arm would
+     vary it (AxProver's second-biggest factor).
+   - Iteration itself is silently assumed → add a cheap **one-shot control arm**
+     (produce the proof in one response, one check) so primitive 1's value is measured,
+     not assumed.
+2. **Explicit plan artifact** → **`plan` arm** (Goedel-Architect's blueprint, minus
+   parallelism): prompt variant + a `plan_check` tool. Agent must first produce a
+   compiling skeleton of `sorry`'d helper lemmas above the theorem, then fill bodies;
+   on repeated failure, revise the skeleton, not the local proof. Soft gate (tool +
+   instructions, not hard enforcement) so we can *observe* planning rather than fight
+   the model. Isolates "does a checkable plan artifact help?" — neither paper isolates it.
+3. **Context-minimized sub-provers (workers)** — the shared ingredient of
+   Goedel-Architect (per-lemma prover, sees only declared parents) and Danus (one claim
+   at a time). Sketch: a `prove_lemma(statement, given_facts)` tool spawning a
+   *constrained* worker pi (fixed prompt, lean_check only, hard budget, returns proof or
+   a structured diagnosis — can't-close vs believe-false-because, Goedel's
+   forfeit/negation channel). **Deferred**: design space too wide to pin down now
+   (constrained vs free workers, context inheritance, budget accounting across
+   subprocesses). Keep the description, think later.
+4. **Verified fact store** → **`facts` arm** (Danus's fact-graph, minus workers):
+   `submit_fact(lemma)` checks the lemma in isolation via the lean server and appends it
+   to a bank only if green; `list_facts()` reads the bank back. Monotone, verified shared
+   state — and in Lean the verifier is free (`lean_check` *is* Danus's stateless
+   verifier, engineered for zero false positives at no cost to us). Final `problem.lean`
+   must still be self-contained (grading unchanged). Expected to matter more once
+   combined with workers; worth measuring alone first.
+5. **Who owns the loop** — a *separate dimension*, not a combo: agent-owned (pi decides
+   every step; all arms above) vs scripted pipeline (a deterministic driver calls the
+   model in fixed roles, Goedel-style). Tested later as a paired arm — same prompts,
+   tools, model, budget as an agentic arm, only the controller differs. One bespoke
+   driver, built only after the combo arms exist. This is NOTES.md's "blackbox vs
+   micromanaging" question made operational.
+
+Paper → primitive mapping: AxProverBase ≈ 1 (+ context management); Goedel-Architect ≈
+1+2+3 with a scripted loop; Danus ≈ 1+3+4 with an LLM planner. The papers become corners
+of our grid instead of incomparable systems.
+
+Comparison hygiene — **open task: what is the fair comparison between arms?** We keep
+the no-budget-parity protocol (report solve rate *and* cost), but the honest post-hoc
+readout is deliberately undecided and needs real thought before the full grid.
+Candidates so far: solve-rate-vs-token-budget curves (Goedel-Architect Fig. 3 style,
+computable from `events.jsonl` with no protocol change), matched wall-clock, matched
+dollars, cost-per-solve. Each answers a different question and each can flatter a
+different arm (e.g. worker arms look better under wall-clock, one-shot under tokens) —
+so the task is to argue which question we're actually asking, pick the readout(s), and
+write the rationale down *before* seeing full-grid numbers. Non-negotiable regardless
+of readout: arm prompts differ only in the manipulated instruction, and worker-style
+arms report subprocess tokens into the parent's accounting.
+
 ## Open questions
 
-### Which extensions? (the big one)
-Candidates — need to pick ~3–4 and pin down designs:
-- **Subagents** — liked, but the design space is wide: what does a subagent get spawned
-  for (explore a proof branch? search mathlib? verify a lemma?), what context does it
-  inherit, what does it return? One interesting implementation route:
-  [pi-dynamic-workflows](https://github.com/michaelliv/pi-dynamic-workflows) (the agent
-  authors its own multi-agent workflows). May want *multiple* subagent variants as
-  separate arms (e.g. fixed-role spawner vs dynamic workflows).
-- **Semantic search** — over mathlib (lemma retrieval). Embedding model / index choice,
-  and how it compares to the grep-style search the base agent already has.
-- **Symbolic search** — Loogle / `exact?` / `apply?` / `rw?`: type-directed lemma lookup.
-  Cheap to expose as a tool, and a great contrast arm to *semantic* search.
-- **Plan-first** — force an informal proof sketch before touching Lean. Cheapest to
-  implement (system prompt or an enforced first tool call).
-- **Proof decomposition** — a tool/protocol for stating intermediate lemmas as `sorry`
-  stubs first, then filling each independently (draft-sketch-prove style; combines
-  naturally with subagents: one subagent per stub).
-- **Interactive goal state** — persistent Lean REPL tool showing the goal state after each
-  tactic, vs. the baseline's batch compile-and-report-errors.
-- **Counterexample checking** — expose `plausible`/`slim_check` so the agent can falsify a
-  candidate lemma before wasting budget proving it.
-- Lower priority: scratchpad/notes tool, self-critic pass before final submission,
-  error-message enrichment, mathlib docs lookup, custom compaction for long attempts.
-
-### What is the baseline?
-- Which tools does the *bare* agent get? Minimum viable is probably: read/write files,
-  a `lean_check` tool (compile + return errors), maybe bash. Everything else becomes an
-  extension under test.
-- What exactly the hard cap is (max turns? tokens? wall-clock?) and its value.
+### Remaining extension candidates (beyond the decomposition above)
+- **Semantic search** — running as `lean-search` (LeanSearch API); other semantic
+  indexes worth trying as variants.
+- **Symbolic search** — Loogle / `exact?` / `apply?` / `rw?`: type-directed lookup, a
+  contrast arm to semantic search.
+- **Interactive goal state** — persistent REPL tool showing goal state after each
+  tactic, vs batch compile-and-report-errors.
+- **Counterexample checking** — `plausible`/`slim_check` to falsify a candidate lemma
+  before spending budget proving it (pairs naturally with `plan`/`facts`: vet skeleton
+  lemmas early).
+- Lower priority: scratchpad/notes (the `memory` arm), self-critic pass,
+  error-message enrichment, mathlib docs lookup.
 
 ### Benchmark & model
+- Which benchmark(s) beyond PutnamBench for the full grid / headline numbers — see
+  `papers/INDEX.md` § Benchmarks. Known practicalities: Formal Conjectures' frozen
+  subsets pin Lean 4.27 (matches our `lean-env` as-is); FATE HEAD pins 4.28 (needs an
+  env bump or an older FATE tag).
 - Dev subset: how many problems (~20–50?), sampled how (stratified by year/topic)?
 - Cost estimate for the full grid: 2^k combos × 673 problems × avg tokens at DeepSeek
   pricing — before committing to k.
@@ -105,9 +158,12 @@ Candidates — need to pick ~3–4 and pin down designs:
 
 ## Next steps
 
-- [ ] Decide the extension set with supervisors; sketch each extension's design in a page.
-- [ ] Cost estimate: (combos × 673 problems × avg tokens) at DeepSeek pricing → pick k.
-- [ ] Pick the fixed dev subset.
-- [ ] Write the sanitizer for PutnamBench problem files.
-- [ ] Get pi running headless with DeepSeek + a minimal `lean_check` tool on one problem
-      end-to-end (the "hello world" of the whole setup).
+- [x] Pick the fixed dev subset (10 problems, seed 42 → `problems/dev.txt`).
+- [x] Write the sanitizer (now also strips NL docstrings by default; `problems-nl/` for
+      the NL arm).
+- [x] pi headless + DeepSeek + `lean_check` end-to-end; persistent lean server; grader.
+- [ ] Confirm the extension set with supervisors (proposal: `plan`, `facts`,
+      `lean-search`, one-shot control; workers + who-owns-the-loop later).
+- [ ] Implement `plan` and `facts` extensions + the one-shot control arm.
+- [ ] Baseline + arms on the dev subset; then cost estimate (combos × 672 × avg tokens)
+      → pick k for the full grid.
