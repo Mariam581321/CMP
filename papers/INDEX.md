@@ -109,7 +109,7 @@ have informal proofs in the literature.
 - Data: https://huggingface.co/datasets/MathAtlas/MathAtlas (open split only) ·
   contact: Nilay Patel <nilay@ucsc.edu> (correspondence author)
 
-**Not formalized problems — checked the paper (I had misread this one):** MathAtlas is
+**Not formalized problems:** MathAtlas is
 ~52k *informal* entities (theorems/definitions/exercises/proofs as text) extracted from
 103 graduate textbooks, plus a ~178k-relation dependency graph. There are no gold Lean
 statements to prove; the task is NL → Lean *statement autoformalization*, scored by
