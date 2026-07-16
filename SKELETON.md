@@ -70,7 +70,9 @@ is computable later without re-running.
 
 `extensions/lean-search.ts` registers `search_mathlib(query)` → calls the public
 **[LeanSearch](https://leansearch.net)** API (natural-language → mathlib lemmas; community-
-standard, zero indexing infra on our side; `POST https://leansearch.net/search`). Fallbacks
+standard, zero indexing infra on our side; `POST https://leansearch.net/search` — the
+endpoint now serves LeanSearch v2's standard mode, see `papers/INDEX.md`; its
+kind/value/informal-description fields aren't surfaced to the agent yet). Fallbacks
 if the API is flaky: [LeanExplore](https://arxiv.org/abs/2506.11085) (Python API,
 self-hostable) or Loogle (symbolic — that's a separate future arm).
 
@@ -143,6 +145,27 @@ per-combo prompt addenda (SYSTEM_PROMPT is currently fixed in run.js) — e.g. a
 `extensions/<name>.prompt.md` if it exists, so prompt deltas are versioned per arm.
 Soft gate only: `lean_check` never refuses; planning behavior stays observable in
 `tool_calls`.
+
+**`filter`** (`extensions/lean-filter.ts`; only meaningful with `plan` — see PLAN.md
+primitive 6): registers `vet_skeleton()` — reads `problem.lean`, extracts the
+`sorry`'d helper lemma statements, retrieves top-k candidates per lemma from
+LeanSearch internally (no dependence on the `lean-search` combo), then issues one
+**blank-context** vetting call (fixed prompt, no conversation history — the
+independence property; bare completion for now, a worker pi only if primitive 3 lands)
+and returns one structured verdict per helper lemma:
+`{support: strong|weak|none, verdict: keep|flag|reroute,
+reason: missing_premise|different_route|type_mismatch|bespoke_ok,
+suggested_premises: [...]}`.
+**The vetting call must see the full LeanSearch v2 metadata per candidate — kind,
+type signature, value, informal name and description** (the endpoint already returns
+all of it; don't strip to name+signature the way the agent-facing `search_mathlib`
+currently does — the metadata is what makes the relevance judgment possible). The
+prompt encodes ∅-is-a-flag-not-a-falsification: `support: none` with
+`verdict: keep, reason: bespoke_ok` is a legal answer. Per-arm prompt addendum
+(`extensions/lean-filter.prompt.md`): after a green `plan_check`, call
+`vet_skeleton`; on flag/reroute verdicts, consider revising the skeleton before
+filling bodies. Soft gate, same philosophy as `plan`. Vetting-call tokens/cost roll
+into the parent attempt's record (trivial here: the extension issues the call itself).
 
 **`facts`** (`extensions/lean-facts.ts`): registers `submit_fact(lemma_code)` — checks
 the lemma in isolation (against the bank) via the lean server; if green, appends to

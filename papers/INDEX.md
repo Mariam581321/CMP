@@ -65,6 +65,35 @@ parallel work additive. Unablated: the main agent's contribution on its own.
   has no plan/decomposition; Goedel-Architect has the plan machinery but competition
   benchmarks only. Nobody has both — relevant if we later target FATE.
 
+## LeanSearch v2: Global Premise Retrieval for Lean 4 Theorem Proving
+
+- arXiv: https://arxiv.org/abs/2605.13137 · PDF: `leansearch-v2-2605.13137.pdf`
+- Code: https://github.com/frenzymath/LeanSearch-v2 (Apache 2.0; reasoning-mode
+  prompts included) · API: https://leansearch.net (standard mode only)
+
+Same group as FATE/Danus. Two modes. *Standard mode*: hierarchy-informalized Mathlib
+corpus (Jixia extraction, Mathlib v4.28.0-rc1) + embedding–reranker pipeline
+(Qwen3-Embedding/Reranker-8B), SOTA single-query Mathlib retrieval with no
+fine-tuning. This is what our `lean-search` arm calls — the public endpoint has been
+upgraded to v2 in place (4B reranker in deployment vs 8B in the paper; request format
+unchanged, verified live). Responses carry kind/signature/value/informal descriptions
+that our extension doesn't yet surface to the agent. *Reasoning mode*: global premise
+retrieval — sketch the proof as NL steps, retrieve per step via standard mode, a
+per-candidate **filter** (Kimi K2 Instruct; may return ∅, so "nothing useful here" is
+distinguishable from "supported"), then a **judge** (Sonnet 4.5) over the full
+filtered map that either accepts or sends structured feedback (missing premise /
+different proof route / type mismatch) to a sketch reviser; ≤3 revision rounds.
+Downstream eval swaps only the retriever inside a fixed reflection-loop prover: 20%
+on FATE-H vs 16% next-best and 4% with no retrieval — retrieval quality propagates
+to proof success.
+
+For us: the basis of the proposed `filter` arm (PLAN.md, architecture decomposition) —
+filter+judge collapsed into one blank-context vetting pass over the `plan` skeleton,
+with a "no support ≠ false" modification (bespoke helper lemmas are legal; ∅ is a
+flag, not a falsification — in their task unsupported *means* failed, since the goal
+is premise retrieval itself). Their limitations section says behavior *inside* a
+capable agent harness is unexplored — exactly the cell our grid fills.
+
 # Benchmarks
 
 Candidate problem sets beyond PutnamBench (which is the first-experiments target only —

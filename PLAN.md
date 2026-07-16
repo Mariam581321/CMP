@@ -92,10 +92,37 @@ stays a `--combo` flag on the one harness.
    tools, model, budget as an agentic arm, only the controller differs. One bespoke
    driver, built only after the combo arms exist. This is NOTES.md's "blackbox vs
    micromanaging" question made operational.
+6. **Retrieval-vetted planning** → proposed **`filter`** arm (LeanSearch v2's
+   reasoning mode — see `papers/INDEX.md`). This is an architecture change to `plan`,
+   not a bolt-on tool: it inserts a probe–revise loop into the blueprint phase. After
+   a green `plan_check`, a `vet_skeleton` step retrieves top-k Mathlib candidates per
+   `sorry`'d helper lemma (LeanSearch called internally) and a *blank-context* vetting
+   call labels each lemma's library support with a structured verdict (keep / flag /
+   reroute, plus suggested premises); the main agent is instructed to consider
+   revising the skeleton on flags before spending proof budget on bodies — a
+   falsification signal that costs cents instead of proof attempts. Two deltas vs the
+   paper: their filter+judge collapse into one vetting pass, and **∅ is a flag, not a
+   falsification** — a lemma without library support may still be right, it just gets
+   proven from scratch (in their task unsupported means failed, because the goal *is*
+   premise retrieval). Independence rationale: the paper separates sketcher from
+   filter by using different models; a fresh context with no authorship stake in the
+   skeleton gets the same effect without a second model — the prover has sunk cost in
+   its own plan and will motivated-reason its premises fine. Open design decisions:
+   `filter` only exists where `plan` is on, so it's an interaction by construction,
+   never a main effect; retrieval bundled inside the tool vs requiring the
+   `lean-search` combo (bundled is cleaner cells, and makes `plan+filter+lean-search`
+   measure "agent-owned search *on top of* vetting" — itself interesting); and
+   whether the vetting call is a bare completion or a worker pi — that choice ties to
+   primitive 3 and stays deferred with it. Measurable secondary hypothesis: retrieval
+   support proxies *library-interface alignment* — predict `plan+filter` proofs are
+   shorter and use more distinct Mathlib lemmas than `plan`-alone on the same solved
+   problems (post hoc from final files + `events.jsonl`; would be the first concrete
+   datapoint on NOTES.md's "does the harness change the *kind* of proof" question).
 
 Paper → primitive mapping: AxProverBase ≈ 1 (+ context management); Goedel-Architect ≈
-1+2+3 with a scripted loop; Danus ≈ 1+3+4 with an LLM planner. The papers become corners
-of our grid instead of incomparable systems.
+1+2+3 with a scripted loop; Danus ≈ 1+3+4 with an LLM planner; LeanSearch v2's
+reasoning mode ≈ 2+6 built as a retrieval system rather than a prover. The papers
+become corners of our grid instead of incomparable systems.
 
 Comparison hygiene — **open task: what is the fair comparison between arms?** We keep
 the no-budget-parity protocol (report solve rate *and* cost), but the honest post-hoc
@@ -112,8 +139,10 @@ arms report subprocess tokens into the parent's accounting.
 ## Open questions
 
 ### Remaining extension candidates (beyond the decomposition above)
-- **Semantic search** — running as `lean-search` (LeanSearch API); other semantic
-  indexes worth trying as variants.
+- **Semantic search** — running as `lean-search` (LeanSearch API; the public endpoint
+  now serves LeanSearch v2's standard mode, so we already query v2 — see
+  `papers/INDEX.md`; the response's informal descriptions/kind fields aren't surfaced
+  to the agent yet). Other semantic indexes worth trying as variants.
 - **Symbolic search** — Loogle / `exact?` / `apply?` / `rw?`: type-directed lookup, a
   contrast arm to semantic search.
 - **Interactive goal state** — persistent REPL tool showing goal state after each
