@@ -190,6 +190,43 @@ arms report subprocess tokens into the parent's accounting.
 4. Analysis — solve rates per combo, per-extension main effects and interactions, cost
    breakdown.
 
+## Experiment log
+
+Dev-phase runs so far — all DeepSeek V4 Flash, thinking off, 20-min per-problem timeout
+unless noted; per-run artifacts (transcripts, `results.jsonl`, `summary.json`) under
+`results/<run-id>/`, harness git SHA recorded per attempt.
+
+- **2026-07-14 · `baseline-dev50`** — first baseline (arm 0) sweep over a ~50-problem
+  dev list, 2 h timeout. Interrupted by laptop sleep (an earlier attempt was corrupted
+  outright and lives in `results/_archive/`); 13 problems recorded, 5 solved. Motivated
+  the smaller fixed subsets below.
+- **2026-07-17 · `lean-plan-pilot1`** — 4-problem pilot of the plan arm (1): 2/4,
+  $0.20. One failure was `statement_changed` (agent altered the theorem statement;
+  caught by the grader) — the failure mode the `plan_check` statement-preservation
+  check exists for.
+- **2026-07-17 · `dev10-baseline-0717` / `dev10-lean-plan-0717`** — baseline vs plan
+  on the 10-problem dev subset (`problems/dev.txt`). Both 2/10; plan cost ~1.8×
+  ($0.47 vs $0.27). Failure mix shifted under plan: compile errors 2→0 but timeouts
+  3→5 — consistent with plan trading local iteration for slower, more structured
+  attempts without (yet) converting more problems.
+- **2026-07-17 · `mini3-{baseline,plan,search,plan-search}`** — first multi-arm
+  comparison: arms 0, 1, 2, 1+2 on 3 problems (`putnam_1998_b1`, `putnam_1983_b2`,
+  `putnam_1973_b3`). **All four arms scored 1/3** (~$0.11–0.13 each): every arm solved
+  `1998_b1` (86–243 s) and every arm timed out on the other two. Tool-call logs confirm
+  the arms genuinely differed in behavior (`plan_check` / `search_mathlib` calls
+  present per combo), so the tie is real, not a wiring bug. Takeaways:
+  - *Floor/ceiling:* one problem too easy, two too hard ⇒ zero discriminative power.
+    Arm comparisons need mid-difficulty problems (ones baseline solves sometimes) —
+    exactly the floor/ceiling-compression concern under Open questions, observed in
+    miniature.
+  - *Soft-plan adherence collapses under difficulty:* in both plan arms the model
+    called `plan_check` on the easy problem but **never on either hard problem** —
+    it abandons the plan protocol precisely where planning was meant to help. Direct
+    evidence for the soft-vs-hard-gate tension in arm 1 (and grist for the
+    scaffold-vs-discretion TODO under arm 3).
+  - The search arm pulled `search_mathlib` hardest on the hard problems (9–10 calls),
+    so the tool is at least demanded when the going gets tough.
+
 ## Next steps
 
 - [x] Pick the fixed dev subset (10 problems, seed 42 → `problems/dev.txt`).
