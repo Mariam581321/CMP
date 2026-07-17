@@ -85,6 +85,7 @@ Rules:
 - No new \`axiom\` declarations. No \`native_decide\`.
 - Use the lean_check tool to compile and verify your work. You are NOT done until lean_check reports no errors and no 'declaration uses sorry' warnings.
 - Work efficiently: think before checking, since each check takes about a minute.
+- Your chat output is hard-capped at ~8k tokens per message and anything cut off is LOST. Never do long derivations in chat. Put the work into problem.lean incrementally instead: routine algebra is one tactic away (ring, field_simp, linarith, nlinarith, norm_num, omega, positivity), so state intermediate facts as \`have\` steps and let tactics close them; use comments only for genuinely informal scratch work.
 - NEVER end your response without a tool call unless lean_check has passed. Analysis alone is not an answer — put your reasoning into the proof and verify it.`;
 
 // Per-arm prompt addenda: extensions/<name>.prompt.md is appended to the system prompt
@@ -93,9 +94,12 @@ const addenda = COMBO.map((x) => join(ROOT, "extensions", `${x}.prompt.md`)).fil
 const FULL_SYSTEM_PROMPT = [SYSTEM_PROMPT, ...addenda].join("\n\n");
 
 const PROMPT = "Prove the theorem in problem.lean. Read it first, then work until lean_check passes with no errors and no sorry warnings.";
-const MAX_NUDGES = 3;
-const nudgePrompt = (check) =>
-  `You are not done. Checking your current problem.lean reports:\n\n${(check?.pretty ?? "no check result available").slice(0, 3000)}\n\nFix this and run lean_check; do not stop until it passes with no errors and no sorries.`;
+const MAX_NUDGES = 3; // consecutive no-progress nudges; resets when the agent starts using tools again
+const nudgePrompt = (check, truncated) =>
+  (truncated
+    ? `Your last message hit the output-token limit and was CUT OFF — everything after the cutoff is lost. Do not restart the derivation in chat. Write your current best attempt into problem.lean NOW (state intermediate facts as \`have\` steps closed by ring/linarith/norm_num etc.; leave hard parts as sorry'd steps) and run lean_check.\n\n`
+    : `You are not done. `) +
+  `Checking your current problem.lean reports:\n\n${(check?.pretty ?? "no check result available").slice(0, 3000)}\n\nFix this and run lean_check; do not stop until it passes with no errors and no sorries.`;
 
 console.log(bold(`\nrun ${RUN_ID}`));
 console.log(dim(`  combo:       ${COMBO.length ? COMBO.join(" + ") : "(baseline)"}`));
@@ -134,6 +138,7 @@ async function attempt(name, idx) {
   const deadline = started + TIMEOUT_S * 1000;
   const stats = { turns: 0, toolCalls: {}, tokens: { in: 0, out: 0 }, cost: 0 };
   let timedOut = false;
+  let lastStopReason = null;
 
   const spawnPi = (args) =>
     new Promise((resolveExit) => {
@@ -165,11 +170,14 @@ async function attempt(name, idx) {
             if (e.type === "turn_end") stats.turns++;
             if (e.type === "tool_execution_start")
               stats.toolCalls[e.toolName] = (stats.toolCalls[e.toolName] ?? 0) + 1;
-            if (e.type === "message_end" && e.message?.role === "assistant" && e.message?.usage) {
+            if (e.type === "message_end" && e.message?.role === "assistant") {
+              if (e.message.stopReason) lastStopReason = e.message.stopReason;
               const u = e.message.usage;
-              stats.tokens.in += u.input ?? 0;
-              stats.tokens.out += u.output ?? 0;
-              stats.cost += u.cost?.total ?? 0;
+              if (u) {
+                stats.tokens.in += u.input ?? 0;
+                stats.tokens.out += u.output ?? 0;
+                stats.cost += u.cost?.total ?? 0;
+              }
             }
           } catch {}
         }
@@ -185,8 +193,10 @@ async function attempt(name, idx) {
   // doesn't actually check out (real server check, memoized ≈ free) and budget remains,
   // resume the session and tell it to continue (same policy for every combo).
   let exitCode = await spawnPi([...baseArgs, "--session-dir", sessionDir, PROMPT]);
-  let nudges = 0;
-  while (nudges < MAX_NUDGES && !timedOut && Date.now() < deadline - 30_000) {
+  let nudges = 0; // total, for the record
+  let noProgress = 0; // consecutive nudges that produced no tool call (wall-clock still bounds everything)
+  let callsAtNudge = 0;
+  while (noProgress < MAX_NUDGES && !timedOut && Date.now() < deadline - 30_000) {
     let content;
     try { content = readFileSync(join(work, "problem.lean"), "utf8"); } catch { break; }
     const check = await serverCheck(content).catch(() => null);
@@ -194,8 +204,11 @@ async function attempt(name, idx) {
     const sessions = readdirSync(sessionDir).filter((f) => f.endsWith(".jsonl"));
     if (!sessions.length) break;
     const sess = sessions.reduce((a, b) => (statSync(join(sessionDir, a)).mtimeMs > statSync(join(sessionDir, b)).mtimeMs ? a : b));
+    const totalCalls = Object.values(stats.toolCalls).reduce((a, b) => a + b, 0);
+    noProgress = totalCalls > callsAtNudge ? 0 : noProgress + 1;
+    callsAtNudge = totalCalls;
     nudges++;
-    exitCode = await spawnPi([...baseArgs, "--session", join(sessionDir, sess), nudgePrompt(check)]);
+    exitCode = await spawnPi([...baseArgs, "--session", join(sessionDir, sess), nudgePrompt(check, lastStopReason === "length")]);
   }
   events.end();
   stderrLog.end();
