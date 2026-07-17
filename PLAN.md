@@ -84,6 +84,25 @@ stays a `--combo` flag on the one harness.
    in Lean — in some sense we *look* for a proof, viewing Mathlib as puzzle pieces,
    instead of *building* one.
 
+   **TODO — scaffold vs discretion (test after arms 2+3 exist):** `replan` is a
+   *scaffolded* version of a behavior that `plan`+`lean-search` (1+2) merely *permits* —
+   an agent with a search tool could vet each sorry'd helper against Mathlib itself
+   before spending budget on bodies, but nothing makes it, and its judgment happens
+   in-context, already committed to its own plan (replan's vetting is blank-context by
+   design). The informative combos:
+   - **1+2 (plan+search)** — discretion: retrieval available, agent decides if it ever
+     informs the plan;
+   - **1+3 (plan+replan)** — scaffold only: forced per-helper retrieval + blank-context
+     verdicts after each green `plan_check`, no agent-facing search tool;
+   - **1+2+3** — both, in case the two help through different channels (replan vets the
+     decomposition; search helps fill bodies).
+   Readout: 1+2 vs 1+3 is the cheapest pair answering "does forcing the vet loop beat
+   leaving it to the agent"; 1+2+3 vs 1+2 isolates what the forced loop adds *on top of*
+   tool access (tie ⇒ replan's machinery is redundant with discretion; win ⇒ the
+   scaffold/blank-context independence itself carries weight). This mirrors the
+   soft-vs-hard-gate choice already made for `plan` (stay soft, observe adherence) —
+   same dimension, different arm.
+
 4. **Verified fact store** (inspired by Danus's fact-graph, minus workers):
    `submit_fact(lemma)` checks the lemma in isolation via the lean server and appends it
    to a bank only if green; `list_facts()` reads the bank back. Monotone, verified shared
@@ -184,5 +203,6 @@ arms report subprocess tokens into the parent's accounting.
       SKELETON.md addendum for the fake-plan caveat)
 - [ ] Implement `facts`
 - [ ] Implement `replan`
+- [ ] Scaffold-vs-discretion combos: 1+2 vs 1+3 (vs 1+2+3) — see the TODO under arm 3
 - [ ] Baseline + arms on the dev subset; then cost estimate (combos × #problems × avg tokens)
       → pick k for the full grid.
