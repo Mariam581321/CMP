@@ -26,6 +26,7 @@ const TIMEOUT_S = parseInt(arg("timeout", "7200"));
 const CONCURRENCY = parseInt(arg("concurrency", "6"));
 const MODEL = arg("model", "deepseek/deepseek-v4-flash");
 const THINKING = arg("thinking", "off");
+const MAX_TOKENS = parseInt(arg("max-tokens", "0")); // 0 = provider default (DeepSeek: 8192/response)
 const RUN_ID = arg("run-id", `${COMBO.join("+") || "baseline"}-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "")}`);
 
 // ---------- setup ----------
@@ -73,7 +74,7 @@ if (existsSync(join(runDir, "results.jsonl"))) {
 mkdirSync(runDir, { recursive: true });
 let gitSha = "unknown";
 try { gitSha = execSync("git rev-parse --short HEAD", { cwd: ROOT }).toString().trim(); } catch {}
-writeFileSync(join(runDir, "run.json"), JSON.stringify({ run_id: RUN_ID, combo: COMBO, model: MODEL, thinking: THINKING, timeout_s: TIMEOUT_S, concurrency: CONCURRENCY, problems, problems_dir: PROBLEMS_DIR, git_sha: gitSha, started_at: new Date().toISOString() }, null, 2));
+writeFileSync(join(runDir, "run.json"), JSON.stringify({ run_id: RUN_ID, combo: COMBO, model: MODEL, thinking: THINKING, max_tokens: MAX_TOKENS || null, timeout_s: TIMEOUT_S, concurrency: CONCURRENCY, problems, problems_dir: PROBLEMS_DIR, git_sha: gitSha, started_at: new Date().toISOString() }, null, 2));
 
 const SYSTEM_PROMPT = `You are proving a theorem from a mathematics competition, formalized in Lean 4 with Mathlib.
 
@@ -128,6 +129,7 @@ async function attempt(name, idx) {
     "--model", MODEL, "--thinking", THINKING,
     "--tools", toolList.join(","),
     "-e", join(ROOT, "extensions", "lean-check.ts"),
+    ...(MAX_TOKENS > 0 ? ["-e", join(ROOT, "extensions", "max-tokens.ts")] : []),
     ...COMBO.flatMap((x) => ["-e", join(ROOT, "extensions", `${x}.ts`)]),
     "--system-prompt", FULL_SYSTEM_PROMPT,
   ];
@@ -144,7 +146,7 @@ async function attempt(name, idx) {
     new Promise((resolveExit) => {
       const child = spawn("pi", args, {
         cwd: work,
-        env: { ...process.env, CMP_ORIGINAL_FILE: join(PROBLEMS_DIR, `${name}.lean`) },
+        env: { ...process.env, CMP_ORIGINAL_FILE: join(PROBLEMS_DIR, `${name}.lean`), ...(MAX_TOKENS > 0 ? { CMP_MAX_TOKENS: String(MAX_TOKENS) } : {}) },
         detached: true,
         stdio: ["ignore", "pipe", "pipe"],
       });
