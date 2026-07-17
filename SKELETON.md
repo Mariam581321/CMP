@@ -137,15 +137,32 @@ Everything above is built (deviations: grader is our own `runner/grade.js` on th
 persistent lean server, not a FATE-Eval port; runner is plain JS). New arms follow the
 arm decomposition in PLAN.md; tool-level designs:
 
-**`plan`** (`extensions/lean-plan.ts`): registers `plan_check` — validates that
-`problem.lean` is currently a *skeleton*: compiles, statement preserved, every helper
-lemma body is `sorry`. Plus a per-arm system-prompt addendum: "first get a green
-`plan_check` on a skeleton of helper lemmas, then fill bodies one at a time; if a lemma
-keeps failing, revise the skeleton, not the proof." Needs a small runner mechanism for
-per-combo prompt addenda (SYSTEM_PROMPT is currently fixed in run.js) — e.g. append
-`extensions/<name>.prompt.md` if it exists, so prompt deltas are versioned per arm.
-Soft gate only: `lean_check` never refuses; planning behavior stays observable in
-`tool_calls`.
+**`plan`** (`extensions/lean-plan.ts`, core logic in `runner/plan.js`) — implemented.
+Registers `plan_check` — validates that `problem.lean` is currently a *plan*, defined
+as: (1) compiles, (2) statement preserved, (3) every `sorry` lies **outside** the
+benchmark declarations — the main theorem's proof (and any `_solution` abbrev) must be
+complete *in terms of* sorry'd helper lemmas, so a green check means the compiler has
+verified the reduction "helpers ⟹ theorem". Prompt addendum
+(`extensions/lean-plan.prompt.md`): plan first, get plan_check green, fill helper
+bodies one at a time; whether to retry a stuck helper or revise the skeleton is left
+to the model's judgment (decision 2026-07-17 — observe the choice, don't mandate it).
+After the first green, plan_check appends a "planning phase is done, use lean_check"
+note to any further call (pilot showed the model using plan_check as a general compile
+checker, since red plan_checks include compiler output). Soft gate only: nothing ever
+refuses; planning behavior stays observable in `tool_calls`. Runner mechanism (now built): `extensions/<name>.prompt.md` is appended
+to the system prompt when `<name>` is in the combo, so prompt deltas are versioned per
+arm.
+
+*Fake-plan caveat:* the definition admits a degenerate plan — one helper that restates
+the whole theorem, main proof `:= helper ...`. This compiles and passes. Deliberately
+not gated (observe planning, don't fight the model); instead every `plan_check` result
+logs, per sorry'd helper, the token-Jaccard similarity between the helper's sorry goal
+and the original theorem's sorry goal (`restatement_similarity`, ≈1.0 for a verbatim
+restatement, ≲0.2 for unrelated lemmas — both ends verified against the REPL), and
+every checked plan is snapshotted to `results/<run>/<problem>/plans/plan-NN-{green,red}.lean`
+(outside the agent's cwd) so plans can be judged post-hoc — by eyeball or by a cheap
+offline LLM pass — without re-running. Whether faking is even prevalent is an
+empirical question; measure before adding an in-loop judge.
 
 **`replan`** (`extensions/lean-replan.ts`; only meaningful with `plan` — see PLAN.md
 arm 3): registers `vet_skeleton()` — reads `problem.lean`, extracts the

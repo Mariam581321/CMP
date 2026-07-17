@@ -61,7 +61,7 @@ for (const ext of COMBO)
 
 // pi's --tools is an allowlist that also filters extension tools, so custom tool names
 // must be listed explicitly. Map: extension file -> tool names it registers.
-const EXT_TOOLS = { "lean-check": ["lean_check"], "lean-search": ["search_mathlib"] };
+const EXT_TOOLS = { "lean-check": ["lean_check"], "lean-search": ["search_mathlib"], "lean-plan": ["plan_check"] };
 const toolList = ["read", "edit", "write", ...EXT_TOOLS["lean-check"], ...COMBO.flatMap((x) => EXT_TOOLS[x] ?? [x.replace(/-/g, "_")])];
 
 const problems = readFileSync(PROBLEMS_FILE, "utf8").split("\n").map((s) => s.trim()).filter(Boolean);
@@ -86,6 +86,11 @@ Rules:
 - Use the lean_check tool to compile and verify your work. You are NOT done until lean_check reports no errors and no 'declaration uses sorry' warnings.
 - Work efficiently: think before checking, since each check takes about a minute.
 - NEVER end your response without a tool call unless lean_check has passed. Analysis alone is not an answer — put your reasoning into the proof and verify it.`;
+
+// Per-arm prompt addenda: extensions/<name>.prompt.md is appended to the system prompt
+// when <name> is in the combo, so prompt deltas are versioned alongside the arm's code.
+const addenda = COMBO.map((x) => join(ROOT, "extensions", `${x}.prompt.md`)).filter(existsSync).map((p) => readFileSync(p, "utf8").trim());
+const FULL_SYSTEM_PROMPT = [SYSTEM_PROMPT, ...addenda].join("\n\n");
 
 const PROMPT = "Prove the theorem in problem.lean. Read it first, then work until lean_check passes with no errors and no sorry warnings.";
 const MAX_NUDGES = 3;
@@ -120,7 +125,7 @@ async function attempt(name, idx) {
     "--tools", toolList.join(","),
     "-e", join(ROOT, "extensions", "lean-check.ts"),
     ...COMBO.flatMap((x) => ["-e", join(ROOT, "extensions", `${x}.ts`)]),
-    "--system-prompt", SYSTEM_PROMPT,
+    "--system-prompt", FULL_SYSTEM_PROMPT,
   ];
 
   const events = createWriteStream(join(probDir, "events.jsonl"));

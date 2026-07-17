@@ -179,7 +179,10 @@ arms report subprocess tokens into the parent's accounting.
 - [x] pi headless + DeepSeek + `lean_check` end-to-end; persistent lean server; grader.
 - [x] `lean-search` arm (semantic search, arm 2) — the first arm implemented.
 - [ ] Confirm the extension set
-- [ ] Implement `plan`, `facts` extensions
+- [x] Implement `plan` (arm 1) — `plan_check` = compiles + statement preserved + sorries
+      only in helper lemmas; restatement similarity logged, plans snapshotted (see
+      SKELETON.md addendum for the fake-plan caveat)
+- [ ] Implement `facts`
 - [ ] Implement `replan`
 - [ ] Baseline + arms on the dev subset; then cost estimate (combos × #problems × avg tokens)
       → pick k for the full grid.

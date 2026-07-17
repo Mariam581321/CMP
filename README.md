@@ -69,7 +69,9 @@ The agent gets `read,edit,write` + the `lean_check` tool, plus whatever the comb
    tools/events — see pi's `docs/extensions.md`).
 2. Add its tool names to `EXT_TOOLS` in `runner/run.js` (pi's `--tools` allowlist also
    filters extension tools, so they must be listed).
-3. Run with `--combo <name>`.
+3. Optional: `extensions/<name>.prompt.md` — appended to the system prompt when the
+   arm is in the combo, so per-arm prompt deltas are versioned next to the arm's code.
+4. Run with `--combo <name>`.
 
 ## Gotchas learned the hard way
 
