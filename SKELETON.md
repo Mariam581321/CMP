@@ -1,61 +1,76 @@
-# Skeleton (80/20)
+# Implementation
 
-Goal: run `runner --combo lean-search --problems dev.txt` and get solve rate + cost.
-First experiment (runnable ~today): baseline vs baseline+**semantic search**, dev subset.
+How one experiment runs end-to-end. The research design (arms, factorial framework,
+protocol) is in `PLAN.md`.
 
-DeepSeek: pi supports it natively — `deepseek/deepseek-v4-flash` is in its catalog and it
-reads `DEEPSEEK_API_KEY` (in `.env`, gitignored). No OpenAI-compat shim needed.
+Command: `node runner/run.js --combo lean-search --problems problems/dev.txt` → solve
+rate + cost. pi supports DeepSeek natively (`deepseek/deepseek-v4-flash`, reads
+`DEEPSEEK_API_KEY` from `.env`, gitignored) — no OpenAI-compat shim.
 
 ## How one attempt works
 
-1. Runner makes a scratch dir containing only the **sanitized** problem file
-   (`problem.lean`) + short instructions. No path to the benchmark repo.
-2. Spawns the pi CLI in that dir, headless:
+1. Runner makes a scratch dir with only the **sanitized** `problem.lean` + short
+   instructions. No path to the benchmark repo.
+2. Spawns pi headless in that dir:
    ```
-   pi --mode json --session <transcript path> --no-extensions --no-skills -nc \
-      --model deepseek/deepseek-v4-flash \
-      --tools read,edit,write \
+   pi --mode json --session <transcript> --no-extensions --no-skills -nc \
+      --model deepseek/deepseek-v4-flash --tools read,edit,write \
       -e extensions/lean-check.ts [-e extensions/lean-search.ts ...] \
       --append-system-prompt <prover instructions> \
       "Prove the theorem in problem.lean"
    ```
-   Baseline = read/edit/write + `lean_check` only (no bash/grep). Combo = extra `-e` flags.
+   Baseline = read/edit/write + `lean_check` only (no bash/grep). Combo = extra `-e`
+   flags. `extensions/<name>.prompt.md` is appended to the system prompt when `<name>` is
+   in the combo, so prompt deltas are versioned per arm.
 3. Streams all JSON events to `events.jsonl`; kills the process at a wall-clock cap.
-4. **Grades independently** after the agent exits (don't trust the agent's own lean_check).
+4. **Grades independently** after the agent exits (never trust the agent's own
+   lean_check).
 5. Appends one record to the run's `results.jsonl`.
 
-## Verification (open source, not hand-rolled)
+## Grading (independent of the agent)
 
-- Reuse **[FATE-Eval](https://github.com/frenzymath/FATE-Eval)**'s verifier: static
-  precheck + batched **[Lean REPL](https://github.com/leanprover-community/repl)**
-  verification (sorry/error detection via the REPL, parallelized). Port its verify module
-  to point at our PutnamBench workspace; we don't use its generation side.
-- Plus the one check FATE-Eval won't know about: **statement preserved** — line-level diff
-  of the theorem/abbrev statement vs the sanitized original (the only check we write
-  ourselves; ~30 lines, agent-specific attack surface).
-- Axiom soundness: check via REPL `#print axioms <thm>` (catches `native_decide` etc.),
-  not by grepping.
+`runner/grade.js`, run after the agent exits, over the persistent lean server:
+
+1. **statement preserved** — every code line of the original must survive (docstrings
+   exempt); the one check we write ourselves (~30 lines, agent-specific attack surface).
+2. **compiles** under Lean 4.27 + Mathlib.
+3. **axiom soundness** — `#print axioms` for every benchmark declaration must be within
+   `{propext, Classical.choice, Quot.sound}` — catches `sorry` (sorryAx), new axioms, and
+   `native_decide` in one mechanism. (`lake env lean` on a sorry'd file exits 0 — must
+   grade via `#print axioms`, not by grepping.)
+
+Kernel re-verification (lean4checker) is punted until we publish numbers.
 
 ## Lean without pain
 
-One shared pre-built project: `lean-env/` built fresh from
-`benchmarks/PutnamBench/lean4` (its lakefile + toolchain), `lake exe cache get` once
-(~mins, not hours). Agent-facing `lean_check` copies the file in and compiles
-(`lake env lean <file>`); each invocation is an independent process, so it parallelizes.
+One shared pre-built project `lean-env/`, built from `benchmarks/PutnamBench/lean4` (its
+lakefile + toolchain), `lake exe cache get` once. Every check runs against a **persistent
+Lean REPL** (`vendor/repl`, pinned v4.27.0) that imports Mathlib once into a resident
+process, served by a small local HTTP daemon (`runner/lean-server.js`) shared by the
+grader and every pi subprocess. Watchdog: per-cmd timeout, auto-restart on crash/hang.
+Isolated checks are memoized server-side (hash the file → cached verdict), so
+re-verification of an unchanged file is ~free.
+
+Speed context: a cold `lake env lean` deserializes all of Mathlib (~6 GB, 12–50 s) to
+check a 20-line file; the REPL avoids the re-import (~1–5 s/check). Also cap
+`maxHeartbeats` per check to bound runaway tactic searches (`decide`, etc.). With fast
+checks the LLM becomes the bottleneck → agent concurrency 8–16.
+
+*Not doing:* minimal per-problem imports (changes the benchmark — import hints are premise
+hints), skipping independent grading, parallel arms while wall-time matters.
 
 ## Concurrency
 
 `--concurrency N` worker pool over problems (default 6): each attempt = own scratch dir +
-own pi subprocess; verification is batched REPL, also parallel. LLM calls are I/O-bound and
-DeepSeek is rate-limit-friendly; Lean compiles (~1–2 min each) are the real bottleneck —
-budget cores accordingly. Ballpark: #problems × ~5 min / 8 workers (≈ 7 h per combo on
-full PutnamBench).
+own pi subprocess; checks hit the shared warm REPL. LLM calls are I/O-bound and DeepSeek
+is rate-limit-friendly; Lean compiles were the old bottleneck (now the REPL).
 
 ## Logging (stats computed after the fact, never during)
 
-Per attempt, under `results/<run-id>/<problem>/`: `events.jsonl` (full pi event stream),
-pi session file (replayable transcript), `problem.lean` final state, `verify.json`.
-Run-level `results.jsonl`, one record per attempt:
+Per attempt under `results/<run-id>/<problem>/`: `events.jsonl` (full pi event stream),
+pi session file (replayable transcript), `problem.lean` final state, `attempt.json`,
+`stderr.log`, and `plans/` for the plan arm. Run-level `results.jsonl`, one record per
+attempt:
 ```json
 {"run_id": "...", "problem": "putnam_1962_a1", "combo": ["lean-search"],
  "model": "deepseek-v4-flash", "started_at": "...", "wall_s": 412, "turns": 14,
@@ -67,132 +82,117 @@ Run-level `results.jsonl`, one record per attempt:
 Everything raw is kept, so any stat (tool-use patterns, time-to-first-check, error types)
 is computable later without re-running.
 
-## Extension #1: semantic search (only arm for now)
-
-`extensions/lean-search.ts` registers `search_mathlib(query)` → calls the public
-**[LeanSearch](https://leansearch.net)** API (natural-language → mathlib lemmas; community-
-standard, zero indexing infra on our side; `POST https://leansearch.net/search` — the
-endpoint now serves LeanSearch v2's standard mode, see `papers/INDEX.md`; its
-kind/value/informal-description fields aren't surfaced to the agent yet). Fallbacks
-if the API is flaky: [LeanExplore](https://arxiv.org/abs/2506.11085) (Python API,
-self-hostable) or Loogle (symbolic — that's a separate future arm).
-
 ## Files
 
 ```
-runner/run.ts               spawn pi per problem, worker pool, logging (~250 lines TS)
-runner/sanitize.ts          PutnamBench src/*.lean -> problems/*.lean (strip `--` answer comments)
-runner/verify/              ported from FATE-Eval (REPL check) + our statement check
+runner/run.js               spawn pi per problem, worker pool, logging
+runner/sanitize.js          PutnamBench src/*.lean -> problems/*.lean (strip answers + docstrings)
+runner/grade.js             independent grading over the lean server
+runner/lean-server.js       persistent Lean REPL HTTP daemon
+runner/plan.js              plan_check core logic
 extensions/lean-check.ts    always-on agent-facing compile tool
-extensions/lean-search.ts   arm #1: LeanSearch API
-lean-env/                   shared Lean project built from benchmarks/PutnamBench/lean4 (gitignored)
-problems/                   sanitized statements + dev.txt / all.txt
+extensions/lean-search.ts   semantic search (LeanSearch API)
+extensions/lean-plan.ts     plan_check (+ lean-plan.prompt.md)
+extensions/max-tokens.ts    caps max_tokens/response (auto-added when --max-tokens > 0)
+lean-env/                   shared Lean project (gitignored)
+problems/                   sanitized statements + dev.txt
 results/                    per-run dirs + results.jsonl (gitignored)
 ```
 
-## Runner CLI (only knobs that exist)
+## Runner CLI
 
 ```
 --combo a,b          extension names = filenames in extensions/ ("" = baseline)
---problems <file>    problem list | --timeout <s> (600) | --concurrency <n> (6)
---model <id>         deepseek/deepseek-v4-flash | --run-id <s> (default combo+timestamp)
+--problems <file>    problem list | --problems-dir <dir> (problems/; problems-nl/ for the NL arm)
+--timeout <s>        (600) | --concurrency <n> (6)
+--model <id>         deepseek/deepseek-v4-flash | --thinking <level> (off)
+--max-tokens <n>     (0 = provider default; >0 caps max_tokens/response via max-tokens.ts)
+--run-id <s>         default combo+timestamp
 ```
 
-## Build order
+## Adding an extension arm
 
-1. `lean-env/` setup + verifier port — grade a hand-written proof correctly.
-2. `sanitize.ts` + `run.ts` baseline on 1 problem end-to-end.
-3. `lean-search.ts` → baseline vs +search on the dev subset. First real datapoint.
+1. Write `extensions/<name>.ts` (default-export `function (pi: ExtensionAPI)`, register
+   tools/events — see pi's `docs/extensions.md`).
+2. Add its tool names to `EXT_TOOLS` in `runner/run.js` (pi's `--tools` allowlist filters
+   extension tools too, so they must be listed).
+3. Optional `extensions/<name>.prompt.md` — appended to the system prompt when the arm is
+   in the combo.
+4. Run with `--combo <name>`.
 
-## Speed plan (post-first-run)
+**Accounting note for worker-style arms:** any extension that spawns a pi subprocess must
+surface that subprocess's tokens/cost into the parent attempt's record, and the
+per-problem budget must be shared — otherwise parallel arms get free compute and the
+comparison is broken.
 
-Where time goes today: every `lake env lean` deserializes all of Mathlib (~6 GB, 12–50 s)
-to check a 20-line file (~1–5 s), ~11×/problem, serialized (one slot fits in RAM).
+## Tool-level arm designs
 
-1. **Persistent Lean REPL** (`vendor/repl`, pinned v4.27.0): import Mathlib once into a
-   resident process; each check = JSON cmd against that env (~1–5 s, no re-import).
-   Serve it from a small local HTTP daemon (`runner/lean-server.js`) so the grader and
-   every pi subprocess share one warm REPL — this replaces the mkdir slot semaphore.
-   Watchdog: per-cmd timeout, auto-restart on crash/hang. Expected ~10× on the lean side.
-2. **maxHeartbeats cap** per check — bounds runaway tactic searches (`decide`, etc.).
-3. **lean_check memo** — hash the file, return the cached verdict when the agent re-checks
-   an unchanged file.
-4. **After the 12 GB WSL bump**: oleans stay in page cache; optionally try 2 REPL workers.
-5. **Full-benchmark runs**: with fast checks the LLM becomes the bottleneck → agent concurrency
-   8–16; ballpark drops from ~45 h/arm (current) to ~3–5 h/arm.
+**`plan`** (`extensions/lean-plan.ts`, core in `runner/plan.js`) — implemented. Registers
+`plan_check`, which validates that `problem.lean` is currently a *plan*: (1) compiles,
+(2) statement preserved, (3) every `sorry` lies **outside** the benchmark declarations —
+the main theorem's proof (and any `_solution` abbrev) is complete *in terms of* sorry'd
+helper lemmas, so a green check means the compiler has verified the reduction "helpers ⟹
+theorem". Prompt addendum: plan first, get plan_check green, fill helper bodies one at a
+time; whether to retry a stuck helper or revise the skeleton is left to the model
+(observe the choice, don't mandate it). After the first green, plan_check
+appends a "planning phase is done, use lean_check" note (pilot showed the model using
+plan_check as a general compile checker, since red plan_checks include compiler output).
+Soft gate only: nothing ever refuses; planning stays observable in `tool_calls`.
 
-Not doing: minimal per-problem imports (changes the benchmark — import hints are premise
-hints), skipping independent grading, parallel arms while wall-time matters.
+*Fake-plan caveat:* the definition admits a degenerate plan — one helper restating the
+whole theorem, main proof `:= helper ...`. Compiles and passes. Deliberately not gated
+(observe planning, don't fight the model); instead every `plan_check` logs, per sorry'd
+helper, the token-Jaccard similarity between the helper's sorry goal and the original
+theorem's (`restatement_similarity`, ≈1.0 for a verbatim restatement, ≲0.2 for unrelated
+— both ends verified against the REPL), and every checked plan is snapshotted to
+`results/<run>/<problem>/plans/plan-NN-{green,red}.lean` for post-hoc judging without
+re-running. Whether faking is prevalent is empirical; measure before adding an in-loop
+judge.
+
+**`replan`** (`extensions/lean-replan.ts`; only meaningful with `plan` — see PLAN.md
+experiment 1): registers `vet_skeleton()` — reads `problem.lean`, extracts the sorry'd
+helper statements, retrieves top-k candidates per lemma from LeanSearch internally (no
+dependence on the `lean-search` combo), then issues one **blank-context** vetting call
+(fixed prompt, no conversation history — the independence property; bare completion for
+now, a worker pi only if the workers arm lands) and returns one structured verdict per
+helper: `{support: strong|weak|none, verdict: keep|flag|reroute, reason:
+missing_premise|different_route|type_mismatch|bespoke_ok, suggested_premises: [...]}`.
+**The vetting call must see the full LeanSearch v2 metadata per candidate** — kind, type
+signature, value, informal name and description (the endpoint returns all of it; don't
+strip to name+signature the way the agent-facing `search_mathlib` does — the metadata is
+what makes the relevance judgment possible). The prompt encodes
+∅-is-a-flag-not-a-falsification: `support: none` with `verdict: keep, reason: bespoke_ok`
+is legal. Prompt addendum: after a green `plan_check`, call `vet_skeleton`; on
+flag/reroute, consider revising before filling bodies. Soft gate, same philosophy as
+`plan`. Intuition: we *look* for a proof, viewing Mathlib as puzzle pieces, instead of
+*building* one — plans drift toward what the library supports, which should also be
+easier to formalize. Vetting-call tokens roll into the parent attempt's record.
+
+**`facts`** (`extensions/lean-facts.ts`): registers `submit_fact(lemma_code)` — checks
+the lemma in isolation via the lean server; if green, appends to `facts.lean` in the
+scratch dir; returns the verdict either way. Plus `list_facts()`. Prompt addendum
+explains that the final `problem.lean` must be self-contained (copy needed facts above
+the theorem) — grading is unchanged. Broadened design (PLAN.md experiment 2): the same
+artifact also holds free-form draft/insights, so derivations leave the message stream.
+
+## Search backend (`lean-search`)
+
+`search_mathlib` POSTs to the public **[LeanSearch](https://leansearch.net)** API
+(natural language → Mathlib lemmas; no indexing infra on our side). It's someone else's
+public endpoint, so if it's flaky or rate-limits during a run, fall back to
+[LeanExplore](https://arxiv.org/abs/2506.11085), which is self-hostable — removing the
+external-uptime dependency.
+
+## Open implementation questions
+
+- Lean environment: toolchain + mathlib pinned to what the benchmark expects; batch
+  `lake` vs the persistent REPL (chose REPL).
+- Isolation & parallelism: each attempt in a fresh workspace/session; parallelism across
+  problems via the worker pool.
+- Full-benchmark cost: combos × #problems × avg tokens at DeepSeek pricing — compute
+  before committing to how many factors.
 
 ## Punted (deliberately)
 
-Turn caps (timeout only), retries/resume, dashboards, lean4checker kernel re-verification
-(add before publishing numbers), FATE, all other extension arms.
-
----
-
-## Addendum: status + next arms
-
-Everything above is built (deviations: grader is our own `runner/grade.js` on the
-persistent lean server, not a FATE-Eval port; runner is plain JS). New arms follow the
-arm decomposition in PLAN.md; tool-level designs:
-
-**`plan`** (`extensions/lean-plan.ts`, core logic in `runner/plan.js`) — implemented.
-Registers `plan_check` — validates that `problem.lean` is currently a *plan*, defined
-as: (1) compiles, (2) statement preserved, (3) every `sorry` lies **outside** the
-benchmark declarations — the main theorem's proof (and any `_solution` abbrev) must be
-complete *in terms of* sorry'd helper lemmas, so a green check means the compiler has
-verified the reduction "helpers ⟹ theorem". Prompt addendum
-(`extensions/lean-plan.prompt.md`): plan first, get plan_check green, fill helper
-bodies one at a time; whether to retry a stuck helper or revise the skeleton is left
-to the model's judgment (decision 2026-07-17 — observe the choice, don't mandate it).
-After the first green, plan_check appends a "planning phase is done, use lean_check"
-note to any further call (pilot showed the model using plan_check as a general compile
-checker, since red plan_checks include compiler output). Soft gate only: nothing ever
-refuses; planning behavior stays observable in `tool_calls`. Runner mechanism (now built): `extensions/<name>.prompt.md` is appended
-to the system prompt when `<name>` is in the combo, so prompt deltas are versioned per
-arm.
-
-*Fake-plan caveat:* the definition admits a degenerate plan — one helper that restates
-the whole theorem, main proof `:= helper ...`. This compiles and passes. Deliberately
-not gated (observe planning, don't fight the model); instead every `plan_check` result
-logs, per sorry'd helper, the token-Jaccard similarity between the helper's sorry goal
-and the original theorem's sorry goal (`restatement_similarity`, ≈1.0 for a verbatim
-restatement, ≲0.2 for unrelated lemmas — both ends verified against the REPL), and
-every checked plan is snapshotted to `results/<run>/<problem>/plans/plan-NN-{green,red}.lean`
-(outside the agent's cwd) so plans can be judged post-hoc — by eyeball or by a cheap
-offline LLM pass — without re-running. Whether faking is even prevalent is an
-empirical question; measure before adding an in-loop judge.
-
-**`replan`** (`extensions/lean-replan.ts`; only meaningful with `plan` — see PLAN.md
-arm 3): registers `vet_skeleton()` — reads `problem.lean`, extracts the
-`sorry`'d helper lemma statements, retrieves top-k candidates per lemma from
-LeanSearch internally (no dependence on the `lean-search` combo), then issues one
-**blank-context** vetting call (fixed prompt, no conversation history — the
-independence property; bare completion for now, a worker pi only if the workers arm lands)
-and returns one structured verdict per helper lemma:
-`{support: strong|weak|none, verdict: keep|flag|reroute,
-reason: missing_premise|different_route|type_mismatch|bespoke_ok,
-suggested_premises: [...]}`.
-**The vetting call must see the full LeanSearch v2 metadata per candidate — kind,
-type signature, value, informal name and description** (the endpoint already returns
-all of it; don't strip to name+signature the way the agent-facing `search_mathlib`
-currently does — the metadata is what makes the relevance judgment possible). The
-prompt encodes ∅-is-a-flag-not-a-falsification: `support: none` with
-`verdict: keep, reason: bespoke_ok` is a legal answer. Per-arm prompt addendum
-(`extensions/lean-replan.prompt.md`): after a green `plan_check`, call
-`vet_skeleton`; on flag/reroute verdicts, consider revising the skeleton before
-filling bodies. Soft gate, same philosophy as `plan`. Vetting-call tokens/cost roll
-into the parent attempt's record (trivial here: the extension issues the call itself).
-
-**`facts`** (`extensions/lean-facts.ts`): registers `submit_fact(lemma_code)` — checks
-the lemma in isolation (against the bank) via the lean server; if green, appends to
-`facts.lean` in the scratch dir; returns the verdict either way. And `list_facts()`.
-Prompt addendum explains the workflow and that the final `problem.lean` must be
-self-contained (copy needed facts above the theorem) — grading is unchanged. Isolated
-checks are memoized server-side, so re-verification is ~free.
-
-**Accounting note for future worker-style arms:** any extension that spawns a pi
-subprocess must surface that subprocess's tokens/cost into the parent attempt's record,
-and the per-problem budget must be shared — otherwise parallel arms get free compute
-and the comparison is broken.
+Turn caps (timeout only), retries/resume, dashboards, lean4checker kernel
+re-verification (add before publishing numbers), FATE, all not-yet-built arms.
