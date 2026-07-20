@@ -110,6 +110,7 @@ console.log(dim(`  timeout:     ${TIMEOUT_S}s/problem   concurrency: ${CONCURREN
 console.log(dim(`  results:     results/${RUN_ID}/\n`));
 
 const leanServer = await ensureLeanServer(join(runDir, "lean-server.log"));
+leanServer?.unref(); // don't let the child keep the event loop alive after the summary is written
 const stopServer = () => { try { leanServer?.kill("SIGTERM"); } catch {} };
 process.on("exit", stopServer);
 process.on("SIGINT", () => { stopServer(); process.exit(130); });
