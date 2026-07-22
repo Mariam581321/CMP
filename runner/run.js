@@ -15,7 +15,7 @@ import { mkdirSync, readFileSync, writeFileSync, appendFileSync, copyFileSync, c
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { grade, serverCheck } from "./grade.js";
-import { arg, LEAN_PORT, LEAN_URL, green, red, yellow, dim, bold, cyan, money, secs } from "./common.js";
+import { arg, costStd, LEAN_PORT, LEAN_URL, green, red, yellow, dim, bold, cyan, money, secs } from "./common.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -182,7 +182,7 @@ async function attempt(name, idx) {
   const stderrLog = createWriteStream(join(probDir, "stderr.log"));
   const started = Date.now();
   const deadline = started + TIMEOUT_S * 1000;
-  const stats = { turns: 0, toolCalls: {}, tokens: { in: 0, out: 0 }, cost: 0, providerErrors: 0, lastError: null };
+  const stats = { turns: 0, toolCalls: {}, tokens: { in: 0, out: 0, cache_read: 0 }, cost: 0, providerErrors: 0, lastError: null };
   let timedOut = false;
   let lastStopReason = null;
 
@@ -230,6 +230,7 @@ async function attempt(name, idx) {
               if (u) {
                 stats.tokens.in += u.input ?? 0;
                 stats.tokens.out += u.output ?? 0;
+                stats.tokens.cache_read += u.cacheRead ?? 0;
                 stats.cost += u.cost?.total ?? 0;
               }
             }
@@ -282,6 +283,7 @@ async function attempt(name, idx) {
     run_id: RUN_ID, problem: name, combo: COMBO, model: MODEL, thinking: THINKING,
     started_at: new Date(started).toISOString(), wall_s: Math.round(wallMs / 1000),
     turns: stats.turns, tokens: stats.tokens, cost_usd: +stats.cost.toFixed(5),
+    cost_std: +costStd(stats.tokens).toFixed(5),
     provider_errors: stats.providerErrors,
     tool_calls: stats.toolCalls, exit_code: exitCode, timed_out: timedOut, nudges,
     solved: verdict.solved, fail_reason: verdict.solved ? null : verdict.reason,
@@ -322,6 +324,7 @@ await Promise.all(
 // ---------- summary ----------
 const solved = records.filter((r) => r.solved);
 const cost = records.reduce((s, r) => s + (r.cost_usd ?? 0), 0);
+const costStdTotal = records.reduce((s, r) => s + (r.cost_std ?? 0), 0);
 const reasons = {};
 for (const r of records) if (!r.solved) reasons[r.fail_reason] = (reasons[r.fail_reason] ?? 0) + 1;
 // Attempts the provider never let start are not evidence about the arm. Rate them out of
@@ -334,7 +337,7 @@ const valid = records.length - aborted.length;
 // so cost is not comparable across runs — tag it and compare by tokens instead.
 const peakPricing = IS_DEEPSEEK && peakOverlap(RUN_STARTED, Date.now());
 
-console.log(bold(`\n${COMBO.join("+") || "baseline"}: ${solved.length}/${valid} solved  (${money(cost)} total)`));
+console.log(bold(`\n${COMBO.join("+") || "baseline"}: ${solved.length}/${valid} solved  (${money(costStdTotal)} @std, ${money(cost)} billed)`));
 if (peakPricing)
   console.log(`  ${yellow("⚠ run overlapped DeepSeek peak-hour pricing (2x) — compare this run by tokens, not cost.")}`);
 if (aborted.length)
@@ -346,7 +349,7 @@ console.log(dim(`  full records: results/${RUN_ID}/results.jsonl\n`));
 const summary = {
   run_id: RUN_ID, combo: COMBO, model: MODEL, thinking: THINKING, git_sha: gitSha,
   problems: records.length, valid_attempts: valid, provider_aborted: aborted.length,
-  solved: solved.length, cost_usd: +cost.toFixed(4), peak_pricing: peakPricing,
+  solved: solved.length, cost_usd: +cost.toFixed(4), cost_std: +costStdTotal.toFixed(4), peak_pricing: peakPricing,
   fail_reasons: reasons, finished_at: new Date().toISOString(),
 };
 writeFileSync(join(runDir, "summary.json"), JSON.stringify(summary, null, 2));

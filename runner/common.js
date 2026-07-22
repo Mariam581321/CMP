@@ -6,6 +6,14 @@ import { request } from "node:http";
 export const LEAN_PORT = process.env.CMP_LEAN_PORT ?? "8787";
 export const LEAN_URL = `http://127.0.0.1:${LEAN_PORT}`;
 
+// deepseek-v4-flash standard (off-peak) rates in $/1M tokens — the only place prices
+// live; update ONLY when DeepSeek reprices or the default model changes.
+// cost_std = tokens re-priced at this fixed table. Unlike billed cost_usd it is
+// invariant to peak-hour 2x pricing, so it is the headline metric for arm comparisons.
+export const STD_PRICES = { in: 0.14, cacheRead: 0.0028, out: 0.28 };
+export const costStd = (t) =>
+  ((t?.in ?? 0) * STD_PRICES.in + (t?.cache_read ?? 0) * STD_PRICES.cacheRead + (t?.out ?? 0) * STD_PRICES.out) / 1e6;
+
 // POST JSON to the lean server via node:http. Deliberately NOT fetch(): undici's
 // built-in 300s headers-timeout kills any request that queues >5 min at the server,
 // which happens routinely when many agents share one serialized REPL.

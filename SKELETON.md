@@ -74,7 +74,7 @@ attempt:
 ```json
 {"run_id": "...", "problem": "putnam_1962_a1", "combo": ["lean-search"],
  "model": "deepseek-v4-flash", "started_at": "...", "wall_s": 412, "turns": 14,
- "tokens": {"in": 84000, "out": 9100}, "cost_usd": 0.021,
+ "tokens": {"in": 84000, "out": 9100, "cache_read": 2400000}, "cost_usd": 0.021, "cost_std": 0.021,
  "tool_calls": {"lean_check": 6, "search_mathlib": 3},
  "solved": false, "fail_reason": "timeout|uses_sorry|compile_error|statement_changed|provider_error",
  "harness_git_sha": "..."}
@@ -117,7 +117,7 @@ DeepSeek peak-valley pricing (since mid-July 2026): 2x on all billing items duri
 launching after 12:00 noon local is always off-peak). run.js refuses to start a
 deepseek run inside a peak window without `--peak-ok`. Runs that overlap a window get
 `peak_pricing: true` in summary.json, and compare.js flags them: their cost_usd is not
-comparable with off-peak runs — compare by token counts instead.
+comparable with off-peak runs — compare on `cost_std` (the `@std` column) instead.
 
 **Prompt caching is what makes agent runs affordable.** Every turn resends the whole
 transcript, so over a T-turn attempt cumulative input grows ~quadratically in T (Σ_t
@@ -128,8 +128,15 @@ the quadratic resent-prefix term carries the tiny cache-hit coefficient and only
 linear new-token term pays full price. Measured over all deepseek runs to date: ~98% of
 input tokens were cache hits; uncached, the same traffic would have cost ~13x more
 all-in. A model/provider without prompt caching is a non-starter for this harness.
-(Caveat: `tokens.in` in results.jsonl counts cache-miss input only — cacheRead volume
-lives in the per-event `usage` in events.jsonl.)
+(`tokens.in` counts cache-miss input only; cache-hit volume is `tokens.cache_read`.)
+
+**`cost_std` — the headline comparison metric.** Per attempt and per run:
+`0.14·in + 0.0028·cache_read + 0.28·out` per 1M tokens, i.e. the run re-priced at the
+fixed off-peak v4-flash table (`STD_PRICES` in `runner/common.js` — the only thing to
+update when DeepSeek reprices or the default model changes). Miss-only input ignores
+the cache-read quarter of real spend; total-input treats a cached token as 50x its
+economic weight; the weighted sum is peak-invariant, so runs are comparable whenever
+they ran. `cost_usd` stays what was actually billed.
 
 ## Adding an extension arm
 
