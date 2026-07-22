@@ -24,6 +24,8 @@ export function benchmarkDecls(originalSource) {
 
 // Every code line of the original (except bare `sorry`) must survive verbatim in the
 // solution; for `... := sorry` lines the `... :=` prefix must survive as a line prefix.
+// Lines ending in bare `:=` (proof on the next line) get the same prefix rule: the
+// statement ends at `:=`, so continuing the line (e.g. `:= by`) only adds proof content.
 // Docstrings/comments/blanks are not required — deleting them is harmless.
 export function checkStatementPreserved(original, solution) {
   const solLines = solution.split("\n");
@@ -36,6 +38,11 @@ export function checkStatementPreserved(original, solution) {
       const prefix = line.replace(/:=\s*sorry.*$/, ":=").trimEnd();
       if (!solLines.some((sl) => sl.trimEnd().startsWith(prefix.trim()) || sl.trimEnd() === prefix))
         return { ok: false, detail: `modified: ${stripped}` };
+      continue;
+    }
+    if (stripped.endsWith(":=")) {
+      if (!solLines.some((sl) => sl.trimEnd().startsWith(line.trimEnd())))
+        return { ok: false, detail: `missing/modified line: ${stripped}` };
       continue;
     }
     if (!solSet.has(line.trimEnd()))
