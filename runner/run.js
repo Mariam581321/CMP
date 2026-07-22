@@ -8,6 +8,7 @@
 //        --concurrency <n> (6) --model <id> --thinking <level> --run-id <s>
 //        --problems-dir <dir> (problems/; e.g. problems-nl/ for statements with
 //        the informal NL docstring kept)
+//        --peak-ok (allow launching during DeepSeek peak-hour pricing)
 
 import { spawn, execSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync, appendFileSync, copyFileSync, createWriteStream, existsSync, readdirSync, statSync, openSync } from "node:fs";
@@ -28,6 +29,29 @@ const MODEL = arg("model", "deepseek/deepseek-v4-flash");
 const THINKING = arg("thinking", "off");
 const MAX_TOKENS = parseInt(arg("max-tokens", "0")); // 0 = provider default (DeepSeek: 8192/response)
 const RUN_ID = arg("run-id", `${COMBO.join("+") || "baseline"}-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "")}`);
+
+// DeepSeek bills all items at 2x during peak hours: 01:00–04:00 and 06:00–10:00 UTC
+// (peak-valley pricing, since mid-July 2026). Cost figures from peak runs are not
+// comparable with off-peak ones, so refuse to launch inside a window unless --peak-ok
+// is passed, and tag peak runs so comparisons fall back to tokens instead of cost_usd.
+const PEAK_OK = process.argv.includes("--peak-ok");
+const IS_DEEPSEEK = MODEL.includes("deepseek");
+const inPeak = (date) => {
+  const h = date.getUTCHours();
+  return (h >= 1 && h < 4) || (h >= 6 && h < 10);
+};
+// windows are 3-4h wide, so 15-min sampling can't step over one
+const peakOverlap = (fromMs, toMs) => {
+  for (let t = fromMs; t < toMs; t += 15 * 60 * 1000) if (inPeak(new Date(t))) return true;
+  return inPeak(new Date(toMs));
+};
+if (IS_DEEPSEEK && inPeak(new Date()) && !PEAK_OK) {
+  const endsAt = new Date().getUTCHours() < 4 ? "04:00" : "10:00";
+  console.error(`DeepSeek peak-hour pricing is in effect (2x on all billing items; peak = 01:00-04:00 and 06:00-10:00 UTC).`);
+  console.error(`This window ends at ${endsAt} UTC. Re-run then, or pass --peak-ok to launch anyway — the run is then`);
+  console.error(`tagged peak_pricing:true in run.json/summary.json and must be compared by tokens, not cost.`);
+  process.exit(1);
+}
 
 // ---------- setup ----------
 const dotenv = join(ROOT, ".env");
@@ -60,6 +84,21 @@ for (const ext of COMBO)
     process.exit(1);
   }
 
+// A model id pi's catalog doesn't know does NOT fail: pi clones the provider's default
+// model and swaps only the id, so an unknown/mistyped id runs fine but is priced with
+// the default model's cost table — silently wrong cost_usd in every result.
+// Since cost is a measured output here, refuse to start unless the id is in the catalog.
+{
+  const listed = execSync("pi --list-models", { env: process.env, encoding: "utf8" });
+  const id = MODEL.includes("/") ? MODEL.split("/").pop() : MODEL;
+  if (!new RegExp(`^\\S+\\s+${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s`, "m").test(listed)) {
+    console.error(`model "${MODEL}" is not in pi's catalog — it would run but be priced as`);
+    console.error(`the provider's default model. Check credentials in .env, or add a model`);
+    console.error(`entry with the right cost block. \`pi --list-models\` shows what resolves.`);
+    process.exit(1);
+  }
+}
+
 // pi's --tools is an allowlist that also filters extension tools, so custom tool names
 // must be listed explicitly. Map: extension file -> tool names it registers.
 const EXT_TOOLS = { "lean-check": ["lean_check"], "lean-search": ["search_mathlib"], "lean-plan": ["plan_check"] };
@@ -74,7 +113,8 @@ if (existsSync(join(runDir, "results.jsonl"))) {
 mkdirSync(runDir, { recursive: true });
 let gitSha = "unknown";
 try { gitSha = execSync("git rev-parse --short HEAD", { cwd: ROOT }).toString().trim(); } catch {}
-writeFileSync(join(runDir, "run.json"), JSON.stringify({ run_id: RUN_ID, combo: COMBO, model: MODEL, thinking: THINKING, max_tokens: MAX_TOKENS || null, timeout_s: TIMEOUT_S, concurrency: CONCURRENCY, problems, problems_dir: PROBLEMS_DIR, git_sha: gitSha, started_at: new Date().toISOString() }, null, 2));
+const RUN_STARTED = Date.now();
+writeFileSync(join(runDir, "run.json"), JSON.stringify({ run_id: RUN_ID, combo: COMBO, model: MODEL, thinking: THINKING, max_tokens: MAX_TOKENS || null, timeout_s: TIMEOUT_S, concurrency: CONCURRENCY, problems, problems_dir: PROBLEMS_DIR, git_sha: gitSha, peak_pricing_at_launch: IS_DEEPSEEK && inPeak(new Date(RUN_STARTED)), started_at: new Date(RUN_STARTED).toISOString() }, null, 2));
 
 const SYSTEM_PROMPT = `You are proving a theorem from a mathematics competition, formalized in Lean 4 with Mathlib.
 
@@ -139,7 +179,7 @@ async function attempt(name, idx) {
   const stderrLog = createWriteStream(join(probDir, "stderr.log"));
   const started = Date.now();
   const deadline = started + TIMEOUT_S * 1000;
-  const stats = { turns: 0, toolCalls: {}, tokens: { in: 0, out: 0 }, cost: 0 };
+  const stats = { turns: 0, toolCalls: {}, tokens: { in: 0, out: 0 }, cost: 0, providerErrors: 0, lastError: null };
   let timedOut = false;
   let lastStopReason = null;
 
@@ -175,6 +215,14 @@ async function attempt(name, idx) {
               stats.toolCalls[e.toolName] = (stats.toolCalls[e.toolName] ?? 0) + 1;
             if (e.type === "message_end" && e.message?.role === "assistant") {
               if (e.message.stopReason) lastStopReason = e.message.stopReason;
+              // A provider error (throttle, 4xx) is NOT a failed proof: pi emits
+              // stopReason "error" with zero usage and still exits 0, so without this
+              // the attempt would be graded on an untouched file and recorded as
+              // uses_sorry — infrastructure noise landing in the solve rate.
+              if (e.message.stopReason === "error") {
+                stats.providerErrors++;
+                stats.lastError = (e.message.errorMessage ?? "").slice(0, 300);
+              }
               const u = e.message.usage;
               if (u) {
                 stats.tokens.in += u.input ?? 0;
@@ -219,11 +267,19 @@ async function attempt(name, idx) {
   const wallMs = Date.now() - started;
   const verdict = await grade(name, join(work, "problem.lean"), join(PROBLEMS_DIR, `${name}.lean`));
   if (timedOut && !verdict.solved) verdict.reason = "timeout";
+  // Errors only override the verdict when the agent never got to work (no tool calls):
+  // a transient throttle mid-attempt that the agent recovered from is a real attempt,
+  // and a proof that verified is solved regardless of what happened on the way.
+  if (!verdict.solved && stats.providerErrors > 0 && Object.keys(stats.toolCalls).length === 0) {
+    verdict.reason = "provider_error";
+    verdict.detail = stats.lastError ?? "provider returned an error before any tool call";
+  }
 
   const record = {
     run_id: RUN_ID, problem: name, combo: COMBO, model: MODEL, thinking: THINKING,
     started_at: new Date(started).toISOString(), wall_s: Math.round(wallMs / 1000),
     turns: stats.turns, tokens: stats.tokens, cost_usd: +stats.cost.toFixed(5),
+    provider_errors: stats.providerErrors,
     tool_calls: stats.toolCalls, exit_code: exitCode, timed_out: timedOut, nudges,
     solved: verdict.solved, fail_reason: verdict.solved ? null : verdict.reason,
     fail_detail: verdict.solved ? null : (verdict.detail ?? "").slice(0, 500),
@@ -265,15 +321,29 @@ const solved = records.filter((r) => r.solved);
 const cost = records.reduce((s, r) => s + (r.cost_usd ?? 0), 0);
 const reasons = {};
 for (const r of records) if (!r.solved) reasons[r.fail_reason] = (reasons[r.fail_reason] ?? 0) + 1;
+// Attempts the provider never let start are not evidence about the arm. Rate them out of
+// the valid denominator, or a throttle burst during one arm reads as a real solve-rate
+// difference between arms — the exact quantity the factorial design is measuring.
+const aborted = records.filter((r) => r.fail_reason === "provider_error");
+const valid = records.length - aborted.length;
 
-console.log(bold(`\n${COMBO.join("+") || "baseline"}: ${solved.length}/${records.length} solved  (${money(cost)} total)`));
+// A run that touched a peak window has 2x prices baked into (part of) its cost_usd,
+// so cost is not comparable across runs — tag it and compare by tokens instead.
+const peakPricing = IS_DEEPSEEK && peakOverlap(RUN_STARTED, Date.now());
+
+console.log(bold(`\n${COMBO.join("+") || "baseline"}: ${solved.length}/${valid} solved  (${money(cost)} total)`));
+if (peakPricing)
+  console.log(`  ${yellow("⚠ run overlapped DeepSeek peak-hour pricing (2x) — compare this run by tokens, not cost.")}`);
+if (aborted.length)
+  console.log(`  ${red(`⚠ ${aborted.length} attempt(s) aborted by provider errors — excluded from the rate above.`)}`);
 if (solved.length) console.log(`  ${green("solved:")} ${solved.map((r) => r.problem).join(", ")}`);
 for (const [reason, n] of Object.entries(reasons)) console.log(`  ${dim(`${reason}: ${n}`)}`);
 console.log(dim(`  full records: results/${RUN_ID}/results.jsonl\n`));
 
 const summary = {
   run_id: RUN_ID, combo: COMBO, model: MODEL, thinking: THINKING, git_sha: gitSha,
-  problems: records.length, solved: solved.length, cost_usd: +cost.toFixed(4),
+  problems: records.length, valid_attempts: valid, provider_aborted: aborted.length,
+  solved: solved.length, cost_usd: +cost.toFixed(4), peak_pricing: peakPricing,
   fail_reasons: reasons, finished_at: new Date().toISOString(),
 };
 writeFileSync(join(runDir, "summary.json"), JSON.stringify(summary, null, 2));

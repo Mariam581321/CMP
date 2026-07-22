@@ -76,7 +76,7 @@ attempt:
  "model": "deepseek-v4-flash", "started_at": "...", "wall_s": 412, "turns": 14,
  "tokens": {"in": 84000, "out": 9100}, "cost_usd": 0.021,
  "tool_calls": {"lean_check": 6, "search_mathlib": 3},
- "solved": false, "fail_reason": "timeout|error|unsolved|statement_changed",
+ "solved": false, "fail_reason": "timeout|uses_sorry|compile_error|statement_changed|provider_error",
  "harness_git_sha": "..."}
 ```
 Everything raw is kept, so any stat (tool-use patterns, time-to-first-check, error types)
@@ -108,7 +108,15 @@ results/                    per-run dirs + results.jsonl (gitignored)
 --model <id>         deepseek/deepseek-v4-flash | --thinking <level> (off)
 --max-tokens <n>     (0 = provider default; >0 caps max_tokens/response via max-tokens.ts)
 --run-id <s>         default combo+timestamp
+--peak-ok            allow launching during DeepSeek peak hours (see below)
 ```
+
+DeepSeek peak-valley pricing (since mid-July 2026): 2x on all billing items during
+01:00–04:00 and 06:00–10:00 UTC (03:00–06:00 and 08:00–12:00 Poland summer time —
+launching after 12:00 noon local is always off-peak). run.js refuses to start a
+deepseek run inside a peak window without `--peak-ok`. Runs that overlap a window get
+`peak_pricing: true` in summary.json, and compare.js flags them: their cost_usd is not
+comparable with off-peak runs — compare by token counts instead.
 
 ## Adding an extension arm
 

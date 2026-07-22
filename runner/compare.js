@@ -24,11 +24,15 @@ const runs = dirs.map((dir) => {
     const r = JSON.parse(line);
     byProblem[r.problem] = r; // last record wins if rerun
   }
-  return { name: basename(dir), byProblem };
+  // Runs tagged peak_pricing paid DeepSeek's 2x peak rate for (part of) their cost —
+  // their cost_usd is not comparable with off-peak runs; tokens are.
+  let peak = false;
+  try { peak = JSON.parse(readFileSync(join(dir, "summary.json"), "utf8")).peak_pricing === true; } catch {}
+  return { name: basename(dir), byProblem, peak };
 });
 
 const problems = [...new Set(runs.flatMap((r) => Object.keys(r.byProblem)))].sort();
-const shortReason = { statement_changed: "stmt", compile_error: "compile", uses_sorry: "sorry", bad_axioms: "axioms", timeout: "time", no_file: "nofile", runner_error: "runner", grader_error: "grader" };
+const shortReason = { statement_changed: "stmt", compile_error: "compile", uses_sorry: "sorry", bad_axioms: "axioms", timeout: "time", no_file: "nofile", runner_error: "runner", grader_error: "grader", provider_error: "provider" };
 
 const colW = Math.max(...runs.map((r) => r.name.length), 16) + 2;
 const cell = (rec) => {
@@ -46,18 +50,32 @@ for (const p of problems) {
 
 console.log("");
 for (const r of runs) {
-  const recs = problems.map((p) => r.byProblem[p]).filter(Boolean);
+  const all = problems.map((p) => r.byProblem[p]).filter(Boolean);
+  // Attempts the provider aborted say nothing about the arm — rating them as failures
+  // would let a throttle burst during one run masquerade as an arm difference.
+  const aborted = all.filter((x) => x.fail_reason === "provider_error");
+  const recs = all.filter((x) => x.fail_reason !== "provider_error");
   const solved = recs.filter((x) => x.solved);
-  const cost = recs.reduce((s, x) => s + (x.cost_usd ?? 0), 0);
+  const cost = all.reduce((s, x) => s + (x.cost_usd ?? 0), 0);
   const wall = recs.reduce((s, x) => s + (x.wall_s ?? 0), 0);
   const checks = recs.reduce((s, x) => s + (x.tool_calls?.lean_check ?? 0), 0);
   const searches = recs.reduce((s, x) => s + (x.tool_calls?.search_mathlib ?? 0), 0);
+  const tokIn = recs.reduce((s, x) => s + (x.tokens?.in ?? 0), 0);
+  const tokOut = recs.reduce((s, x) => s + (x.tokens?.out ?? 0), 0);
+  const tok = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : `${Math.round(n / 1e3)}k`);
   console.log(
     bold(`${r.name}: `) +
-      `${solved.length}/${recs.length} solved   $${cost.toFixed(3)} total   ` +
-      dim(`${Math.round(wall / Math.max(recs.length, 1))}s avg, ${checks} lean_checks${searches ? `, ${searches} searches` : ""}`),
+      `${solved.length}/${recs.length} solved   $${cost.toFixed(3)} total` +
+      (r.peak ? yellow(" (peak 2x)") : "") +
+      `   ` +
+      dim(`${tok(tokIn)}/${tok(tokOut)} tok in/out, ${Math.round(wall / Math.max(recs.length, 1))}s avg, ${checks} lean_checks${searches ? `, ${searches} searches` : ""}`) +
+      (aborted.length ? red(`   ⚠ ${aborted.length} provider-aborted, excluded`) : ""),
   );
 }
+
+const peaky = runs.filter((r) => r.peak);
+if (peaky.length)
+  console.log(yellow(`\n⚠ ${peaky.map((r) => r.name).join(", ")}: ran under DeepSeek peak-hour pricing (2x) — cost is not comparable across these runs; use tokens.`));
 
 if (runs.length === 2) {
   const [a, b] = runs;
