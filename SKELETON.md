@@ -93,7 +93,7 @@ runner/plan.js              plan_check core logic
 extensions/lean-check.ts    always-on agent-facing compile tool
 extensions/lean-search.ts   semantic search (LeanSearch API)
 extensions/lean-plan.ts     plan_check (+ lean-plan.prompt.md)
-extensions/max-tokens.ts    caps max_tokens/response (auto-added when --max-tokens > 0)
+extensions/max-tokens.ts    injects the per-response max_tokens (always on; default = model max)
 lean-env/                   shared Lean project (gitignored)
 problems/                   sanitized statements + dev.txt
 results/                    per-run dirs + results.jsonl (gitignored)
@@ -104,9 +104,10 @@ results/                    per-run dirs + results.jsonl (gitignored)
 ```
 --combo a,b          extension names = filenames in extensions/ ("" = baseline)
 --problems <file>    problem list | --problems-dir <dir> (problems/; problems-nl/ for the NL arm)
---timeout <s>        (600) | --concurrency <n> (6)
+--timeout <s>        (3600) | --concurrency <n> (6)
 --model <id>         deepseek/deepseek-v4-flash | --thinking <level> (off)
---max-tokens <n>     (0 = provider default; >0 caps max_tokens/response via max-tokens.ts)
+--max-tokens <n>     per-response output cap, always sent (default 384000 = model max;
+                     set low, e.g. 8192, only for capped experiment cells)
 --run-id <s>         default combo+timestamp
 --peak-ok            allow launching during DeepSeek peak hours (see below)
 ```
@@ -117,6 +118,18 @@ launching after 12:00 noon local is always off-peak). run.js refuses to start a
 deepseek run inside a peak window without `--peak-ok`. Runs that overlap a window get
 `peak_pricing: true` in summary.json, and compare.js flags them: their cost_usd is not
 comparable with off-peak runs — compare by token counts instead.
+
+**Prompt caching is what makes agent runs affordable.** Every turn resends the whole
+transcript, so over a T-turn attempt cumulative input grows ~quadratically in T (Σ_t
+context_t) while genuinely new tokens are only linear. DeepSeek caches the conversation
+prefix automatically; v4-flash bills input at $0.14/M on cache miss but $0.0028/M on
+cache hit (50x cheaper; output $0.28/M — api-docs.deepseek.com/quick_start/pricing). So
+the quadratic resent-prefix term carries the tiny cache-hit coefficient and only the
+linear new-token term pays full price. Measured over all deepseek runs to date: ~98% of
+input tokens were cache hits; uncached, the same traffic would have cost ~13x more
+all-in. A model/provider without prompt caching is a non-starter for this harness.
+(Caveat: `tokens.in` in results.jsonl counts cache-miss input only — cacheRead volume
+lives in the per-event `usage` in events.jsonl.)
 
 ## Adding an extension arm
 
@@ -176,12 +189,31 @@ flag/reroute, consider revising before filling bodies. Soft gate, same philosoph
 *building* one — plans drift toward what the library supports, which should also be
 easier to formalize. Vetting-call tokens roll into the parent attempt's record.
 
-**`facts`** (`extensions/lean-facts.ts`): registers `submit_fact(lemma_code)` — checks
-the lemma in isolation via the lean server; if green, appends to `facts.lean` in the
-scratch dir; returns the verdict either way. Plus `list_facts()`. Prompt addendum
-explains that the final `problem.lean` must be self-contained (copy needed facts above
-the theorem) — grading is unchanged. Broadened design (PLAN.md experiment 2): the same
-artifact also holds free-form draft/insights, so derivations leave the message stream.
+**`facts`** (`extensions/lean-facts.ts`): registers `add_fact(lemma_code)` — compiles
+[current bank + new lemma] on the lean server and applies the full trust gate: no errors,
+no `declaration uses sorry`, axioms within the allowed set (reuses the grade.js checks).
+Green → append to `facts.lean`, never rewrite. Red → return the compiler output and write
+nothing; since every lemma already in the bank compiled when it was admitted, any error
+in [bank + new] is attributable to the submitted lemma (offset line numbers so they point
+into the submitted snippet). Compiling against the bank prefix lets facts build on
+earlier facts. Monotonicity is mechanical, not requested: a `tool_call` handler blocks
+`write`/`edit` calls resolving to `facts.lean` (pi's documented path-protection pattern),
+so the bank is readable with the ordinary `read` tool but writable only through the
+compiler. Prompt addendum: the final `problem.lean` must stay self-contained — copy
+needed facts (proofs included, along with any bank lemmas they depend on) above the
+theorem; grading is unchanged.
+
+**`notes`** — prompt-only arm, no tool code: the addendum names a free-form draft file
+(`notes.md`) for informal scratch — ideas, failed approaches, case analyses. Never
+compiled, never gated, rewritable at will; the absence of enforcement is the treatment.
+Anything worth trusting graduates into the bank or into `problem.lean`. Needs a no-op
+`extensions/notes.ts` so the combo resolves (the runner requires a `.ts` per combo name);
+the `.prompt.md` carries the whole arm.
+
+**`derive`** — prompt-only arm, same no-op-`.ts` pattern: the tactic-first steering line
+(derive via `have` steps in `problem.lean`; routine algebra is one tactic away) moves
+here from the baseline system prompt, so baseline stops carrying the experiment's
+minimal treatment.
 
 ## Search backend (`lean-search`)
 

@@ -1,7 +1,9 @@
 // Config knob, not an arm. pi's agent loop never sends max_tokens, so the provider's
 // server-side default output cap applies (DeepSeek: 8192/response). This extension
 // injects max_tokens into the raw provider payload via the before_provider_request
-// hook. Enabled by the runner's --max-tokens <n> flag (CMP_MAX_TOKENS env).
+// hook, from the runner's --max-tokens flag (CMP_MAX_TOKENS env). The runner now always
+// passes a cap — model max by default, so the 8k server default never silently applies;
+// a tight cap (e.g. 8192) exists only as a manipulated factor in capped experiment cells.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 

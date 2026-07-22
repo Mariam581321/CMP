@@ -35,8 +35,10 @@ node runner/run.js --problems problems/dev.txt                      # baseline
 node runner/run.js --combo lean-search --problems problems/dev.txt  # + semantic search
 ```
 
-Flags: `--combo a,b` `--problems <file>` `--timeout <s>` (600) `--concurrency <n>` (6)
+Flags: `--combo a,b` `--problems <file>` `--timeout <s>` (3600) `--concurrency <n>` (6)
 `--model <id>` (deepseek/deepseek-v4-flash) `--thinking <level>` (off) `--run-id <s>`.
+Output is uncapped by default (model-max `max_tokens` sent explicitly); `--max-tokens`
+sets a tight cap only for capped experiment cells.
 
 The agent gets `read,edit,write` + `lean_check`, plus whatever the combo adds, in an
 isolated scratch dir (the agent must never see the benchmark repo — answers leak in

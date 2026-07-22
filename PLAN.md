@@ -77,13 +77,20 @@ Experiments I would like to run:
    - re-plan phase based on information retrieval before proving;
    - subagents proving specific components of the plan — enforced by the harness vs a
      `spawn_agent` tool + refine plan based on subagent feedback.
-2. add to the baseline a fact-graph of compiling theorems written during the run. compare:
-   - subagent feedback as a summary fed back to the main agent;
-   - subagent feedback as an edit to the existing fact-graph shared between everyone.
-
-Besides subagents, the model sometimes fills the message token limit with algebra, which
-can be a trap (some problems are very inviting to just start bashing). Would a memory
-component (a "draft/insights" file) help here?
+2. external memory: where is the model's intermediate work allowed to live? By default it
+   lives in the transcript — the worst possible place: unverified, lost at truncation and
+   compaction, and some problems are very inviting to just start algebra-bashing in chat.
+   Offer locations with better guarantees and vary how hard the harness pushes the model
+   into them:
+   - an instruction to derive inside `problem.lean` (`have` steps closed by tactics);
+   - a free-form draft file — durable, unverified;
+   - an append-only bank of compiler-verified lemmas — durable, trusted, monotone;
+   - crossed with a tight per-response output cap that makes chat a lossy place to work.
+   In basis terms the rungs decompose the idea: the artifacts are question-1 changes
+   (what survives into future calls' context), the bank's gate adds question-3 force (a
+   compiler verdict gates writes to state — the "verified-facts collection" source), and
+   the cap is a question-2 budget knob repurposed as enforcement. Extends to multiagent
+   later: the bank is the natural shared channel between workers.
 
 ### Experiments → vectors
 
@@ -103,10 +110,13 @@ in parentheses where a variant is already implemented/planned (tool designs in
 | 1a re-plan before proving (replan) | vet call is blank-context: skeleton + retrieved candidates only | fixed vet phase after each green plan | + forced per-helper retrieval; verdicts inform, don't gate |
 | 1b-h workers, harness-owned | worker sees one helper + parent statements, nothing else | harness spawns a worker per open helper, per-worker budget; failures feed a replan step | worker verdict/diagnosis gates replanning |
 | 1b-t workers, model-owned | same worker contexts | model gets `spawn_agent`, decides when (maybe never) | worker summaries inform the main agent |
-| **2 — fact-graph** | | | |
-| 2 solo bank / draft file (facts) | persistent bank beside the transcript: verified lemmas + free-form draft/insights; derivations go there instead of chat | = base | compiler gates writes of formal facts |
+| **2 — external memory** | | | |
+| 2 in-file (derive) | steering instruction only: derivations become `have` steps in problem.lean, not chat prose | = base | compiler verifies them via lean_check; nothing enforces the style |
+| 2 draft file (notes) | + notes.md beside the transcript: free-form scratch that survives turns and compaction; ordinary read/write | = base | nothing — writes ungated by design |
+| 2 fact bank (facts) | + facts.lean: append-only bank of verified lemmas; readable as a file, writable only through the gate | = base | compiler gates every write (add_fact: compiles + sorry-free + axiom-clean); direct write/edit hard-blocked |
+| 2 × cap ({base, facts} × {uncapped, 8k}) | = cell | + 8k/response output cap: the per-call budget squeezed so long chat derivations get cut off | = cell |
 | 2a workers → summaries | worker results come back as summaries in the main thread | main agent + workers | compiler-checked facts travel via the main agent |
-| 2b workers → shared graph | the graph is the shared state; everyone reads it, nobody reads transcripts | main agent + workers | compiler gates writes; the graph is the channel |
+| 2b workers → shared bank | the bank is the shared state; everyone reads it, nobody reads transcripts | main agent + workers | compiler gates writes; the bank is the channel |
 
 What each comparison isolates:
 
@@ -126,9 +136,19 @@ What each comparison isolates:
   scaffold/blank-context independence itself carries weight).
 - **1a vs 1b** — revise the plan on *retrieval* evidence before proving vs on *worker
   failure* evidence during proving. Both feed the plan; the trigger differs.
-- **2 solo** — one artifact, two jobs: compiler-gated facts and a free-form draft. Moves
-  derivation out of the message stream into something that survives compaction — targets
-  the algebra-bashing trap. Pure question-1 change, cheap, testable without workers.
+- **base vs derive** — the pure-instruction door: does merely asking for checkable
+  derivations move anything, and does adherence survive difficulty? mini3 predicts
+  collapse — soft protocols were abandoned exactly on the hard problems.
+- **notes vs facts** — durability held constant, verification varied: is external memory
+  useful because it *persists* (question 1) or because it's *trusted* (question 3)?
+  notes is all persistence and no trust; facts is both, at the price of machinery.
+- **{base, facts} × {uncapped, 8k}** — the enforcement interaction, and the only
+  question-2 manipulation in this experiment. The cap alone punishes chat-bashing with
+  no escape route (the dev-era truncation failures); the bank alone can be ignored.
+  Claim under test: mechanical pressure pays only when there is a sanctioned place to
+  push the work into — a positive interaction term. The cap is leaky (many short turns
+  can still bash), so expect attenuation, not on/off. Capped cells carry a truthful
+  one-line cap notice in the prompt; uncapped cells carry nothing.
 - **2a vs 2b** — where verified knowledge lives: threaded through the coordinator's
   transcript vs kept in shared external state (Danus §4.4 claims only the second makes
   parallel work additive).
@@ -146,6 +166,10 @@ What each comparison isolates:
 - **Answer hygiene:** PutnamBench files leak answers (`_solution` comments,
   `informal/putnam.json`). The agent is served a *sanitized* file in an isolated
   workspace with no path to the benchmark repo.
+- **Output cap:** DeepSeek's server-side 8k/response default is always overridden — every
+  run sends an explicit model-max cap. A tight cap exists only as a manipulated factor
+  (experiment 2's enforcement crossing), never as ambient config, and every cell's prompt
+  states its true cap situation.
 
 **Open task — what is the fair comparison between arms?** We keep no-budget-parity
 (report solve rate *and* cost), but the honest post-hoc readout is undecided. Candidates:
@@ -203,7 +227,18 @@ See `DRAFT-experiment-notes-0717.md` for the full dev10/mid10 failure autopsy.
 - [x] `plan` — `plan_check` = compiles + statement preserved + sorries only in helper
       lemmas; restatement similarity logged, plans snapshotted (SKELETON.md).
 - [ ] Confirm the extension set.
-- [ ] Implement `facts`.
+- [x] Uncap output by default (model-max max_tokens sent explicitly on every run,
+      baseline included; per-problem timeout now 1 h) and neutralize the baseline
+      prompt — the tactic-first steering line is removed and reappears as `derive`'s
+      addendum when that arm lands. Breaks comparability with the dev runs logged above.
+- [ ] Implement `derive` and `notes` (prompt-only arms).
+- [ ] Implement `facts` (gated `add_fact` + write-block — SKELETON § tool designs).
+- [ ] Cost management — analyse from data once runs exist in the new regime (uncapped
+      output × 1 h timeouts makes runaway attempts pricier): from time-to-solve and
+      token distributions, decide whether attempts need a token/turn cap besides
+      wall-clock, and where the timeout should really sit. Whatever cap we pick must be
+      identical across arms — a short one systematically biases against structured arms
+      (dev10: plan converted compile errors into timeouts).
 - [ ] Implement `replan`.
 - [ ] Scaffold-vs-discretion combos: `plan`+`lean-search` vs `plan`+`replan` (vs both) —
       see the experiment-1 readouts above.

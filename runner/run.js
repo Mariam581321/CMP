@@ -4,7 +4,7 @@
 //
 //   node runner/run.js --combo lean-search --problems problems/dev.txt
 //
-// Flags: --combo a,b ("" = baseline) --problems <file> --timeout <s> (600)
+// Flags: --combo a,b ("" = baseline) --problems <file> --timeout <s> (3600)
 //        --concurrency <n> (6) --model <id> --thinking <level> --run-id <s>
 //        --problems-dir <dir> (problems/; e.g. problems-nl/ for statements with
 //        the informal NL docstring kept)
@@ -23,11 +23,15 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const COMBO = (arg("combo", "") || "").split(",").map((s) => s.trim()).filter(Boolean);
 const PROBLEMS_FILE = arg("problems", join(ROOT, "problems/dev.txt"));
 const PROBLEMS_DIR = resolve(arg("problems-dir", join(ROOT, "problems")));
-const TIMEOUT_S = parseInt(arg("timeout", "7200"));
+const TIMEOUT_S = parseInt(arg("timeout", "3600"));
 const CONCURRENCY = parseInt(arg("concurrency", "6"));
 const MODEL = arg("model", "deepseek/deepseek-v4-flash");
 const THINKING = arg("thinking", "off");
-const MAX_TOKENS = parseInt(arg("max-tokens", "0")); // 0 = provider default (DeepSeek: 8192/response)
+// Always send an explicit output cap — DeepSeek's server default is 8192/response when
+// none is sent, and PLAN's protocol says a tight cap may only ever be a manipulated
+// factor. Default = deepseek-v4-flash's max output. Capped experiment cells pass e.g.
+// --max-tokens 8192; 0 falls back to the provider default (don't use in real runs).
+const MAX_TOKENS = parseInt(arg("max-tokens", "384000"));
 const RUN_ID = arg("run-id", `${COMBO.join("+") || "baseline"}-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "")}`);
 
 // DeepSeek bills all items at 2x during peak hours: 01:00–04:00 and 06:00–10:00 UTC
@@ -126,7 +130,6 @@ Rules:
 - No new \`axiom\` declarations. No \`native_decide\`.
 - Use the lean_check tool to compile and verify your work. You are NOT done until lean_check reports no errors and no 'declaration uses sorry' warnings.
 - Work efficiently: think before checking, since each check takes about a minute.
-- Your chat output is hard-capped at ~8k tokens per message and anything cut off is LOST. Never do long derivations in chat. Put the work into problem.lean incrementally instead: routine algebra is one tactic away (ring, field_simp, linarith, nlinarith, norm_num, omega, positivity), so state intermediate facts as \`have\` steps and let tactics close them; use comments only for genuinely informal scratch work.
 - NEVER end your response without a tool call unless lean_check has passed. Analysis alone is not an answer — put your reasoning into the proof and verify it.`;
 
 // Per-arm prompt addenda: extensions/<name>.prompt.md is appended to the system prompt
