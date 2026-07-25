@@ -93,6 +93,53 @@ flag, not a falsification — in their task unsupported *means* failed, since th
 is premise retrieval itself). Their limitations section says behavior *inside* a
 capable agent harness is unexplored — exactly the cell our grid fills.
 
+## Optimizing the Cost-Quality Tradeoff of Agentic Theorem Provers in Lean
+
+- arXiv: https://arxiv.org/abs/2606.04883 · PDF: `routing-lean-agents-2606.04883.pdf`
+- Code: https://github.com/eth-sri/optimizing-lean-agents
+
+Routing paper: a fixed decomposition prover (glued from open components; their
+lemmas-as-axioms setup is basically our `plan_check` invariant) plus a "router" that
+watches failed attempts and decides keep-trying vs abandon-the-breakdown. Claim:
+~29% cheaper at the same solve rate vs fixed attempt budgets.
+
+Rhymes with `replan` (exp 1a): both are cheap judgments on top of an unchanged
+prover asking "is this decomposition worth continuing?" — but theirs is ex-post
+(needs failed attempts to have features) while `vet_skeleton` is ex-ante (retrieval
+evidence, before any attempt). Stopping policy vs admission control — complementary.
+Takeaway: replan has a cost-management reading, not just performance — unsupported
+helpers are the ones that eat timeout-length dead ends, so `plan`+`replan` could tie
+`plan` on solve rate and still win on cost_std. Worth writing down before full-grid
+numbers (feeds the fair-comparison readout task). Their verdict gates, ours only
+informs — mini3 says the soft version may not move behavior.
+
+Caveats: tiny eval, pre-filtered to problems their prover family already solves
+(infeasible problems — routing's best case — excluded by construction), and "runs"
+are replays of pre-generated attempts. Free idea anyway: their failure features
+(error diversity, attempt similarity) are computable post-hoc from `events.jsonl` —
+check whether "all failures look the same" predicts timeout in our runs.
+
+## AXLE: A Cloud Infrastructure for LEAN 4 Theorem Proving Utilities
+
+- arXiv: https://arxiv.org/abs/2606.26442 · PDF: `axle-2606.26442.pdf`
+- Service: https://axle.axiommath.ai (free, hosted; `pip install axiom-axle`)
+
+Infrastructure, not a prover: 14 Lean metaprogramming tools as a hosted service —
+strict verification (`verify_proof`), decompose/merge (`sorry2lemma`, `merge`), and
+deterministic repair (`repair_proofs`). Their `verify_proof` is independently
+convergent with our grader (same rule set, axiom whitelist, and trust model; their
+Appendix C = the threat model for our lean4checker punt), except their statement
+check is type-level where ours was string-level — inspired by this claim, our
+grader has since been changed to a type-level statement check. Added on reading:
+a keyword tripwire in grade.js (lexical scan for metaprogramming/kernel-adjacent
+keywords, logged to `suspicious_keywords`, never auto-fail) — with `#print axioms`
+this covers Appendix C's non-adversarial patterns. Not calling the service: our warm
+REPL matches their measured latency, external endpoint in the hot loop = the
+LeanSearch uptime argument, and the public tier is `import Mathlib`-only (breaks
+FATE-X). Candidate arm: local `repair_proofs`-style mechanical pass on red
+`lean_check`s — a deterministic question-3 source; measures how much baseline
+iteration needs no intelligence.
+
 # Benchmarks
 
 Candidate problem sets beyond PutnamBench (which is the first-experiments target only —
