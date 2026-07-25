@@ -149,6 +149,37 @@ export function serverCheck(code, timeoutMs = GRADE_TIMEOUT_MS) {
   return postCheck({ code, timeoutMs }, 30 * 60_000);
 }
 
+// --- agent-facing statement verification (lean-check.ts, plan.js) ------------
+// Callers append stmtProbe(benchmarkDecls(original)) to their own check request and
+// pass the response messages here — one REPL round trip, no separate compile. After
+// the corpus cache is built the original side is a disk hit. `unknown: true` means
+// the probe never ran (file too broken to parse to the end) — let the compile error
+// speak in that case rather than scolding the agent on no evidence.
+export async function verifyStatement(problemName, originalSource, messages) {
+  const decls = benchmarkDecls(originalSource);
+  const orig = await originalStmtTypes(problemName, originalSource, decls);
+  const got = parseStmtProbe(messages);
+  if (Object.keys(got).length === 0) return { ok: true, unknown: true };
+  for (const d of decls) {
+    const s = got[d];
+    if (!s || s.missing)
+      return { ok: false, detail: `${d} is missing — renamed, deleted, or its statement no longer elaborates` };
+    if (s.type !== orig[d].type)
+      return { ok: false, detail: `the statement of ${d} no longer elaborates to the original type` };
+    if (s.kind !== orig[d].kind)
+      return { ok: false, detail: `${d} changed declaration kind (${orig[d].kind} -> ${s.kind})` };
+    if (s.safety !== "safe")
+      return { ok: false, detail: `${d} is marked ${s.safety}; unsafe/partial declarations are not accepted` };
+  }
+  return { ok: true };
+}
+
+// Remove the probe's CMPSTMT info lines from server pretty-output before showing it
+// to the agent (grader internals are not part of the compiler feedback).
+export function stripProbeOutput(pretty) {
+  return (pretty ?? "").split("\n\n").filter((p) => !p.includes("CMPSTMT")).join("\n\n");
+}
+
 /**
  * @returns {Promise<{solved: boolean, reason?: string, detail?: string, axioms?: object, suspicious_keywords?: string[]}>}
  */

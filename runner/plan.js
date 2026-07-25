@@ -11,12 +11,13 @@
 // post-hoc analysis.
 
 import { postCheck } from "./common.js";
-import { benchmarkDecls, checkStatementPreserved } from "./grade.js";
+import { benchmarkDecls, stmtProbe, verifyStatement, stripProbeOutput } from "./grade.js";
 
 const CLIENT_TIMEOUT_MS = 30 * 60_000; // server queue is serialized; be patient
 
-// Start of a top-level declaration (helpers are unindented in practice; benchmark
-// decl lines are guaranteed verbatim by the statement check).
+// Start of a top-level declaration (helpers are unindented in practice; the
+// type-level statement check guarantees each benchmark decl still *exists* under
+// its name — the region scan below is a best-effort line heuristic on top).
 const DECL_RE =
   /^(?:@\[[^\]]*\]\s*)?(?:private\s+|protected\s+|noncomputable\s+|partial\s+)*(?:theorem|lemma|abbrev|def|example|instance|opaque|axiom|structure|inductive|corollary)\b/;
 
@@ -54,13 +55,18 @@ export function goalSimilarity(a, b) {
 
 /**
  * Check whether `solution` is currently a valid plan for `original`.
+ * `problemName` keys the original-side type cache (basename of the problem file);
+ * the sha guard keeps a wrong/default name correct, just uncached.
  * Returns { ok, text, details } — text is agent-facing, details are for the log.
  */
-export async function planCheck(original, solution) {
-  const check = await postCheck({ code: solution }, CLIENT_TIMEOUT_MS);
-  if (check.error) return { ok: false, text: check.pretty ?? `lean server error: ${check.error}`, details: { ok: false, reason: "server_error" }, isError: true };
+export async function planCheck(original, solution, problemName = "adhoc") {
+  // statement probe rides on the same request; sorries keep their line numbers
+  // since the probe is appended below the solution
+  const check = await postCheck({ code: `${solution}\n${stmtProbe(benchmarkDecls(original))}\n` }, CLIENT_TIMEOUT_MS);
+  if (check.error) return { ok: false, text: stripProbeOutput(check.pretty) || `lean server error: ${check.error}`, details: { ok: false, reason: "server_error" }, isError: true };
+  const pretty = stripProbeOutput(check.pretty);
 
-  const stmt = checkStatementPreserved(original, solution);
+  const stmt = await verifyStatement(problemName, original, check.messages);
   if (!stmt.ok)
     return {
       ok: false,
@@ -73,7 +79,7 @@ export async function planCheck(original, solution) {
   if (!check.ok)
     return {
       ok: false,
-      text: `PLAN CHECK FAILED: the file does not compile. A plan must compile (helper bodies may be \`sorry\`).\n\n${check.pretty}`,
+      text: `PLAN CHECK FAILED: the file does not compile. A plan must compile (helper bodies may be \`sorry\`).\n\n${pretty}`,
       details: { ok: false, reason: "compile_error" },
     };
 

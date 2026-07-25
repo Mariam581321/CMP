@@ -8,7 +8,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import { planCheck } from "../runner/plan.js";
 
 export default function (pi: ExtensionAPI) {
@@ -35,7 +35,7 @@ export default function (pi: ExtensionAPI) {
       }
       try {
         const solution = readFileSync(src, "utf8");
-        const r = await planCheck(readFileSync(origPath, "utf8"), solution);
+        const r = await planCheck(readFileSync(origPath, "utf8"), solution, basename(origPath, ".lean"));
         // Snapshot every checked plan; index derived from disk so it survives the
         // runner's nudge-respawns. Green-snapshot existence doubles as cross-process
         // "planning phase already succeeded" state.

@@ -5,8 +5,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
-import { checkStatementPreserved } from "../runner/grade.js";
+import { join, basename } from "node:path";
+import { benchmarkDecls, stmtProbe, verifyStatement, stripProbeOutput } from "../runner/grade.js";
 import { postCheck } from "../runner/common.js";
 
 const CLIENT_TIMEOUT_MS = 30 * 60_000; // server queue is serialized; be patient
@@ -27,25 +27,36 @@ export default function (pi: ExtensionAPI) {
         return { content: [{ type: "text", text: "error: problem.lean not found in working directory" }], isError: true };
       }
       try {
-        const r = (await postCheck({ code: readFileSync(src, "utf8") }, CLIENT_TIMEOUT_MS)) as any;
+        // The statement probe rides on the same check request; its CMPSTMT output is
+        // stripped from what the agent sees.
+        const origPath = process.env.CMP_ORIGINAL_FILE;
+        const origSource = origPath && existsSync(origPath) ? readFileSync(origPath, "utf8") : null;
+        const probe = origSource ? `\n${stmtProbe(benchmarkDecls(origSource))}\n` : "";
+        const r = (await postCheck({ code: readFileSync(src, "utf8") + probe }, CLIENT_TIMEOUT_MS)) as any;
         // A tampered statement is reported as a FAILED check, not a footnote after
         // "compiled successfully" — weak models skim past appended warnings.
-        let text = r.pretty ?? "no output";
+        let text = stripProbeOutput(r.pretty) || "no output";
         let ok = r.ok;
-        const origPath = process.env.CMP_ORIGINAL_FILE;
-        if (origPath && existsSync(origPath)) {
-          const stmt = checkStatementPreserved(readFileSync(origPath, "utf8"), readFileSync(src, "utf8"));
+        if (origSource) {
+          const stmt = await verifyStatement(basename(origPath!, ".lean"), origSource, r.messages);
           if (!stmt.ok) {
             ok = false;
             text =
               `CHECK FAILED: you modified the theorem statement (${stmt.detail}). ` +
-              `Proofs of a modified statement do not count. Restore the original statement exactly — ` +
+              `Proofs of a modified statement do not count. Restore the original statement — ` +
               `you may only add helper lemmas above it and fill in sorries.\n\nCompiler output:\n${text}`;
           }
         }
         return { content: [{ type: "text", text }], details: { ok, cached: r.cached }, isError: r.error != null };
       } catch (e: any) {
-        return { content: [{ type: "text", text: `lean_check temporarily unavailable (${e?.message ?? e}) — try again` }], isError: true };
+        // "try again" only for genuinely transient faults — a permanent error phrased
+        // as transient sends weak models into a check-spam loop (seen: 406 calls).
+        const msg = String(e?.message ?? e);
+        const transient = /timed out|unreachable|ECONN|socket|fetch failed|REPL|respond/i.test(msg);
+        const advice = transient
+          ? "— transient, try again"
+          : "— this is an internal error and retrying will NOT fix it; continue improving the file without this check and mention the error in your final message";
+        return { content: [{ type: "text", text: `lean_check unavailable (${msg}) ${advice}` }], isError: true };
       }
     },
   });
