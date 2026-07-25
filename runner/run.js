@@ -288,12 +288,15 @@ async function attempt(name, idx) {
     tool_calls: stats.toolCalls, exit_code: exitCode, timed_out: timedOut, nudges,
     solved: verdict.solved, fail_reason: verdict.solved ? null : verdict.reason,
     fail_detail: verdict.solved ? null : (verdict.detail ?? "").slice(0, 500),
-    axioms: verdict.axioms ?? null, harness_git_sha: gitSha,
+    axioms: verdict.axioms ?? null, suspicious_keywords: verdict.suspicious_keywords ?? null,
+    harness_git_sha: gitSha,
   };
   writeFileSync(join(probDir, "attempt.json"), JSON.stringify(record, null, 2));
   appendFileSync(join(runDir, "results.jsonl"), JSON.stringify(record) + "\n");
 
-  const tag = verdict.solved ? green("✓ solved ") : verdict.reason === "timeout" ? yellow("⏱ timeout") : red(`✗ ${verdict.reason}`);
+  const tag =
+    (verdict.solved ? green("✓ solved ") : verdict.reason === "timeout" ? yellow("⏱ timeout") : red(`✗ ${verdict.reason}`)) +
+    (verdict.suspicious_keywords ? yellow(` ⚠ ${verdict.suspicious_keywords.join(",")}`) : "");
   const checks = stats.toolCalls.lean_check ?? 0;
   console.log(
     `  ${dim(`[${String(idx + 1).padStart(2)}/${problems.length}]`)} ${name.padEnd(18)} ${tag}  ${dim(

@@ -29,15 +29,61 @@ rate + cost. pi supports DeepSeek natively (`deepseek/deepseek-v4-flash`, reads
 
 ## Grading (independent of the agent)
 
-`runner/grade.js`, run after the agent exits, over the persistent lean server:
+`runner/grade.js`, run after the agent exits, over the persistent lean server.
 
-1. **statement preserved** — every code line of the original must survive (docstrings
-   exempt); the one check we write ourselves (~30 lines, agent-specific attack surface).
-2. **compiles** under Lean 4.27 + Mathlib.
-3. **axiom soundness** — `#print axioms` for every benchmark declaration must be within
-   `{propext, Classical.choice, Quot.sound}` — catches `sorry` (sorryAx), new axioms, and
-   `native_decide` in one mechanism. (`lake env lean` on a sorry'd file exits 0 — must
-   grade via `#print axioms`, not by grepping.)
+**Principle.** In Lean a theorem's statement *is* the type of its declaration (the proof
+is the term). So "did the agent change the statement?" is not a question about source
+text — it is: does `putnam_xxx` in the agent's file elaborate to the same type as in the
+original? The grader asks Lean that question directly instead of diffing strings, which
+makes it immune to reformatting, notation, binder renames (α-equivalence), and
+`open`-shadowing in both directions: presentation changes can't fail it, semantic changes
+can't sneak past it. (v1 was a line-survival check; `regrade.js` showed it false-rejected
+a valid reformatted proof in a pilot, and it provably missed comment-wrap restatements.
+Same design point as AXLE's `verify_proof`, which is closed source — hence reimplemented,
+~60 lines of JS + ~30 of Lean.)
+
+**Mechanism.** One REPL request per grade: the solution file + an appended Lean probe
+(`stmtProbe`) + `#print axioms` for each benchmark declaration. After the file
+elaborates, the probe looks each declaration up in the environment and prints one info
+line — kind (thm/defn/axiom/…), safety (safe/unsafe/partial), and the elaborated type
+canonicalized (binder names erased, elaboration metadata stripped, universe params
+renamed) and printed as a raw kernel expression with fully-resolved constant names.
+Original-side answers come from the same probe run once per problem and cached in
+`problems/stmt-types.json`, keyed by source hash (derived + gitignored like the problem
+files; `node runner/grade.js --build-stmt-cache` rebuilds all, grade.js lazily fills
+misses). The probe works on non-compiling files too: Lean's error recovery registers any
+declaration whose *signature* elaborates (failed proofs become sorryAx), so statement
+verdicts don't require a compiling proof.
+
+**Verdict order** (first hit wins, so reason distributions stay comparable with v1):
+
+1. `statement_changed` — declaration missing (renamed/deleted/statement doesn't
+   elaborate), type differs, or kind differs (e.g. theorem redeclared as `axiom`/`def`).
+2. `unsafe_decl` — declaration not `safe`: `unsafe` code may use kernel bypasses like
+   `unsafeCast`. (`unsafe theorem` is illegal in Lean, so only the `_solution` def slot
+   is exposed; `#print axioms` happens to flag today's `unsafeCast` pattern via
+   `lcProof`, so this is deliberate redundancy, not the only line of defense.)
+3. `compile_error` — any error-severity message. If the file is so broken the parser
+   never reaches the probe (unterminated comment/bracket), it grades here with
+   "statement unknown" in the detail — the one case where statement preservation is
+   genuinely undeterminable.
+4. `uses_sorry` / `bad_axioms` — `#print axioms` per benchmark declaration must stay
+   within `{propext, Classical.choice, Quot.sound}`; catches `sorry` (sorryAx), smuggled
+   axioms (recorded in the env no matter how obfuscated their construction), and
+   `native_decide` (ofReduceBool) in one mechanism. (`lake env lean` on a sorry'd file
+   exits 0 — must grade via `#print axioms`, not by grepping.)
+
+**Lexical tripwire (advisory, not a gate).** Metaprogramming / kernel-adjacent keywords
+in the solution source (`macro`, `elab`, `run_cmd`, `open Lean`, `set_option debug`, …)
+are logged as `suspicious_keywords` in the record and flagged ⚠ in run output — never
+auto-failed, since a keyword can sit in prose or a string. Honest competition proofs need
+zero metaprogramming, so expected hits ≈ 0 and each is a 30-second human read. This
+covers the residual the environment-level checks cannot see: metaprograms that write
+unchecked declarations into the env, kernel-check config tampering (AXLE's Appendix C.3
+class). The attack payload can be obfuscated; its lexically visible launcher can't.
+
+`runner/regrade.js results/<run-id> ...` re-grades finished runs with the current grader
+and prints verdict flips (read-only — recorded results are what the run measured).
 
 Kernel re-verification (lean4checker) is punted until we publish numbers.
 
@@ -76,8 +122,8 @@ attempt:
  "model": "deepseek-v4-flash", "started_at": "...", "wall_s": 412, "turns": 14,
  "tokens": {"in": 84000, "out": 9100, "cache_read": 2400000}, "cost_usd": 0.021, "cost_std": 0.021,
  "tool_calls": {"lean_check": 6, "search_mathlib": 3},
- "solved": false, "fail_reason": "timeout|uses_sorry|compile_error|statement_changed|provider_error",
- "harness_git_sha": "..."}
+ "solved": false, "fail_reason": "timeout|uses_sorry|compile_error|statement_changed|unsafe_decl|bad_axioms|provider_error",
+ "suspicious_keywords": null, "harness_git_sha": "..."}
 ```
 Everything raw is kept, so any stat (tool-use patterns, time-to-first-check, error types)
 is computable later without re-running.
@@ -88,6 +134,7 @@ is computable later without re-running.
 runner/run.js               spawn pi per problem, worker pool, logging
 runner/sanitize.js          PutnamBench src/*.lean -> problems/*.lean (strip answers + docstrings)
 runner/grade.js             independent grading over the lean server
+runner/regrade.js           re-grade finished runs with the current grader (read-only)
 runner/lean-server.js       persistent Lean REPL HTTP daemon
 runner/plan.js              plan_check core logic
 extensions/lean-check.ts    always-on agent-facing compile tool
@@ -95,7 +142,7 @@ extensions/lean-search.ts   semantic search (LeanSearch API)
 extensions/lean-plan.ts     plan_check (+ lean-plan.prompt.md)
 extensions/max-tokens.ts    injects the per-response max_tokens (always on; default = model max)
 lean-env/                   shared Lean project (gitignored)
-problems/                   sanitized statements + dev.txt
+problems/                   sanitized statements + dev.txt + stmt-types.json (grader cache)
 results/                    per-run dirs + results.jsonl (gitignored)
 ```
 

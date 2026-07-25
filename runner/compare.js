@@ -32,7 +32,7 @@ const runs = dirs.map((dir) => {
 });
 
 const problems = [...new Set(runs.flatMap((r) => Object.keys(r.byProblem)))].sort();
-const shortReason = { statement_changed: "stmt", compile_error: "compile", uses_sorry: "sorry", bad_axioms: "axioms", timeout: "time", no_file: "nofile", runner_error: "runner", grader_error: "grader", provider_error: "provider" };
+const shortReason = { statement_changed: "stmt", compile_error: "compile", uses_sorry: "sorry", bad_axioms: "axioms", unsafe_decl: "unsafe", timeout: "time", no_file: "nofile", runner_error: "runner", grader_error: "grader", provider_error: "provider" };
 
 const colW = Math.max(...runs.map((r) => r.name.length), 16) + 2;
 const cell = (rec) => {
