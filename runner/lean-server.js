@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 // Persistent Lean REPL behind a tiny local HTTP API. Loads Mathlib once (~1-2 min,
 // ~6 GB resident), then each check evaluates against that immutable env in seconds.
-// Requests are serialized through the REPL; a watchdog kills and respawns it on
-// hang/crash. Results are memoized by code hash.
+// One REPL command runs at a time; queued requests are served round-robin across
+// clients (body.client) so one busy attempt can't starve the rest. A watchdog kills
+// and respawns the REPL on hang/crash. Results are memoized by code hash — including
+// watchdog timeouts, which are deterministic per file; memo hits skip the queue.
 //
-//   GET  /health           -> {ready}
-//   POST /check {code, timeoutMs?} -> {ok, pretty, messages, sorries, error?}
+//   GET  /health           -> {ready, queued: {client: n}}
+//   POST /check {code, timeoutMs?, client?} -> {ok, pretty, messages, sorries, error?, kind?}
+//                                              kind: check_timeout | crash | error | bad_request
 //
 // Env: CMP_LEAN_ENV, CMP_REPL_BIN, CMP_LEAN_PORT (default 8787)
 
@@ -29,7 +32,6 @@ let repl = null;
 let ready = false;
 let pending = null; // {resolve, reject} for the in-flight REPL command
 const memo = new Map();
-let queue = Promise.resolve();
 
 const log = (...a) => console.error(new Date().toISOString(), ...a);
 
@@ -57,7 +59,10 @@ function sendToRepl(obj, timeoutMs) {
   return new Promise((res, rej) => {
     const t = setTimeout(() => {
       pending = null;
-      rej(new Error(`REPL timed out after ${Math.round(timeoutMs / 1000)}s`));
+      // check_timeout is DETERMINISTIC for a given file (the watchdog bound is on
+      // REPL execution, not queueing) — clients use the kind to stop agents from
+      // retrying a doomed file, and handleCheck memoizes it like any verdict.
+      rej(Object.assign(new Error(`REPL timed out after ${Math.round(timeoutMs / 1000)}s`), { kind: "check_timeout" }));
       restartRepl("watchdog timeout");
     }, timeoutMs);
     pending = {
@@ -100,7 +105,7 @@ async function startRepl() {
     if (repl !== proc) return;
     // fail the in-flight command immediately (e.g. stack-overflow abort) instead of
     // letting it stall the queue until the watchdog fires
-    pending?.reject(new Error(`REPL crashed while checking (exit ${code})`));
+    pending?.reject(Object.assign(new Error(`REPL crashed while checking (exit ${code})`), { kind: "crash" }));
     if (ready) restartRepl(`repl exited (code ${code})`);
   });
   log("importing Mathlib...");
@@ -172,37 +177,87 @@ function render(resp, shifted) {
   return { ok, pretty, messages, sorries };
 }
 
-async function handleCheck(body) {
-  const { text, shifted } = prepare(body.code);
-  const key = createHash("sha256").update(text).digest("hex");
-  if (memo.has(key)) return { ...memo.get(key), cached: true };
+function memoPut(key, result) {
+  if (memo.size >= MEMO_MAX) memo.delete(memo.keys().next().value); // bounded, oldest-first
+  memo.set(key, result);
+}
+
+async function handleCheck(prep, body) {
   while (!ready) await new Promise((r) => setTimeout(r, 2000));
   try {
-    const resp = await sendToRepl({ cmd: text, env: 0 }, body.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-    const result = render(resp, shifted);
-    if (memo.size >= MEMO_MAX) memo.delete(memo.keys().next().value); // bounded, oldest-first
-    memo.set(key, result);
+    const resp = await sendToRepl({ cmd: prep.text, env: 0 }, body.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+    const result = render(resp, prep.shifted);
+    memoPut(prep.key, result);
     return result;
   } catch (e) {
-    return { ok: false, error: e.message, pretty: `lean check failed: ${e.message} (transient - try again)`, messages: [], sorries: [] };
+    const kind = e.kind ?? "error";
+    const result = {
+      ok: false, error: e.message, kind,
+      pretty:
+        kind === "check_timeout"
+          ? `lean check failed: ${e.message} — this file is too expensive to check; retrying it unchanged will fail the same way`
+          : `lean check failed: ${e.message} (transient - try again)`,
+      messages: [], sorries: [],
+    };
+    // A watchdog kill is deterministic for this exact file — memoize it so a client
+    // that resubmits the identical file gets the verdict for free instead of burning
+    // another timeout's worth of the serialized REPL. Crashes stay unmemoized.
+    if (kind === "check_timeout") memoPut(prep.key, result);
+    return result;
   }
 }
 
+// Requests are served round-robin across clients (body.client, e.g. the problem
+// name; the grader is just another client), one REPL command in flight at a time —
+// an attempt with many queued checks waits behind itself, not in front of everyone
+// else (seen: one check-spamming attempt starving a whole run's checks).
+const queues = new Map(); // client -> FIFO of jobs
+const rr = []; // clients with pending jobs, in service order
+let pumping = false;
+function enqueue(client, job) {
+  if (!queues.has(client)) { queues.set(client, []); rr.push(client); }
+  queues.get(client).push(job);
+  void pump();
+}
+async function pump() {
+  if (pumping) return;
+  pumping = true;
+  while (rr.length) {
+    const client = rr.shift();
+    const q = queues.get(client);
+    const job = q.shift();
+    if (q.length) rr.push(client);
+    else queues.delete(client);
+    try { await job(); } catch (e) { log("job error:", e.message); } // a dead client socket must not wedge the pump
+  }
+  pumping = false;
+}
+
 const server = createServer((req, res) => {
+  const respond = (status, obj) => {
+    res.writeHead(status, { "content-type": "application/json" });
+    res.end(JSON.stringify(obj));
+  };
   if (req.method === "GET" && req.url === "/health") {
-    res.writeHead(200, { "content-type": "application/json" });
-    return res.end(JSON.stringify({ ready }));
+    return respond(200, { ready, queued: Object.fromEntries([...queues].map(([k, v]) => [k, v.length])) });
   }
   if (req.method === "POST" && req.url === "/check") {
     let data = "";
     req.on("data", (d) => (data += d));
     req.on("end", () => {
-      const body = JSON.parse(data);
-      queue = queue.then(async () => {
-        const result = await handleCheck(body);
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify(result));
-      });
+      let body;
+      try {
+        body = JSON.parse(data);
+        if (typeof body.code !== "string") throw new Error("no code");
+      } catch {
+        return respond(400, { ok: false, error: "invalid request body", kind: "bad_request", messages: [], sorries: [] });
+      }
+      const prep = prepare(body.code);
+      prep.key = createHash("sha256").update(prep.text).digest("hex");
+      // Memo hits (including memoized check-timeouts) skip the queue entirely —
+      // re-verification of an unchanged file must never wait behind live checks.
+      if (memo.has(prep.key)) return respond(200, { ...memo.get(prep.key), cached: true });
+      enqueue(String(body.client ?? "anon"), async () => respond(200, await handleCheck(prep, body)));
     });
     return;
   }

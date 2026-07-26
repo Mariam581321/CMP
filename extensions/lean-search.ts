@@ -1,4 +1,5 @@
-// Experimental arm #1: semantic search over Mathlib via the public LeanSearch API.
+// @tools search_mathlib
+// Experimental arm: semantic search over Mathlib via the public LeanSearch API.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";

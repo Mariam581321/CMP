@@ -41,8 +41,17 @@ export function arg(name, dflt) {
   return i >= 0 ? process.argv[i + 1] : dflt;
 }
 
+// --- extension config --------------------------------------------------------
+// run.js passes per-attempt config to the pi subprocess's extensions as ONE JSON
+// env var (CMP_CONFIG): original_file, problem, budget_std, max_nudges, max_tokens,
+// check_timeout_ms. Empty object outside a run (e.g. grader in the runner process).
+export function cmpConfig() {
+  try { return JSON.parse(process.env.CMP_CONFIG ?? "{}"); } catch { return {}; }
+}
+
 // --- TTY colors -------------------------------------------------------------
-const tty = process.stdout.isTTY;
+// FORCE_COLOR: keep ANSI when piped through watch(1) (scripts/watch.sh sets it).
+const tty = process.stdout.isTTY || !!process.env.FORCE_COLOR;
 const c = (code, s) => (tty ? `\x1b[${code}m${s}\x1b[0m` : s);
 export const green = (s) => c(32, s);
 export const red = (s) => c(31, s);

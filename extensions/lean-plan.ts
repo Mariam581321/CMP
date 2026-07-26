@@ -1,3 +1,4 @@
+// @tools plan_check
 // Arm 1 (plan): explicit plan artifact. Registers `plan_check`, which validates that
 // problem.lean is currently a *plan*: compiles, statement preserved, and every `sorry`
 // lies outside the benchmark declarations (only helper lemmas may be sorry'd).
@@ -10,6 +11,7 @@ import { Type } from "typebox";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from "node:fs";
 import { join, basename } from "node:path";
 import { planCheck } from "../runner/plan.js";
+import { cmpConfig } from "../runner/common.js";
 
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
@@ -29,16 +31,16 @@ export default function (pi: ExtensionAPI) {
       if (!existsSync(src)) {
         return { content: [{ type: "text", text: "error: problem.lean not found in working directory" }], isError: true };
       }
-      const origPath = process.env.CMP_ORIGINAL_FILE;
+      const origPath = cmpConfig().original_file;
       if (!origPath || !existsSync(origPath)) {
         return { content: [{ type: "text", text: "plan_check unavailable: original problem file not configured" }], isError: true };
       }
       try {
         const solution = readFileSync(src, "utf8");
         const r = await planCheck(readFileSync(origPath, "utf8"), solution, basename(origPath, ".lean"));
-        // Snapshot every checked plan; index derived from disk so it survives the
-        // runner's nudge-respawns. Green-snapshot existence doubles as cross-process
-        // "planning phase already succeeded" state.
+        // Snapshot every checked plan for post-hoc judging; the index and the
+        // "planning phase already succeeded" state are derived from disk, so they
+        // are robust to any process restart and visible to the analyst.
         let hadGreen = false;
         try {
           const plansDir = join(ctx.cwd, "..", "plans");

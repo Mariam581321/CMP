@@ -11,9 +11,10 @@
 // With --pick N [--seed S] [--out F], also writes a fixed random subset.
 
 import { readdirSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { parseArgs } from "node:util";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { arg, classifyLines } from "./common.js";
+import { classifyLines } from "./common.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -37,13 +38,31 @@ function mulberry32(seed) {
 }
 
 function main() {
-  const pick = parseInt(arg("pick", "0"));
-  const seed = parseInt(arg("seed", "42"));
-  const keepNl = process.argv.includes("--keep-nl");
-  const SRC = resolve(arg("src-dir", join(ROOT, "benchmarks/PutnamBench/lean4/src")));
-  const PREFIX = arg("prefix", "");
-  const OUT = resolve(arg("out-dir", join(ROOT, "problems")));
-  const outFile = resolve(arg("out", join(OUT, "dev.txt")));
+  let A;
+  try {
+    A = parseArgs({
+      options: {
+        pick: { type: "string", default: "0" },
+        seed: { type: "string", default: "42" },
+        "keep-nl": { type: "boolean", default: false },
+        "src-dir": { type: "string", default: join(ROOT, "benchmarks/PutnamBench/lean4/src") },
+        prefix: { type: "string", default: "" },
+        "out-dir": { type: "string", default: join(ROOT, "problems") },
+        out: { type: "string" },
+      },
+      strict: true, // a mistyped flag must error, not silently sanitize the wrong corpus
+    }).values;
+  } catch (e) {
+    console.error(e.message);
+    process.exit(1);
+  }
+  const pick = parseInt(A.pick);
+  const seed = parseInt(A.seed);
+  const keepNl = A["keep-nl"];
+  const SRC = resolve(A["src-dir"]);
+  const PREFIX = A.prefix;
+  const OUT = resolve(A["out-dir"]);
+  const outFile = resolve(A.out ?? join(OUT, "dev.txt"));
 
   mkdirSync(OUT, { recursive: true });
   const names = readdirSync(SRC).filter((f) => f.endsWith(".lean")).sort();
