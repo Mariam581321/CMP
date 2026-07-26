@@ -1,9 +1,13 @@
 #!/usr/bin/env node
-// Sanitize PutnamBench problem files: strip `--` comments (they contain the
-// answers) AND /-- docstrings -/ (the informal NL statement — the agent should
-// only see the formal Lean by default; pass --keep-nl to retain docstrings).
-// Writes <out-dir>/<name>.lean for every problem + <out-dir>/all.txt
+// Sanitize benchmark problem files: strip `--` comments (in PutnamBench they
+// contain the answers) AND /-- docstrings -/ (the informal NL statement — the
+// agent should only see the formal Lean by default; pass --keep-nl to retain
+// docstrings). Writes <out-dir>/<name>.lean for every problem + <out-dir>/all.txt
 // (--out-dir, default problems/).
+// --src-dir <dir> reads another corpus of the same shape (default PutnamBench;
+// e.g. benchmarks/FATE/FATE-M/FATEM), --prefix <s> prepends to output names
+// (FATE files are bare numbers — prefix keeps names globally unique, which the
+// shared stmt-types.json cache relies on).
 // With --pick N [--seed S] [--out F], also writes a fixed random subset.
 
 import { readdirSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
@@ -12,7 +16,6 @@ import { fileURLToPath } from "node:url";
 import { arg, classifyLines } from "./common.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const SRC = join(ROOT, "benchmarks/PutnamBench/lean4/src");
 
 export function sanitize(source, keepNl = false) {
   const drop = keepNl ? ["comment"] : ["comment", "docstring"];
@@ -37,6 +40,8 @@ function main() {
   const pick = parseInt(arg("pick", "0"));
   const seed = parseInt(arg("seed", "42"));
   const keepNl = process.argv.includes("--keep-nl");
+  const SRC = resolve(arg("src-dir", join(ROOT, "benchmarks/PutnamBench/lean4/src")));
+  const PREFIX = arg("prefix", "");
   const OUT = resolve(arg("out-dir", join(ROOT, "problems")));
   const outFile = resolve(arg("out", join(OUT, "dev.txt")));
 
@@ -48,9 +53,9 @@ function main() {
     const clean = sanitize(readFileSync(join(SRC, f), "utf8"), keepNl);
     // paranoia: a sanitized file must never contain a stripped-kind line
     leaks += classifyLines(clean).filter(({ kind }) => banned.includes(kind)).length;
-    writeFileSync(join(OUT, f), clean);
+    writeFileSync(join(OUT, PREFIX + f), clean);
   }
-  const all = names.map((f) => f.replace(".lean", ""));
+  const all = names.map((f) => PREFIX + f.replace(".lean", ""));
   writeFileSync(join(OUT, "all.txt"), all.join("\n") + "\n");
   console.log(`sanitized ${all.length} problems${keepNl ? " (NL docstrings kept)" : ""} -> ${OUT} (leak check: ${leaks === 0 ? "clean" : `${leaks} LEAKED LINES!`})`);
   if (leaks > 0) process.exit(1);

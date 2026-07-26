@@ -14,3 +14,10 @@ problems-nl/
 papers/*
 !papers/INDEX.md
 vendor/
+problems-fateh/*
+!problems-fateh/dev10.txt
+!problems-fateh/pick12.txt
+problems-fatem/*
+!problems-fatem/dev10.txt
+!problems-fatem/pick12.txt
+problems-fc/
