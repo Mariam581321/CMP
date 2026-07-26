@@ -69,15 +69,28 @@ Degenerate answer (our baseline): append everything until overflow, then auto-co
 
 ## Experiments
 
+**Reference arm.** `base` (iterate vs compiler) stays the anchor cell, but experiments 1
+and 2 compare against `ref = base + lean-search`. Rationale: every realistic system ships
+retrieval, and on a search-less base an arm can "win" merely by compensating for its
+absence (e.g. `facts` hoarding lemma names the model had no way to look up). Stated
+deliberately: experiment 2 therefore measures memory *on top of* retrieval, not instead
+of it. base vs ref is not a headline claim — retrieval's usefulness is already published
+(LeanSearch v2: 20% vs 4% on FATE-H around a fixed prover) — but it falls out free from
+cells that run anyway, and serves as **positive control and effect-size ruler**: search
+is the arm most likely to move the benchmark, so if base vs ref shows nothing, the
+instrument can't detect anything subtler and the grid readout isn't trustworthy.
+
 Experiments I would like to run:
 
-0. add a semantic `lean_search` tool. compare having the option to call vs prompting to
-   use it at certain points vs mechanically injecting "results that might be relevant".
-1. add to the baseline an instruction to plan + a `plan_check` tool. compare:
+0. how does search *enter* the loop — same information source, different doors: a tool
+   the model calls when it wants (0a) vs the harness mechanically injecting results with
+   no model choice (0c). The prompted middle rung (0b) is deferred: under a budget the
+   endpoint contrast is the clean one.
+1. add to ref an instruction to plan + a `plan_check` tool. compare:
    - re-plan phase based on information retrieval before proving;
    - subagents proving specific components of the plan — enforced by the harness vs a
-     `spawn_agent` tool + refine plan based on subagent feedback.
-2. external memory: where is the model's intermediate work allowed to live? By default it
+     `spawn_agent` tool + refine plan based on subagent feedback (deferred with workers).
+2. external memory on ref: where is the model's intermediate work allowed to live? By default it
    lives in the transcript — the worst possible place: unverified, lost at truncation and
    compaction, and some problems are very inviting to just start algebra-bashing in chat.
    Offer locations with better guarantees and vary how hard the harness pushes the model
@@ -85,7 +98,8 @@ Experiments I would like to run:
    - an instruction to derive inside `problem.lean` (`have` steps closed by tactics);
    - a free-form draft file — durable, unverified;
    - an append-only bank of compiler-verified lemmas — durable, trusted, monotone;
-   - crossed with a tight per-response output cap that makes chat a lossy place to work.
+   - crossed with a tight per-response output cap that makes chat a lossy place to work
+     *(crossing dropped 0726 — cut from the committed grid)*.
    In basis terms the rungs decompose the idea: the artifacts are question-1 changes
    (what survives into future calls' context), the bank's gate adds question-3 force (a
    compiler verdict gates writes to state — the "verified-facts collection" source), and
@@ -102,19 +116,19 @@ in parentheses where a variant is already implemented/planned (tool designs in
 |---|---|---|---|
 | base — iterate vs compiler | append everything, auto-compact | one thread, model-owned | compiler |
 | **0 — how does search enter** | | | |
-| 0a tool (lean-search) | = base | = base | + search, model calls it when it wants |
-| 0b tool + prompted moments | + instruction saying when to search | = base | + search, model still calls it |
+| 0a tool (lean-search) = **ref** | = base | = base | + search, model calls it when it wants |
+| 0b tool + prompted moments *(deferred)* | + instruction saying when to search | = base | + search, model still calls it |
 | 0c mechanical injection | harness puts top-k candidates into context at set points (e.g. per open goal) | = base | + search, harness calls it; model never asks |
-| **1 — plan machinery** | | | |
-| 1 plan tool (plan) | + plan protocol text | = base | + plan_check verdict, soft |
+| **1 — plan machinery (on ref)** | | | |
+| 1 plan tool (plan) | + plan protocol text | = ref | + plan_check verdict, soft |
 | 1a re-plan before proving (replan) | vet call is blank-context: skeleton + retrieved candidates only | fixed vet phase after each green plan | + forced per-helper retrieval; verdicts inform, don't gate |
 | 1b-h workers, harness-owned | worker sees one helper + parent statements, nothing else | harness spawns a worker per open helper, per-worker budget; failures feed a replan step | worker verdict/diagnosis gates replanning |
 | 1b-t workers, model-owned | same worker contexts | model gets `spawn_agent`, decides when (maybe never) | worker summaries inform the main agent |
-| **2 — external memory** | | | |
-| 2 in-file (derive) | steering instruction only: derivations become `have` steps in problem.lean, not chat prose | = base | compiler verifies them via lean_check; nothing enforces the style |
-| 2 draft file (notes) | + notes.md beside the transcript: free-form scratch that survives turns and compaction; ordinary read/write | = base | nothing — writes ungated by design |
-| 2 fact bank (facts) | + facts.lean: append-only bank of verified lemmas; readable as a file, writable only through the gate | = base | compiler gates every write (add_fact: compiles + sorry-free + axiom-clean); direct write/edit hard-blocked |
-| 2 × cap ({base, facts} × {uncapped, 8k}) | = cell | + 8k/response output cap: the per-call budget squeezed so long chat derivations get cut off | = cell |
+| **2 — external memory (on ref)** | | | |
+| 2 in-file (derive) *(optional rider)* | steering instruction only: derivations become `have` steps in problem.lean, not chat prose | = ref | compiler verifies them via lean_check; nothing enforces the style |
+| 2 draft file (notes) | + notes.md beside the transcript: free-form scratch that survives turns and compaction; ordinary read/write | = ref | nothing — writes ungated by design |
+| 2 fact bank (facts) | + facts.lean: append-only bank of verified lemmas; readable as a file, writable only through the gate | = ref | compiler gates every write (add_fact: compiles + sorry-free + axiom-clean); direct write/edit hard-blocked |
+| 2 × cap ({ref, facts} × {uncapped, 8k}) *(dropped 0726)* | = cell | + 8k/response output cap: the per-call budget squeezed so long chat derivations get cut off | = cell |
 | 2a workers → summaries | worker results come back as summaries in the main thread | main agent + workers | compiler-checked facts travel via the main agent |
 | 2b workers → shared bank | the bank is the shared state; everyone reads it, nobody reads transcripts | main agent + workers | compiler gates writes; the bank is the channel |
 
@@ -125,29 +139,36 @@ read allowlist to `extensions/file-sandbox.ts`.*
 
 What each comparison isolates:
 
-- **0a vs 0b vs 0c** — same information source, three doors in. 0a→0b tightens the prompt,
-  0b→0c removes the model's choice entirely; 0c is the only question-1 change (injected
-  context, not a tool). Does search help because the model asks well, or would it help
-  more if it didn't have to ask?
+- **0a vs 0c** — same information source, two doors in: 0c removes the model's choice
+  entirely and is the only question-1 change (injected context, not a tool). Does search
+  help because the model asks well, or would it help more if it didn't have to ask?
+  mini3 says the model *does* ask when stuck (search_mathlib pulled hardest on the hard
+  problems), so the live question is whether harness timing beats model timing. 0b (the
+  prompted middle rung) is deferred; **base vs 0a** is the free positive control, not a
+  finding.
 - **1b-h vs 1b-t** — identical worker machinery, only the owner of the call graph differs.
   The cleanest scaffold-vs-discretion pair (mid10 already showed discretion can collapse:
   plan_check ignored under pressure). A fully scripted pipeline — harness owns every
   phase — is the far end of this axis, kept as a later option.
-- **1 + 0a vs 1a** — scaffold vs discretion for retrieval-informed planning: with plan + a
-  search tool the agent *may* vet its skeleton against Mathlib but nothing makes it (and
-  its judgment is in-context, already committed to its own plan); 1a forces the vet,
-  blank-context. Concrete runs: `plan`+`lean-search` vs `plan`+`replan` vs all three (tie
-  between the last two ⇒ the forced loop is redundant with tool access; win ⇒ the
-  scaffold/blank-context independence itself carries weight).
+- **ref+plan vs ref+replan** — scaffold vs discretion for retrieval-informed planning:
+  with search ambient on ref, a plan agent *may* vet its skeleton against Mathlib but
+  nothing makes it (and its judgment is in-context, already committed to its own plan);
+  replan forces the vet, blank-context. Tie ⇒ the forced loop is redundant with tool
+  access; win ⇒ the scaffold/blank-context independence itself carries weight. (The old
+  three-way `plan`+`lean-search` vs `plan`+`replan` vs all-three collapses to this pair
+  now that search is in ref.)
 - **1a vs 1b** — revise the plan on *retrieval* evidence before proving vs on *worker
   failure* evidence during proving. Both feed the plan; the trigger differs.
-- **base vs derive** — the pure-instruction door: does merely asking for checkable
+- **ref vs derive** *(optional rider — prompt-only, cheap; not in the committed grid)* —
+  the pure-instruction door: does merely asking for checkable
   derivations move anything, and does adherence survive difficulty? mini3 predicts
   collapse — soft protocols were abandoned exactly on the hard problems.
-- **notes vs facts** — durability held constant, verification varied: is external memory
+- **notes vs facts** (both on ref) — durability held constant, verification varied: is
+  external memory
   useful because it *persists* (question 1) or because it's *trusted* (question 3)?
   notes is all persistence and no trust; facts is both, at the price of machinery.
-- **{base, facts} × {uncapped, 8k}** — the enforcement interaction, and the only
+- **{ref, facts} × {uncapped, 8k}** *(dropped 2026-07-26 — cut from the committed grid;
+  kept here as design-space record)* — the enforcement interaction, and the only
   question-2 manipulation in this experiment. The cap alone punishes chat-bashing with
   no escape route (the dev-era truncation failures); the bank alone can be ignored.
   Claim under test: mechanical pressure pays only when there is a sanctioned place to
@@ -158,16 +179,56 @@ What each comparison isolates:
   transcript vs kept in shared external state (Danus §4.4 claims only the second makes
   parallel work additive).
 
+### The committed grid (final-result experiments)
+
+Three headline experiments; every comparison is paired (same problems, exact McNemar).
+Workers (1b) and 2a/2b stay deferred; `derive` and 0b are optional riders. The output-cap
+enforcement crossing ({ref, facts} × {uncapped, 8k}) was cut on 2026-07-26 — not worth
+two cells for a leaky manipulation.
+
+- **E0 — retrieval's door: 0a (ref) vs 0c.** Model-directed vs harness-directed entry of
+  the same information. base (run **twice**) anchors it: base-vs-base discordance is the
+  noise floor, base vs ref the positive control / effect-size ruler.
+- **E1 — plan machinery: ref vs ref+plan vs ref+replan.** Does a plan artifact pay at
+  all, and does a forced blank-context vet beat discretionary tool access
+  (scaffold vs discretion).
+- **E2 — external memory: ref vs ref+notes vs ref+facts.** Persistence vs trust,
+  on top of retrieval.
+
+Distinct runs: base ×2, ref, 0c, plan, replan, notes, facts = **8 cells** ×
+(#problems × avg cost/problem); see `COSTS.md` for the money/time estimate under the
+budget-cap regime.
+
+**Readout rule (fixed before seeing grid numbers).** Per comparison, exact McNemar on
+discordant problems: significance at n≈100 needs wins ≈ 2×losses + 6 (6-0, 8-1, 10-2,
+12-3 all cross p<.05). The duplicated base run calibrates how much discordance is pure
+sampling churn; effects that don't clear the churn-adjusted bar are reported as
+point estimates with the cost curves (the secondary endpoint — dev10 showed arms can
+tie on solves while separating on cost and failure mix).
+
 ## Decided (protocol)
 
-- **Benchmark:** PutnamBench first (cheap, comparable to Goedel-Architect); benchmark(s)
-  for headline numbers open — see `papers/INDEX.md` § Benchmarks.
+- **Benchmark:** FATE-H is the leading candidate for the grid (0725 pilots: FATE-M
+  saturated at 10/10 → smoke-test tier only; FATE-H 3/10 = mid-range, and its timeout
+  autopsy failure modes — retrieval starvation, long-horizon grind, scratch-state loss —
+  are exactly the arms' claimed mechanisms; per-problem area tags in `FATE-H.json`
+  enable exploratory per-area breakdowns, cells too small to test). Confirm with the
+  full-tier baseline ×2 before committing. PutnamBench stays as secondary anchor:
+  directly comparable to Goedel-Architect, topic breadth beyond algebra, and a pool big
+  enough for disjoint dev/eval. Dev iteration happens on FATE-M + Putnam mid-problems;
+  **FATE-H stays eval-only** (the tier is only #problems ≈ the grid size — any dev
+  tuning on it contaminates the eval set). Formal Conjectures (solved+textbook) is the
+  reserve scale-up if effects land small (+3–5pp) and n≈100 lacks power — needs a
+  difficulty pilot and `answer(sorry)` grader support first. FATE-X: deprioritized,
+  likely near-floor for this model.
 - **Model:** DeepSeek V4 Flash — cheap enough for full-benchmark sweeps across combos.
 - **Metric:** proof accepted by the Lean compiler (sorry-free), per problem.
 - **No budget parity:** report *(solve rate, cost)* per combo, let the tradeoff be part
   of the result. Only a hard cap so runs terminate: per-problem cost_std budget
   ($1 @std default; peak-invariant), wall-clock only as a backstop for hangs and slow
   spenders (0725 fateh autopsy: spend correlates with being on track, time does not).
+  Backstop = **6 h** (decided 2026-07-26; the 12 h-riders are the least hopeful failure
+  class — the shorter backstop saves ~40% of grid wall-clock at no scientific cost).
 - **Eval protocol:** each combo runs the dataset once (pass@1; pass@n open). Dev iterates
   on a fixed subset — the same subset for every combo, so dev comparisons stay fair.
 - **Answer hygiene:** PutnamBench files leak answers (`_solution` comments,
@@ -223,7 +284,7 @@ noted; per-run artifacts under `results/<run-id>/`, harness git SHA recorded per
   - The search arm pulled `search_mathlib` hardest on the hard problems (9–10 calls) — the
     tool is at least demanded when the going gets tough.
 
-See `DRAFT-experiment-notes-0717.md` for the full dev10/mid10 failure autopsy.
+See `drafts/DRAFT-experiment-notes-0717.md` for the full dev10/mid10 failure autopsy (FATE pilots: `drafts/DRAFT-experiment-notes-0725-fate.md`).
 
 ## Next steps
 
@@ -238,7 +299,8 @@ See `DRAFT-experiment-notes-0717.md` for the full dev10/mid10 failure autopsy.
       baseline included; per-problem timeout now 1 h) and neutralize the baseline
       prompt — the tactic-first steering line is removed and reappears as `derive`'s
       addendum when that arm lands. Breaks comparability with the dev runs logged above.
-- [ ] Implement `derive` and `notes` (prompt-only arms).
+- [ ] Implement `notes` (prompt-only arm); `derive` only as an optional rider if budget
+      allows (out of the committed grid).
 - [ ] Implement `facts` (gated `add_fact` + write-block — SKELETON § tool designs).
 - [ ] Sweep event logs for emergent harness-interaction behaviours (post-hoc from
       `results/*/*/events.jsonl`, no re-running): tool misunderstandings, scratch
@@ -272,7 +334,33 @@ See `DRAFT-experiment-notes-0717.md` for the full dev10/mid10 failure autopsy.
       3/11 in the last third, none between), timeouts work the full hour at median
       ~3.7k out-tok/min with median 0 nudges — the 1 h cap is binding, not slack.
 - [ ] Implement `replan`.
-- [ ] Scaffold-vs-discretion combos: `plan`+`lean-search` vs `plan`+`replan` (vs both) —
-      see the experiment-1 readouts above.
-- [ ] Baseline + arms on the dev subset; then cost estimate (combos × #problems × avg
-      tokens) → pick how many factors for the full grid.
+- [ ] Full FATE-H baseline **×2** (all #problems): confirms the tier's solve rate, and
+      base-vs-base discordance is the noise floor every McNemar readout needs. First
+      spend of the new regime (cost_std cap + lean_check prompt clarification land at
+      this boundary). ~2 × #problems × pilot rate.
+- [ ] `lean_check` prompt clarification (only `problem.lean` is compiled) — all arms,
+      at the same boundary; without it `notes`/`facts` win partly by fixing a
+      documentation gap (fateh_22: 134/175 writes to an ignored side file).
+- [ ] 0c (mechanical injection) — design the injection points (per open goal after
+      each failed check?) + implement; the E0 counterpart to `lean-search`.
+- [ ] Scaffold-vs-discretion: ref+plan vs ref+replan — see the committed-grid readouts.
+- [ ] Arms on the dev subset (FATE-M + Putnam mid) for plumbing; then the committed
+      grid (10 cells × #problems) on FATE-H.
+- [x] simplify code (2026-07-26 refactor, one harness boundary — breaks comparability
+      with all runs logged above, like the uncap change did):
+      (a) the nudge loop moved in-process (`extensions/supervisor.ts`, one pi process
+      + one session per attempt; runner keeps only hard kills; `STOP` file = clean
+      per-attempt abort);
+      (b) records split `end` (how the attempt ended) from `grade` (what the grader
+      says about the final file) — verdicts are never overwritten again;
+      (c) one shared `checkedCompile` client (`runner/stmt.js`) for lean_check +
+      plan_check, so agent-facing checks can't drift from the grader;
+      (d) plan_check's sorry placement now read from the environment probe (direct
+      sorryAx reachability), line heuristics deleted;
+      (e) `pi_version` recorded per run; strict CLI flags; peak-comparison machinery
+      dropped (cost_std subsumes it — launch guard kept).
+- [x] heuristics for server (same boundary): round-robin across clients, agent checks
+      capped at 120 s REPL time (grader 480 s), watchdog timeouts typed
+      (`check_timeout`) + memoized as deterministic per file + "simplify, don't
+      retry" wording, `native_decide` pre-rejected client-side without compiling
+      (banned anyway; each doomed attempt burned minutes of shared REPL).

@@ -31,6 +31,9 @@ if (existsSync(join(runDir, "results.jsonl")))
 
 console.log(`${bold(`run ${runId}`)}   ${dim(`combo: ${run.combo?.join("+") || "baseline"}   model: ${run.model}   rendered ${new Date().toLocaleTimeString()}`)}\n`);
 
+// abnormal end if there was one, else the grader's reason; ?? = legacy fail_reason fallback
+const reasonOf = (r) => (r.end ? (r.end !== "completed" ? r.end : r.grade?.reason) : r.fail_reason) ?? "failed";
+
 let solved = 0, cost = 0;
 for (const p of run.problems) {
   const r = finished.get(p);
@@ -40,7 +43,7 @@ for (const p of run.problems) {
     const plan = r.tool_calls?.plan_check;
     const extras = `${r.turns ?? "?"}t ${chk}chk${plan != null ? ` ${plan}plan` : ""} ${money(r.cost_usd ?? 0)} ${r.wall_s ?? "?"}s`;
     if (r.solved) { solved++; console.log(`  ${green("✓ solved ")}  ${p.padEnd(20)} ${dim(extras)}`); }
-    else console.log(`  ${red(`✗ ${(r.fail_reason ?? "failed").padEnd(7)}`)}  ${p.padEnd(20)} ${dim(extras)}`);
+    else console.log(`  ${red(`✗ ${reasonOf(r).padEnd(7)}`)}  ${p.padEnd(20)} ${dim(extras)}`);
   } else if (existsSync(join(runDir, p))) {
     const startMs = statSync(join(runDir, p)).ctimeMs;
     const ev = join(runDir, p, "events.jsonl");

@@ -33,9 +33,12 @@ for (const runDir of dirs) {
     if (!existsSync(attemptPath) || !existsSync(solPath)) { skipped++; continue; }
     const old = JSON.parse(readFileSync(attemptPath, "utf8"));
     const now = await grade(name, solPath, join(problemsDir, `${name}.lean`));
-    // timeout/budget_exceeded/provider_error are run-level overrides the grader can't see — keep comparable
-    const oldReason = old.solved ? "solved" : old.fail_reason;
-    const newReason = now.solved ? "solved" : ["timeout", "budget_exceeded", "provider_error"].includes(oldReason) ? oldReason : now.reason;
+    // v2 records carry the grader's verdict separately (grade.*) — compare it to the
+    // fresh grade directly. Legacy records merged run outcome into fail_reason, so
+    // timeout/budget/provider must be carried over to stay comparable.
+    const legacy = !old.grade;
+    const oldReason = legacy ? (old.solved ? "solved" : old.fail_reason) : old.grade.solved ? "solved" : old.grade.reason;
+    const newReason = now.solved ? "solved" : legacy && ["timeout", "budget_exceeded", "provider_error"].includes(oldReason) ? oldReason : now.reason;
     const kw = now.suspicious_keywords ? yellow(`  ⚠ ${now.suspicious_keywords.join(",")}`) : "";
     if (oldReason === newReason) {
       same++;

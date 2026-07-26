@@ -37,13 +37,18 @@ node runner/run.js --combo lean-search --problems problems/dev.txt  # + semantic
 
 Flags: `--combo a,b` `--problems <file>` `--budget-std <usd>` ($1.00 cost_std cap per
 problem) `--timeout <s>` (43200, wall-clock backstop) `--concurrency <n>` (6)
-`--model <id>` (deepseek/deepseek-v4-flash) `--thinking <level>` (off) `--run-id <s>`.
-Output is uncapped by default (model-max `max_tokens` sent explicitly); `--max-tokens`
-sets a tight cap only for capped experiment cells.
+`--model <id>` (deepseek/deepseek-v4-flash) `--thinking <level>` (off)
+`--check-timeout <s>` (120, REPL budget per agent-facing check) `--run-id <s>`.
+Unknown flags are hard errors. Output is uncapped by default (model-max `max_tokens`
+sent explicitly); `--max-tokens` sets a tight cap only for capped experiment cells.
 
 The agent gets `read,edit,write` + `lean_check`, plus whatever the combo adds, in an
 isolated scratch dir (the agent must never see the benchmark repo — answers leak in
-comments). Grading is independent of the agent (`runner/grade.js`). See SKELETON.md.
+comments). Grading is independent of the agent (`runner/grade.js`). The proof-rule
+line is *kernel-checked or it doesn't count*: `decide`/`norm_num`/`omega` are
+kernel-verified computation and fine; `native_decide` (trusts the native compiler via
+`ofReduceBool`) and new axioms are banned — enforced by `#print axioms` at grading,
+pre-rejected lexically by agent-facing checks. See SKELETON.md.
 
 ## Gotchas learned the hard way
 
