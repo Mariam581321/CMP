@@ -4,6 +4,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { createHash } from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
 import { join, basename } from "node:path";
 import { benchmarkDecls, stmtProbe, verifyStatement, stripProbeOutput } from "../runner/grade.js";
@@ -12,6 +13,11 @@ import { postCheck } from "../runner/common.js";
 const CLIENT_TIMEOUT_MS = 30 * 60_000; // server queue is serialized; be patient
 
 export default function (pi: ExtensionAPI) {
+  // Hash of problem.lean at the last check that returned a result. Lets the tool
+  // flag "you re-checked without changing the file" — the observation the
+  // putnam_1965_b6 agent needed to escape its wrong-path loop.
+  let lastCheckedHash: string | null = null;
+
   pi.registerTool({
     name: "lean_check",
     label: "Lean check",
@@ -32,7 +38,9 @@ export default function (pi: ExtensionAPI) {
         const origPath = process.env.CMP_ORIGINAL_FILE;
         const origSource = origPath && existsSync(origPath) ? readFileSync(origPath, "utf8") : null;
         const probe = origSource ? `\n${stmtProbe(benchmarkDecls(origSource))}\n` : "";
-        const r = (await postCheck({ code: readFileSync(src, "utf8") + probe }, CLIENT_TIMEOUT_MS)) as any;
+        const code = readFileSync(src, "utf8");
+        const hash = createHash("md5").update(code).digest("hex").slice(0, 12);
+        const r = (await postCheck({ code: code + probe }, CLIENT_TIMEOUT_MS)) as any;
         // A tampered statement is reported as a FAILED check, not a footnote after
         // "compiled successfully" — weak models skim past appended warnings.
         let text = stripProbeOutput(r.pretty) || "no output";
@@ -47,6 +55,17 @@ export default function (pi: ExtensionAPI) {
               `you may only add helper lemmas above it and fill in sorries.\n\nCompiler output:\n${text}`;
           }
         }
+        // Identify exactly what was graded, so a path mixup (agent editing a file
+        // this tool never sees) can't survive: the header pins the file, and the
+        // unchanged note fires when the agent re-checks without touching it.
+        let header = `checked ${src} (${Buffer.byteLength(code)} bytes, md5 ${hash})`;
+        if (hash === lastCheckedHash) {
+          header +=
+            `\nNOTE: this file is byte-identical to your previous lean_check — ` +
+            `if you meant to change it, your edit did not reach ${src}.`;
+        }
+        lastCheckedHash = hash;
+        text = `${header}\n\n${text}`;
         return { content: [{ type: "text", text }], details: { ok, cached: r.cached }, isError: r.error != null };
       } catch (e: any) {
         // "try again" only for genuinely transient faults — a permanent error phrased
