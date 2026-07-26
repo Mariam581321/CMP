@@ -31,8 +31,10 @@ print(f"finished {B}{len(done)}{N}/{total}   solved {G}{len(solved)}{N}   spent 
 for r in done[-12:]:
     if r.get("solved"): tag = f"{G}✓ solved{N}          "
     elif r.get("fail_reason") == "timeout": tag = f"{Y}⏱ timeout{N}         "
+    elif r.get("fail_reason") == "budget_exceeded": tag = f"{Y}$ budget{N}          "
     else: tag = f"{R}✗ {r.get('fail_reason','?')}{N}" + " " * max(0, 15 - len(str(r.get('fail_reason','?'))))
-    print(f"  {r['problem']:<20}{tag}{D}{r.get('turns','?')} turns  ${r.get('cost_usd') or 0:.3f}  {r.get('wall_s','?')}s{N}")
+    kw = f"  {Y}⚠ {','.join(r['suspicious_keywords'])}{N}" if r.get("suspicious_keywords") else ""
+    print(f"  {r['problem']:<20}{tag}{D}{r.get('turns','?')} turns  ${r.get('cost_usd') or 0:.3f}  {r.get('wall_s','?')}s{N}{kw}")
 
 active = []
 for d in sorted(glob.glob(f"{run}/*/")):

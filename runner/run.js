@@ -4,7 +4,8 @@
 //
 //   node runner/run.js --combo lean-search --problems problems/dev.txt
 //
-// Flags: --combo a,b ("" = baseline) --problems <file> --timeout <s> (3600)
+// Flags: --combo a,b ("" = baseline) --problems <file> --budget-std <usd> (1.00)
+//        --timeout <s> (43200, wall-clock backstop)
 //        --concurrency <n> (6) --model <id> --thinking <level> --run-id <s>
 //        --problems-dir <dir> (problems/; e.g. problems-nl/ for statements with
 //        the informal NL docstring kept)
@@ -23,7 +24,15 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const COMBO = (arg("combo", "") || "").split(",").map((s) => s.trim()).filter(Boolean);
 const PROBLEMS_FILE = arg("problems", join(ROOT, "problems/dev.txt"));
 const PROBLEMS_DIR = resolve(arg("problems-dir", join(ROOT, "problems")));
-const TIMEOUT_S = parseInt(arg("timeout", "3600"));
+// Attempts are capped by SPEND, not time: a per-problem budget in cost_std dollars
+// (tokens at the fixed off-peak table, so the cap is peak-invariant). Checked after each
+// assistant message, so enforcement lags by up to one message — accepted overshoot.
+// Wall clock stays only as a generous backstop: a hung REPL or silent provider emits no
+// usage events, so a spend cap alone would never fire. 0 disables the budget.
+// Backstop sizing: median sustained spend is ~$0.12/h (~9 h to $1), so anything shorter
+// than ~9 h would silently take over as the real cap for typical attempts.
+const BUDGET_STD = parseFloat(arg("budget-std", "1.00"));
+const TIMEOUT_S = parseInt(arg("timeout", "43200"));
 const CONCURRENCY = parseInt(arg("concurrency", "6"));
 const MODEL = arg("model", "deepseek/deepseek-v4-flash");
 const THINKING = arg("thinking", "off");
@@ -118,7 +127,7 @@ mkdirSync(runDir, { recursive: true });
 let gitSha = "unknown";
 try { gitSha = execSync("git rev-parse --short HEAD", { cwd: ROOT }).toString().trim(); } catch {}
 const RUN_STARTED = Date.now();
-writeFileSync(join(runDir, "run.json"), JSON.stringify({ run_id: RUN_ID, combo: COMBO, model: MODEL, thinking: THINKING, max_tokens: MAX_TOKENS || null, timeout_s: TIMEOUT_S, concurrency: CONCURRENCY, problems, problems_dir: PROBLEMS_DIR, git_sha: gitSha, peak_pricing_at_launch: IS_DEEPSEEK && inPeak(new Date(RUN_STARTED)), started_at: new Date(RUN_STARTED).toISOString() }, null, 2));
+writeFileSync(join(runDir, "run.json"), JSON.stringify({ run_id: RUN_ID, combo: COMBO, model: MODEL, thinking: THINKING, max_tokens: MAX_TOKENS || null, budget_std: BUDGET_STD || null, timeout_s: TIMEOUT_S, concurrency: CONCURRENCY, problems, problems_dir: PROBLEMS_DIR, git_sha: gitSha, peak_pricing_at_launch: IS_DEEPSEEK && inPeak(new Date(RUN_STARTED)), started_at: new Date(RUN_STARTED).toISOString() }, null, 2));
 
 const SYSTEM_PROMPT = `You are proving a theorem from a mathematics competition, formalized in Lean 4 with Mathlib.
 
@@ -149,7 +158,7 @@ console.log(bold(`\nrun ${RUN_ID}`));
 console.log(dim(`  combo:       ${COMBO.length ? COMBO.join(" + ") : "(baseline)"}`));
 console.log(dim(`  model:       ${MODEL} (thinking: ${THINKING})`));
 console.log(dim(`  problems:    ${problems.length} from ${PROBLEMS_FILE}`));
-console.log(dim(`  timeout:     ${TIMEOUT_S}s/problem   concurrency: ${CONCURRENCY}`));
+console.log(dim(`  budget:      ${BUDGET_STD > 0 ? `$${BUDGET_STD.toFixed(2)} @std/problem` : "(none)"}   timeout: ${TIMEOUT_S}s backstop   concurrency: ${CONCURRENCY}`));
 console.log(dim(`  results:     results/${RUN_ID}/\n`));
 
 const leanServer = await ensureLeanServer(join(runDir, "lean-server.log"));
@@ -173,6 +182,7 @@ async function attempt(name, idx) {
     "--model", MODEL, "--thinking", THINKING,
     "--tools", toolList.join(","),
     "-e", join(ROOT, "extensions", "lean-check.ts"),
+    "-e", join(ROOT, "extensions", "file-sandbox.ts"),
     ...(MAX_TOKENS > 0 ? ["-e", join(ROOT, "extensions", "max-tokens.ts")] : []),
     ...COMBO.flatMap((x) => ["-e", join(ROOT, "extensions", `${x}.ts`)]),
     "--system-prompt", FULL_SYSTEM_PROMPT,
@@ -184,6 +194,7 @@ async function attempt(name, idx) {
   const deadline = started + TIMEOUT_S * 1000;
   const stats = { turns: 0, toolCalls: {}, tokens: { in: 0, out: 0, cache_read: 0 }, cost: 0, providerErrors: 0, lastError: null };
   let timedOut = false;
+  let budgetExceeded = false;
   let lastStopReason = null;
 
   const spawnPi = (args) =>
@@ -232,6 +243,10 @@ async function attempt(name, idx) {
                 stats.tokens.out += u.output ?? 0;
                 stats.tokens.cache_read += u.cacheRead ?? 0;
                 stats.cost += u.cost?.total ?? 0;
+                if (BUDGET_STD > 0 && !budgetExceeded && costStd(stats.tokens) >= BUDGET_STD) {
+                  budgetExceeded = true;
+                  try { process.kill(-child.pid, "SIGKILL"); } catch {}
+                }
               }
             }
           } catch {}
@@ -251,7 +266,7 @@ async function attempt(name, idx) {
   let nudges = 0; // total, for the record
   let noProgress = 0; // consecutive nudges that produced no tool call (wall-clock still bounds everything)
   let callsAtNudge = 0;
-  while (noProgress < MAX_NUDGES && !timedOut && Date.now() < deadline - 30_000) {
+  while (noProgress < MAX_NUDGES && !timedOut && !budgetExceeded && Date.now() < deadline - 30_000) {
     let content;
     try { content = readFileSync(join(work, "problem.lean"), "utf8"); } catch { break; }
     const check = await serverCheck(content).catch(() => null);
@@ -271,6 +286,7 @@ async function attempt(name, idx) {
   const wallMs = Date.now() - started;
   const verdict = await grade(name, join(work, "problem.lean"), join(PROBLEMS_DIR, `${name}.lean`));
   if (timedOut && !verdict.solved) verdict.reason = "timeout";
+  if (budgetExceeded && !verdict.solved) verdict.reason = "budget_exceeded";
   // Errors only override the verdict when the agent never got to work (no tool calls):
   // a transient throttle mid-attempt that the agent recovered from is a real attempt,
   // and a proof that verified is solved regardless of what happened on the way.
@@ -285,7 +301,8 @@ async function attempt(name, idx) {
     turns: stats.turns, tokens: stats.tokens, cost_usd: +stats.cost.toFixed(5),
     cost_std: +costStd(stats.tokens).toFixed(5),
     provider_errors: stats.providerErrors,
-    tool_calls: stats.toolCalls, exit_code: exitCode, timed_out: timedOut, nudges,
+    tool_calls: stats.toolCalls, exit_code: exitCode, timed_out: timedOut,
+    budget_std: BUDGET_STD || null, budget_exceeded: budgetExceeded, nudges,
     solved: verdict.solved, fail_reason: verdict.solved ? null : verdict.reason,
     fail_detail: verdict.solved ? null : (verdict.detail ?? "").slice(0, 500),
     axioms: verdict.axioms ?? null, suspicious_keywords: verdict.suspicious_keywords ?? null,
@@ -295,7 +312,7 @@ async function attempt(name, idx) {
   appendFileSync(join(runDir, "results.jsonl"), JSON.stringify(record) + "\n");
 
   const tag =
-    (verdict.solved ? green("✓ solved ") : verdict.reason === "timeout" ? yellow("⏱ timeout") : red(`✗ ${verdict.reason}`)) +
+    (verdict.solved ? green("✓ solved ") : verdict.reason === "timeout" ? yellow("⏱ timeout") : verdict.reason === "budget_exceeded" ? yellow("$ budget ") : red(`✗ ${verdict.reason}`)) +
     (verdict.suspicious_keywords ? yellow(` ⚠ ${verdict.suspicious_keywords.join(",")}`) : "");
   const checks = stats.toolCalls.lean_check ?? 0;
   console.log(

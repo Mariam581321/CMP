@@ -118,6 +118,11 @@ in parentheses where a variant is already implemented/planned (tool designs in
 | 2a workers → summaries | worker results come back as summaries in the main thread | main agent + workers | compiler-checked facts travel via the main agent |
 | 2b workers → shared bank | the bank is the shared state; everyone reads it, nobody reads transcripts | main agent + workers | compiler gates writes; the bank is the channel |
 
+*Note (2a/2b): rethink the file sandbox before building workers — it pins each pi process
+to its own startup dir, so a worker in its own scratch dir can't read a bank in the main
+agent's work/. Either spawn workers with cwd = the shared work dir, or add an explicit
+read allowlist to `extensions/file-sandbox.ts`.*
+
 What each comparison isolates:
 
 - **0a vs 0b vs 0c** — same information source, three doors in. 0a→0b tightens the prompt,
@@ -160,7 +165,9 @@ What each comparison isolates:
 - **Model:** DeepSeek V4 Flash — cheap enough for full-benchmark sweeps across combos.
 - **Metric:** proof accepted by the Lean compiler (sorry-free), per problem.
 - **No budget parity:** report *(solve rate, cost)* per combo, let the tradeoff be part
-  of the result. Only a hard cap (turns/tokens/wall-clock) so runs terminate.
+  of the result. Only a hard cap so runs terminate: per-problem cost_std budget
+  ($1 @std default; peak-invariant), wall-clock only as a backstop for hangs and slow
+  spenders (0725 fateh autopsy: spend correlates with being on track, time does not).
 - **Eval protocol:** each combo runs the dataset once (pass@1; pass@n open). Dev iterates
   on a fixed subset — the same subset for every combo, so dev comparisons stay fair.
 - **Answer hygiene:** PutnamBench files leak answers (`_solution` comments,
@@ -233,12 +240,37 @@ See `DRAFT-experiment-notes-0717.md` for the full dev10/mid10 failure autopsy.
       addendum when that arm lands. Breaks comparability with the dev runs logged above.
 - [ ] Implement `derive` and `notes` (prompt-only arms).
 - [ ] Implement `facts` (gated `add_fact` + write-block — SKELETON § tool designs).
+- [ ] Sweep event logs for emergent harness-interaction behaviours (post-hoc from
+      `results/*/*/events.jsonl`, no re-running): tool misunderstandings, scratch
+      strategies, degenerate loops, strategy pivots. Two catalogued so far:
+      (a) scratch-file experimentation — baseline-p100/putnam_1967_a5 wrote
+      `fix_segment.lean` expecting lean_check to compile it (it only ever checks
+      problem.lean; grading-safe but burned confused turns) → candidate one-line
+      prompt clarification at the next prompt revision, never mid-experiment;
+      (b) check-spam loop — smoke-p100's 406 lean_check calls after a harness error
+      said "try again" on a permanent fault (fixed, 079de6d): weak models comply
+      literally with error-message advice, so error wording is harness design surface.
 - [ ] Cost management — analyse from data once runs exist in the new regime (uncapped
       output × 1 h timeouts makes runaway attempts pricier): from time-to-solve and
       token distributions, decide whether attempts need a token/turn cap besides
       wall-clock, and where the timeout should really sit. Whatever cap we pick must be
       identical across arms — a short one systematically biases against structured arms
       (dev10: plan converted compile errors into timeouts).
+      **Leading candidate (2026-07-25, Mariam): replace the wall-clock cap with a
+      per-attempt budget cap denominated in cost_std** — every cell becomes an isocost
+      comparison (what does each arm buy with $X?), immune to peak pricing, provider
+      latency, and REPL queueing, and it equalizes arms that burn tokens at different
+      wall rates (a parallel-subagent arm gets ~concurrency× the tokens under a time
+      cap; a budget cap is symmetric). Keep a generous wall-clock backstop (3–4 h,
+      infra-only — zero-token stalls consume no budget); enforcement = same live
+      kill-switch pattern as the timeout, run.js already tracks cumulative usage.
+      Set the number from p100's cost-at-solve distribution (late solves are the
+      expensive ones — P99 + margin). Requirement for subagent arms: child usage must
+      roll up into the parent attempt's ledger. Switch only at an experiment boundary
+      (breaks comparability with p100 and earlier, like the uncap change did).
+      p100 baseline evidence for the current regime: solves bimodal (8/11 < 20 min,
+      3/11 in the last third, none between), timeouts work the full hour at median
+      ~3.7k out-tok/min with median 0 nudges — the 1 h cap is binding, not slack.
 - [ ] Implement `replan`.
 - [ ] Scaffold-vs-discretion combos: `plan`+`lean-search` vs `plan`+`replan` (vs both) —
       see the experiment-1 readouts above.

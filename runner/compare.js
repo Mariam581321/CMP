@@ -32,15 +32,16 @@ const runs = dirs.map((dir) => {
 });
 
 const problems = [...new Set(runs.flatMap((r) => Object.keys(r.byProblem)))].sort();
-const shortReason = { statement_changed: "stmt", compile_error: "compile", uses_sorry: "sorry", bad_axioms: "axioms", unsafe_decl: "unsafe", timeout: "time", no_file: "nofile", runner_error: "runner", grader_error: "grader", provider_error: "provider" };
+const shortReason = { statement_changed: "stmt", compile_error: "compile", uses_sorry: "sorry", bad_axioms: "axioms", unsafe_decl: "unsafe", timeout: "time", budget_exceeded: "budget", no_file: "nofile", runner_error: "runner", grader_error: "grader", provider_error: "provider" };
 
 const colW = Math.max(...runs.map((r) => r.name.length), 16) + 2;
 const cell = (rec) => {
   if (!rec) return dim("—".padEnd(colW));
   const cost = rec.cost_usd != null ? ` $${rec.cost_usd.toFixed(3)}` : "";
-  const plain = rec.solved ? `✓${cost}` : rec.fail_reason === "timeout" ? `⏱${cost}` : `✗ ${shortReason[rec.fail_reason] ?? rec.fail_reason}${cost}`;
+  // timeout and budget_exceeded are resource exhaustion, not wrong answers — yellow
+  const plain = rec.solved ? `✓${cost}` : rec.fail_reason === "timeout" ? `⏱${cost}` : rec.fail_reason === "budget_exceeded" ? `$${cost}` : `✗ ${shortReason[rec.fail_reason] ?? rec.fail_reason}${cost}`;
   const padded = plain.padEnd(colW);
-  return rec.solved ? green(padded) : rec.fail_reason === "timeout" ? yellow(padded) : red(padded);
+  return rec.solved ? green(padded) : ["timeout", "budget_exceeded"].includes(rec.fail_reason) ? yellow(padded) : red(padded);
 };
 
 console.log(bold(`\n${"problem".padEnd(20)}${runs.map((r) => r.name.slice(0, colW - 1).padEnd(colW)).join("")}`));

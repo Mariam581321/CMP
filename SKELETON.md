@@ -22,7 +22,9 @@ rate + cost. pi supports DeepSeek natively (`deepseek/deepseek-v4-flash`, reads
    Baseline = read/edit/write + `lean_check` only (no bash/grep). Combo = extra `-e`
    flags. `extensions/<name>.prompt.md` is appended to the system prompt when `<name>` is
    in the combo, so prompt deltas are versioned per arm.
-3. Streams all JSON events to `events.jsonl`; kills the process at a wall-clock cap.
+3. Streams all JSON events to `events.jsonl`; kills the process when the per-problem
+   cost_std budget is spent (wall-clock cap kept only as a backstop for attempts that
+   hang or spend slowly).
 4. **Grades independently** after the agent exits (never trust the agent's own
    lean_check).
 5. Appends one record to the run's `results.jsonl`.
@@ -122,7 +124,7 @@ attempt:
  "model": "deepseek-v4-flash", "started_at": "...", "wall_s": 412, "turns": 14,
  "tokens": {"in": 84000, "out": 9100, "cache_read": 2400000}, "cost_usd": 0.021, "cost_std": 0.021,
  "tool_calls": {"lean_check": 6, "search_mathlib": 3},
- "solved": false, "fail_reason": "timeout|uses_sorry|compile_error|statement_changed|unsafe_decl|bad_axioms|provider_error",
+ "solved": false, "fail_reason": "budget_exceeded|timeout|uses_sorry|compile_error|statement_changed|unsafe_decl|bad_axioms|provider_error",
  "suspicious_keywords": null, "harness_git_sha": "..."}
 ```
 Everything raw is kept, so any stat (tool-use patterns, time-to-first-check, error types)
@@ -151,7 +153,9 @@ results/                    per-run dirs + results.jsonl (gitignored)
 ```
 --combo a,b          extension names = filenames in extensions/ ("" = baseline)
 --problems <file>    problem list | --problems-dir <dir> (problems/; problems-nl/ for the NL arm)
---timeout <s>        (3600) | --concurrency <n> (6)
+--budget-std <usd>   (1.00) per-problem spend cap in cost_std dollars (peak-invariant;
+                     checked per assistant message, so overshoot ≤ 1 message; 0 disables)
+--timeout <s>        (43200) wall-clock backstop | --concurrency <n> (6)
 --model <id>         deepseek/deepseek-v4-flash | --thinking <level> (off)
 --max-tokens <n>     per-response output cap, always sent (default 384000 = model max;
                      set low, e.g. 8192, only for capped experiment cells)
@@ -288,5 +292,5 @@ external-uptime dependency.
 
 ## Punted (deliberately)
 
-Turn caps (timeout only), retries/resume, dashboards, lean4checker kernel
+Turn caps (cost_std budget + wall-clock backstop only), retries/resume, dashboards, lean4checker kernel
 re-verification (add before publishing numbers), FATE, all not-yet-built arms.

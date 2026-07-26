@@ -33,9 +33,9 @@ for (const runDir of dirs) {
     if (!existsSync(attemptPath) || !existsSync(solPath)) { skipped++; continue; }
     const old = JSON.parse(readFileSync(attemptPath, "utf8"));
     const now = await grade(name, solPath, join(problemsDir, `${name}.lean`));
-    // timeout/provider_error are run-level overrides the grader can't see — keep comparable
+    // timeout/budget_exceeded/provider_error are run-level overrides the grader can't see — keep comparable
     const oldReason = old.solved ? "solved" : old.fail_reason;
-    const newReason = now.solved ? "solved" : ["timeout", "provider_error"].includes(oldReason) ? oldReason : now.reason;
+    const newReason = now.solved ? "solved" : ["timeout", "budget_exceeded", "provider_error"].includes(oldReason) ? oldReason : now.reason;
     const kw = now.suspicious_keywords ? yellow(`  ⚠ ${now.suspicious_keywords.join(",")}`) : "";
     if (oldReason === newReason) {
       same++;
