@@ -79,10 +79,22 @@ export default function (pi: ExtensionAPI) {
       return;
     }
     let check: any = null;
-    try {
-      check = await serverCheck(content, undefined, problem);
-    } catch (e: any) {
-      dbg("serverCheck failed:", e?.message);
+    // Connection-level failures (server dead, mid-restart) are waited out HERE, like
+    // lean_check does in-tool: a nudge composed from "no check result available"
+    // keeps the loop hot while nothing can be checked (2026-07-26 outage: >$2 of
+    // retry storm). Waiting costs zero tokens; no deadline — the runner's wall-clock
+    // backstop bounds the attempt, and the STOP file still aborts cleanly.
+    for (;;) {
+      try {
+        check = await serverCheck(content, undefined, problem);
+        break;
+      } catch (e: any) {
+        const connErr = /ECONNREFUSED|ECONNRESET|EPIPE|socket hang up/i.test(`${e?.code ?? ""} ${e?.message ?? ""}`);
+        if (!connErr) { dbg("serverCheck failed:", e?.message); break; }
+        if (existsSync(join(work, "..", "STOP"))) return;
+        dbg("server down, waiting:", e?.message);
+        await new Promise((r) => setTimeout(r, 10_000));
+      }
     }
     dbg("check:", { ok: check?.ok, sorries: (check?.sorries ?? []).length });
     if (check?.ok && (check.sorries ?? []).length === 0) return; // verified done — let the attempt end

@@ -115,9 +115,13 @@ re-verification of an unchanged file is ~free; memo hits skip the queue entirely
 **Scheduling (one REPL, many agents).** Requests carry a `client` id (problem name;
 the grader is just another client) and are served round-robin across clients, so an
 attempt with many queued checks waits behind itself, not in front of everyone else
-(one check-spamming attempt once starved a whole run). Agent-facing checks get a
-tight REPL budget (default 120 s, `--check-timeout`) — honest proof steps check in
-seconds, and the bound caps head-of-line blocking; the grader keeps 480 s. A
+(one check-spamming attempt once starved a whole run). ONE compile budget (default
+120 s, `--check-timeout`) defines "compiles" for agent checks, supervisor, and
+grader alike (2026-07-27: a solve must be observable inside the agent's own loop; a
+480 s probe of the 0726 timeout files found no solves in the 120–480 s band) —
+honest proof steps check in seconds, and the bound caps head-of-line blocking. The
+grader's final verdict bypasses the memo (`force`) so it always comes from a real
+compile. A
 watchdog-killed check is *deterministic* for that file, so the server tags it
 (`kind: check_timeout`), memoizes the verdict (resubmitting the identical file is
 free), and `lean_check` tells the agent to simplify instead of "try again" — error
@@ -204,7 +208,8 @@ results/                    per-run dirs + results.jsonl (gitignored)
 --model <id>         deepseek/deepseek-v4-flash | --thinking <level> (off)
 --max-tokens <n>     per-response output cap, always sent (default 384000 = model max;
                      set low, e.g. 8192, only for capped experiment cells)
---check-timeout <s>  (120) REPL budget per agent-facing check (grader keeps 480 s)
+--check-timeout <s>  (120) REPL budget per check — the ONE budget shared by agent
+                     checks, supervisor, and grader (it defines "compiles")
 --run-id <s>         default combo+timestamp
 --peak-ok            allow launching during DeepSeek peak hours (see below)
 ```

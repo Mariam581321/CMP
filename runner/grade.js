@@ -72,7 +72,10 @@ export async function grade(problemName, solutionPath, originalPath) {
   const probes = `${stmtProbe(decls)}\n${decls.map((d) => `#print axioms ${d}`).join("\n")}\n`;
   let r;
   try {
-    r = await serverCheck(`${solution}\n${probes}`);
+    // force: the official verdict always comes from a fresh compile, not the memo —
+    // an agent-side timeout memoized under the same code hash must not stand in for
+    // the grader's own run.
+    r = await serverCheck(`${solution}\n${probes}`, undefined, "grader", true);
   } catch (e) {
     return fail("grader_error", `lean server unreachable: ${e.message}`);
   }

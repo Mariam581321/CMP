@@ -222,7 +222,13 @@ tie on solves while separating on cost and failure mix).
   difficulty pilot and `answer(sorry)` grader support first. FATE-X: deprioritized,
   likely near-floor for this model.
 - **Model:** DeepSeek V4 Flash — cheap enough for full-benchmark sweeps across combos.
-- **Metric:** proof accepted by the Lean compiler (sorry-free), per problem.
+- **Metric:** proof accepted by the Lean compiler (sorry-free) within the shared
+  120 s check budget, per problem. One budget for agent checks, supervisor, and
+  grader (2026-07-27): a solve must be observable inside the agent's own feedback
+  loop, and the verdict for a file must not depend on who compiled it first. The
+  grader's final verdict is always a fresh memo-bypassing compile. (Empirical
+  backing: all 12 solves of the 0726 night20 run passed a green 120 s agent check
+  on the final file; recompiling its timed-out files at 480 s produced zero solves.)
 - **No budget parity:** report *(solve rate, cost)* per combo, let the tradeoff be part
   of the result. Only a hard cap so runs terminate: per-problem cost_std budget
   ($1 @std default; peak-invariant), wall-clock only as a backstop for hangs and slow

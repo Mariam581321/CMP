@@ -17,13 +17,16 @@ import { postCheck, classifyLines, cmpConfig } from "./common.js";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const STMT_CACHE = join(ROOT, "problems", "stmt-types.json");
 
-// timeoutMs bounds REPL execution; clients wait longer since queueing is unbounded.
-export const GRADE_TIMEOUT_MS = 480_000;
-// Agent-facing checks get a much tighter REPL budget (run.js --check-timeout, via
-// CMP_CONFIG): honest proof steps check in seconds; what this bounds is head-of-line
-// blocking on the serialized REPL (one stuck attempt costs the others at most ~2 min,
-// not the watchdog's 4-5).
+// ONE compile budget defines "compiles" — agent checks, supervisor, and grader all
+// use it (2026-07-27). A solve must be observable inside the agent's own feedback
+// loop: with a larger grader budget, a proof the agent's tool rejects as "too
+// expensive" could secretly count as solved, and the verdict for a file would depend
+// on who compiled it first (the memo is keyed by code hash alone). Probe of the
+// 0726 night's 120 s-timeout files at 480 s: every one still failed — the band held
+// no solves. timeoutMs bounds REPL execution (head-of-line blocking on the shared
+// REPL stays ≤ ~2 min); clients wait longer since queueing is unbounded.
 export const AGENT_CHECK_TIMEOUT_MS = cmpConfig().check_timeout_ms ?? 120_000;
+export const GRADE_TIMEOUT_MS = AGENT_CHECK_TIMEOUT_MS;
 const CLIENT_WAIT_MS = 30 * 60_000; // server queue is serialized; be patient
 
 // Names of the declarations the benchmark expects (theorem + optional _solution abbrev).
@@ -113,8 +116,11 @@ export function parseStmtProbe(messages) {
 }
 
 // --- lean-server client ------------------------------------------------------
-export function serverCheck(code, timeoutMs = GRADE_TIMEOUT_MS, client = "grader") {
-  return postCheck({ code, timeoutMs, client }, CLIENT_WAIT_MS);
+// force=true bypasses the server memo: the final grading verdict must come from an
+// actual compile, never a cache entry (memo is bounded/evicting, and crashes are
+// unmemoized anyway — this closes the remaining gap).
+export function serverCheck(code, timeoutMs = GRADE_TIMEOUT_MS, client = "grader", force = false) {
+  return postCheck({ code, timeoutMs, client, force }, CLIENT_WAIT_MS);
 }
 
 // --- original-side types (cached) -------------------------------------------

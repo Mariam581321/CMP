@@ -41,11 +41,29 @@ export default function (pi: ExtensionAPI) {
         const problemName = basename(origPath, ".lean");
         const code = readFileSync(src, "utf8");
         const hash = createHash("md5").update(code).digest("hex").slice(0, 12);
-        const r = (await checkedCompile(code, {
-          original: readFileSync(origPath, "utf8"),
-          problemName,
-          client: problemName,
-        })) as any;
+        // Connection-level failures (server dead, mid-restart) are retried HERE,
+        // inside the tool, where waiting costs zero tokens. Bouncing the error to
+        // the model instead costs a full turn per retry — with the whole growing
+        // context re-billed as input — and a dead server turns that into an hours-
+        // long paid spiral (2026-07-26: ~70 min x 10 agents of ECONNREFUSED loops).
+        // Typed server responses (check_timeout, crash) are NOT retried; only
+        // throws where no server response arrived at all.
+        const deadline = Date.now() + 5 * 60_000;
+        let r: any;
+        for (;;) {
+          try {
+            r = (await checkedCompile(code, {
+              original: readFileSync(origPath, "utf8"),
+              problemName,
+              client: problemName,
+            })) as any;
+            break;
+          } catch (e: any) {
+            const connErr = /ECONNREFUSED|ECONNRESET|EPIPE|socket hang up/i.test(`${e?.code ?? ""} ${e?.message ?? ""}`);
+            if (!connErr || signal?.aborted || Date.now() + 10_000 > deadline) throw e;
+            await new Promise((res) => setTimeout(res, 10_000));
+          }
+        }
 
         if (r.error) {
           // The server classifies its own failures. A check the REPL watchdog killed
