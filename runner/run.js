@@ -169,7 +169,7 @@ Rules:
 - Replace every \`sorry\` with real content. If there is an \`abbrev ..._solution := sorry\`, you must determine the answer yourself and fill it in too.
 - NEVER modify the theorem statement, imports, or \`open\` lines. Only replace what comes after \`:=\` / fill in sorries. You may add helper lemmas ABOVE the theorem.
 - No new \`axiom\` declarations. No \`native_decide\`.
-- Use the lean_check tool to compile and verify your work. You are NOT done until lean_check reports no errors and no 'declaration uses sorry' warnings.
+- Use the lean_check tool to compile and verify your work. lean_check compiles exactly one file — problem.lean; no other file you create is ever compiled, checked, or graded, so scratch .lean files are inert text. You are NOT done until lean_check reports no errors and no 'declaration uses sorry' warnings.
 - Work efficiently: think before checking, since each check takes about a minute.
 - NEVER end your response without a tool call unless lean_check has passed. Analysis alone is not an answer — put your reasoning into the proof and verify it.`;
 

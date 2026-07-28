@@ -24,9 +24,9 @@ export default function (pi: ExtensionAPI) {
     label: "Lean check",
     description:
       "Compile problem.lean with Lean 4 + Mathlib and return the compiler output. " +
-      "This is the ground truth for whether your proof is accepted. " +
-      "Checks are queued; make each check count.",
-    promptSnippet: "lean_check - compile problem.lean and get Lean compiler errors/warnings",
+      "This tool takes no arguments and only ever compiles problem.lean — it cannot see any other file. " +
+      "This is the ground truth for whether your proof is accepted.",
+    promptSnippet: "lean_check - compile problem.lean (the only file ever compiled) and get Lean compiler errors/warnings",
     parameters: Type.Object({}),
     async execute(_toolCallId, _params, signal, _onUpdate, ctx) {
       const src = join(ctx.cwd, "problem.lean");
