@@ -44,7 +44,14 @@ export function benchmarkDecls(originalSource) {
 // Lean code appended to a file before sending it to the REPL. After the file
 // elaborates, it reads each benchmark declaration out of the environment and prints
 // one info line:  CMPSTMT|<name>|<kind>|<safety>|<sorry|clean>|<canonical type>
-// (or |missing). The canonical type erases binder names (α-equivalence), elaboration
+// (or |missing), plus one CMPVAL|<name>|<canonical value> line per def/abbrev
+// ("-" for theorems — proofs are the agent's to write and can be huge). The value
+// line closes the setup-definition hole: a theorem's TYPE references file-local
+// defs by NAME only, so an agent could gut a setup def's body (dist_to_int := fun
+// _ => 0, verified exploitable 2026-07-28) without changing the theorem's type.
+// Which decls must keep their value is decided caller-side: exactly those whose
+// ORIGINAL value is sorry-free (setup defs yes; the sorry'd _solution slot no).
+// The canonical type erases binder names (α-equivalence), elaboration
 // metadata, and universe param names, then prints the raw kernel expression — fully
 // resolved constants, no notation — so string equality on it is exact type equality.
 // The sorry field reports whether the declaration's own proof term reaches sorryAx
@@ -99,16 +106,29 @@ run_cmd do
         | .recInfo v => ("rec", if v.isUnsafe then "unsafe" else "safe")
       let ds := if CMPSorryGo env n {} [n] then "sorry" else "clean"
       let lvls := ci.levelParams
-      let ty := ci.type.instantiateLevelParams lvls
-        ((List.range lvls.length).map fun i => Level.param (Name.mkSimple s!"cmpu{i}"))
+      let uls := (List.range lvls.length).map fun i => Level.param (Name.mkSimple s!"cmpu{i}")
+      let ty := ci.type.instantiateLevelParams lvls uls
       logInfo s!"CMPSTMT|{n}|{kind}|{safety}|{ds}|{(CMPStmtCanon ty).dbgToString}"
+      let vs := match ci with
+        | .defnInfo v => (CMPStmtCanon (v.value.instantiateLevelParams lvls uls)).dbgToString
+        | _ => "-"
+      logInfo s!"CMPVAL|{n}|{vs}"
 `;
 }
 
 export function parseStmtProbe(messages) {
   const out = {};
   for (const m of messages ?? []) {
-    const mm = /^CMPSTMT\|([^|\s]+)\|([\s\S]*)$/.exec((m.text ?? "").trim());
+    const t = (m.text ?? "").trim();
+    // Values ride on separate CMPVAL lines (emitted right after the decl's CMPSTMT
+    // line). Attach-to-existing keeps last-wins: a spoofed line earlier in the file
+    // is overwritten by the real probe's, which runs at the end.
+    const mv = /^CMPVAL\|([^|\s]+)\|([\s\S]*)$/.exec(t);
+    if (mv) {
+      if (out[mv[1]] && !out[mv[1]].missing) out[mv[1]].value = mv[2];
+      continue;
+    }
+    const mm = /^CMPSTMT\|([^|\s]+)\|([\s\S]*)$/.exec(t);
     if (!mm) continue;
     if (mm[2] === "missing") { out[mm[1]] = { missing: true }; continue; }
     const p = /^(\w+)\|(\w+)\|(\w+)\|([\s\S]*)$/.exec(mm[2]);
@@ -134,13 +154,17 @@ export function serverCheck(code, timeoutMs = GRADE_TIMEOUT_MS, client = "grader
 // graders from clobbering each other's entries within a process; a cross-process race
 // at worst drops an entry, which is then recomputed.
 const memoOrig = new Map();
+// An entry written before the value probe existed lacks .value on every decl; the
+// sha key alone would keep serving it and silently skip the value check — treat it
+// as a miss and recompute.
+const hasValues = (entry) => Object.values(entry?.decls ?? {}).every((d) => d.value !== undefined);
 export async function originalStmtTypes(problemName, originalSource, decls) {
   const sha = createHash("sha256").update(originalSource).digest("hex");
   const hit = memoOrig.get(problemName);
   if (hit?.sha === sha) return hit.decls;
   let disk = {};
   try { disk = JSON.parse(readFileSync(STMT_CACHE, "utf8")); } catch {}
-  if (disk[problemName]?.sha256 === sha) {
+  if (disk[problemName]?.sha256 === sha && hasValues(disk[problemName])) {
     memoOrig.set(problemName, { sha, decls: disk[problemName].decls });
     return disk[problemName].decls;
   }
@@ -177,6 +201,11 @@ export async function verifyStatement(problemName, originalSource, messages) {
       return { ok: false, detail: `the statement of ${d} no longer elaborates to the original type` };
     if (s.kind !== orig[d].kind)
       return { ok: false, detail: `${d} changed declaration kind (${orig[d].kind} -> ${s.kind})` };
+    // Value preservation: a setup def's body is part of the statement (the theorem's
+    // type references it by name only). Enforced exactly where the original's own
+    // value is sorry-free — the sorry'd slots (_solution, the proof) are the agent's.
+    if (!orig[d].direct_sorry && orig[d].value != null && orig[d].value !== "-" && s.value !== orig[d].value)
+      return { ok: false, detail: `the definition of ${d} was changed — its body is part of the problem statement and must stay exactly as given` };
     if (s.safety !== "safe")
       return { ok: false, detail: `${d} is marked ${s.safety}; unsafe/partial declarations are not accepted` };
   }
@@ -186,7 +215,7 @@ export async function verifyStatement(problemName, originalSource, messages) {
 // Remove the probe's CMPSTMT info lines from server pretty-output before showing it
 // to the agent (grader internals are not part of the compiler feedback).
 export function stripProbeOutput(pretty) {
-  return (pretty ?? "").split("\n\n").filter((p) => !p.includes("CMPSTMT")).join("\n\n");
+  return (pretty ?? "").split("\n\n").filter((p) => !p.includes("CMPSTMT") && !p.includes("CMPVAL")).join("\n\n");
 }
 
 // --- agent-facing check client ----------------------------------------------

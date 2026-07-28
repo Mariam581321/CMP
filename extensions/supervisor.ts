@@ -22,7 +22,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { serverCheck } from "../runner/stmt.js";
+import { checkedCompile, serverCheck } from "../runner/stmt.js";
 import { cmpConfig, costStd } from "../runner/common.js";
 
 export default function (pi: ExtensionAPI) {
@@ -79,14 +79,22 @@ export default function (pi: ExtensionAPI) {
       return;
     }
     let check: any = null;
+    // checkedCompile, not bare serverCheck: (a) same code+probe body as the agent's
+    // own lean_check, so the memo key matches and this check is usually free instead
+    // of a duplicate REPL compile per agent_end; (b) "done" carries the statement
+    // verdict, so a statement-tampered file that compiles sorry-free is nudged about
+    // instead of silently ending into a statement_changed grade.
     // Connection-level failures (server dead, mid-restart) are waited out HERE, like
     // lean_check does in-tool: a nudge composed from "no check result available"
     // keeps the loop hot while nothing can be checked (2026-07-26 outage: >$2 of
     // retry storm). Waiting costs zero tokens; no deadline — the runner's wall-clock
     // backstop bounds the attempt, and the STOP file still aborts cleanly.
+    const origPath: string | undefined = cfg.original_file;
     for (;;) {
       try {
-        check = await serverCheck(content, undefined, problem);
+        check = origPath && existsSync(origPath)
+          ? await checkedCompile(content, { original: readFileSync(origPath, "utf8"), problemName: problem, client: problem })
+          : await serverCheck(content, undefined, problem); // adhoc run without CMP_CONFIG
         break;
       } catch (e: any) {
         const connErr = /ECONNREFUSED|ECONNRESET|EPIPE|socket hang up/i.test(`${e?.code ?? ""} ${e?.message ?? ""}`);
@@ -96,8 +104,9 @@ export default function (pi: ExtensionAPI) {
         await new Promise((r) => setTimeout(r, 10_000));
       }
     }
-    dbg("check:", { ok: check?.ok, sorries: (check?.sorries ?? []).length });
-    if (check?.ok && (check.sorries ?? []).length === 0) return; // verified done — let the attempt end
+    const stmtBad = check?.stmt?.ok === false;
+    dbg("check:", { ok: check?.ok, sorries: (check?.sorries ?? []).length, stmtBad });
+    if (check?.ok && (check.sorries ?? []).length === 0 && !stmtBad) return; // verified done — let the attempt end
 
     noProgress = actions > actionsAtNudge ? 0 : noProgress + 1;
     actionsAtNudge = actions;
@@ -107,6 +116,9 @@ export default function (pi: ExtensionAPI) {
       (lastStopReason === "length"
         ? `Your last message hit the output-token limit and was CUT OFF — everything after the cutoff is lost. Do not restart the derivation in chat. Write your current best attempt into problem.lean NOW (state intermediate facts as \`have\` steps closed by ring/linarith/norm_num etc.; leave hard parts as sorry'd steps) and run lean_check.\n\n`
         : `You are not done. `) +
+      (stmtBad
+        ? `IMPORTANT: you modified the theorem statement (${check.stmt.detail}). Proofs of a modified statement do not count — restore the original statement exactly; you may only fill sorries and add helper lemmas above it.\n\n`
+        : "") +
       `Checking your current problem.lean reports:\n\n${(check?.pretty ?? "no check result available").slice(0, 3000)}\n\nFix this and run lean_check; do not stop until it passes with no errors and no sorries.`;
     try {
       // pi.sendUserMessage (ExtensionAPI, not the event ctx): messages queued by

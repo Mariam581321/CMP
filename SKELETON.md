@@ -62,7 +62,13 @@ the declaration's own proof term reaches `sorry` directly (recursing only into i
 compiler-generated auxiliaries, never into user-declared helpers — used by
 `plan_check`, not by grading), and the elaborated type canonicalized (binder names
 erased, elaboration metadata stripped, universe params renamed) and printed as a raw
-kernel expression with fully-resolved constant names.
+kernel expression with fully-resolved constant names. For def/abbrev declarations the
+probe also prints the canonicalized **value** (the body): a theorem's type references
+file-local setup defs by *name* only, so type equality alone would let an agent gut a
+setup def's body (verified exploitable: `dist_to_int := fun _ => 0` passed the type
+check, 2026-07-28). Value equality is enforced exactly for decls whose *original*
+value is sorry-free — setup defs must be preserved; the sorry'd slots (proofs, the
+`_solution` abbrev) remain the agent's to fill.
 Original-side answers come from the same probe run once per problem and cached in
 `problems/stmt-types.json`, keyed by source hash (derived + gitignored like the problem
 files; `node runner/grade.js --build-stmt-cache` rebuilds all, grade.js lazily fills
@@ -73,7 +79,8 @@ verdicts don't require a compiling proof.
 **Verdict order** (first hit wins, so reason distributions stay comparable with v1):
 
 1. `statement_changed` — declaration missing (renamed/deleted/statement doesn't
-   elaborate), type differs, or kind differs (e.g. theorem redeclared as `axiom`/`def`).
+   elaborate), type differs, kind differs (e.g. theorem redeclared as `axiom`/`def`),
+   or a sorry-free setup definition's body differs from the original.
 2. `unsafe_decl` — declaration not `safe`: `unsafe` code may use kernel bypasses like
    `unsafeCast`. (`unsafe theorem` is illegal in Lean, so only the `_solution` def slot
    is exposed; `#print axioms` happens to flag today's `unsafeCast` pattern via
@@ -81,7 +88,10 @@ verdicts don't require a compiling proof.
 3. `compile_error` — any error-severity message. If the file is so broken the parser
    never reaches the probe (unterminated comment/bracket), it grades here with
    "statement unknown" in the detail — the one case where statement preservation is
-   genuinely undeterminable.
+   genuinely undeterminable. A grading compile that hits the shared 120 s budget also
+   grades here (determinate fail under the one-budget metric, not a `grader_error`;
+   the grader additionally retries connection-level server failures for 5 min, since
+   its verdict is permanent).
 4. `uses_sorry` / `bad_axioms` — `#print axioms` per benchmark declaration must stay
    within `{propext, Classical.choice, Quot.sound}`; catches `sorry` (sorryAx), smuggled
    axioms (recorded in the env no matter how obfuscated their construction), and
@@ -204,7 +214,7 @@ results/                    per-run dirs + results.jsonl (gitignored)
 --problems <file>    problem list | --problems-dir <dir> (problems/; problems-nl/ for the NL arm)
 --budget-std <usd>   (1.00) per-problem spend cap in cost_std dollars (peak-invariant;
                      checked per assistant message, so overshoot ≤ 1 message; 0 disables)
---timeout <s>        (43200) wall-clock backstop | --concurrency <n> (6)
+--timeout <s>        (172800) wall-clock backstop | --concurrency <n> (6)
 --model <id>         deepseek/deepseek-v4-flash | --thinking <level> (off)
 --max-tokens <n>     per-response output cap, always sent (default 384000 = model max;
                      set low, e.g. 8192, only for capped experiment cells)

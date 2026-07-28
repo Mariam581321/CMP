@@ -1,7 +1,10 @@
 // Independent grading of a finished attempt. Never trusts the agent's own lean_check.
 // Checks: (1) theorem statement preserved — the elaborated TYPE of every benchmark
 //             declaration must match the original's, compared α-invariantly via the
-//             probe in runner/stmt.js (a statement means its type),
+//             probe in runner/stmt.js (a statement means its type), AND the elaborated
+//             VALUE of every benchmark decl whose original body is sorry-free (setup
+//             defs are referenced by name in the theorem's type, so their bodies are
+//             part of the statement; sorry'd slots — proofs, _solution — are exempt),
 //         (2) declaration kind (thm/defn) unchanged and not marked unsafe/partial
 //             (unsafe code may use kernel bypasses like unsafeCast; the axiom report
 //             does not surface those),
@@ -19,7 +22,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { classifyLines } from "./common.js";
+import { classifyLines, withConnRetry } from "./common.js";
 import { benchmarkDecls, stmtProbe, parseStmtProbe, originalStmtTypes, serverCheck, stripProbeOutput } from "./stmt.js";
 
 export { serverCheck } from "./stmt.js";
@@ -64,7 +67,7 @@ export async function grade(problemName, solutionPath, originalPath) {
 
   let orig;
   try {
-    orig = await originalStmtTypes(problemName, original, decls);
+    orig = await withConnRetry(() => originalStmtTypes(problemName, original, decls));
   } catch (e) {
     return fail("grader_error", `original stmt types: ${e.message}`);
   }
@@ -74,11 +77,17 @@ export async function grade(problemName, solutionPath, originalPath) {
   try {
     // force: the official verdict always comes from a fresh compile, not the memo —
     // an agent-side timeout memoized under the same code hash must not stand in for
-    // the grader's own run.
-    r = await serverCheck(`${solution}\n${probes}`, undefined, "grader", true);
+    // the grader's own run. Connection failures are retried for 5 min (withConnRetry):
+    // this verdict is permanent, so a REPL mid-restart must be waited out, not recorded.
+    r = await withConnRetry(() => serverCheck(`${solution}\n${probes}`, undefined, "grader", true));
   } catch (e) {
     return fail("grader_error", `lean server unreachable: ${e.message}`);
   }
+  // A check_timeout is a determinate verdict under the one-budget metric ("compiles"
+  // = compiles within the shared 120 s), not a grader malfunction: the file is too
+  // expensive to compile, which is a fail the same way a compile error is.
+  if (r.error && r.kind === "check_timeout")
+    return fail("compile_error", `statement unknown (grading check timed out — file too expensive to compile within the shared check budget)\n${r.error}`);
   if (r.error) return fail("grader_error", r.error);
   // Probe/axiom internals stay out of recorded details — only real compiler output.
   const pretty = stripProbeOutput(r.pretty);
@@ -101,6 +110,12 @@ export async function grade(problemName, solutionPath, originalPath) {
       return fail("statement_changed", `${d}: elaborated type differs from original\n  expected: ${orig[d].type.slice(0, 300)}\n  got:      ${s.type.slice(0, 300)}`);
     if (s.kind !== orig[d].kind)
       return fail("statement_changed", `${d}: declaration kind changed (${orig[d].kind} -> ${s.kind})`);
+    // Setup-definition bodies are part of the statement: the theorem's type references
+    // them by NAME, so type equality alone lets a gutted body through (verified with
+    // dist_to_int := fun _ => 0, 2026-07-28). Compared exactly where the original's
+    // own value is sorry-free — the sorry'd slots (proofs, _solution) stay the agent's.
+    if (!orig[d].direct_sorry && orig[d].value != null && orig[d].value !== "-" && s.value !== orig[d].value)
+      return fail("statement_changed", `${d}: definition body differs from original (setup definitions are part of the statement)\n  expected: ${orig[d].value.slice(0, 300)}\n  got:      ${(s.value ?? "").slice(0, 300)}`);
     if (s.safety !== "safe")
       return fail("unsafe_decl", `${d}: declaration is marked ${s.safety}`);
   }

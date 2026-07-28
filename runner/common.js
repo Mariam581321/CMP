@@ -35,6 +35,25 @@ export function postCheck(body, timeoutMs) {
   });
 }
 
+// Retry fn() across connection-level failures (server dead / mid-restart) for up to
+// deadlineMs. Typed server responses are results, not throws, and are never retried;
+// this only covers "no response arrived at all". The grader uses it because its
+// verdict is recorded permanently — a REPL restart at grading time must not turn a
+// valid proof on disk into a forever grader_error. (lean_check and the supervisor
+// carry their own production-validated variants of this loop.)
+export async function withConnRetry(fn, deadlineMs = 5 * 60_000) {
+  const deadline = Date.now() + deadlineMs;
+  for (;;) {
+    try {
+      return await fn();
+    } catch (e) {
+      const connErr = /ECONNREFUSED|ECONNRESET|EPIPE|socket hang up/i.test(`${e?.code ?? ""} ${e?.message ?? ""}`);
+      if (!connErr || Date.now() + 10_000 > deadline) throw e;
+      await new Promise((r) => setTimeout(r, 10_000));
+    }
+  }
+}
+
 // --- CLI --------------------------------------------------------------------
 export function arg(name, dflt) {
   const i = process.argv.indexOf(`--${name}`);
