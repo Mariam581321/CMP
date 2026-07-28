@@ -5,7 +5,7 @@
 //   node runner/run.js --combo lean-search --problems problems/dev.txt
 //
 // Flags: --combo a,b ("" = baseline) --problems <file> --budget-std <usd> (1.00)
-//        --timeout <s> (43200, wall-clock backstop)
+//        --timeout <s> (172800, wall-clock backstop)
 //        --concurrency <n> (6) --model <id> --thinking <level> --run-id <s>
 //        --problems-dir <dir> (problems/; e.g. problems-nl/ for statements with
 //        the informal NL docstring kept)
@@ -33,7 +33,7 @@ try {
       problems: { type: "string", default: join(ROOT, "problems/dev.txt") },
       "problems-dir": { type: "string", default: join(ROOT, "problems") },
       "budget-std": { type: "string", default: "1.00" },
-      timeout: { type: "string", default: "43200" },
+      timeout: { type: "string", default: "172800" },
       concurrency: { type: "string", default: "6" },
       model: { type: "string", default: "deepseek/deepseek-v4-flash" },
       thinking: { type: "string", default: "off" },
@@ -56,8 +56,10 @@ const PROBLEMS_DIR = resolve(A["problems-dir"]);
 // assistant message, so enforcement lags by up to one message — accepted overshoot.
 // Wall clock stays only as a generous backstop: a hung REPL or silent provider emits no
 // usage events, so a spend cap alone would never fire. 0 disables the budget.
-// Backstop sizing: median sustained spend is ~$0.12/h (~9 h to $1), so anything shorter
-// than ~9 h would silently take over as the real cap for typical attempts.
+// Backstop sizing: burn varies hugely — check-queue-bound attempts at high concurrency
+// spend <$0.08/h (fateh81 0727: three attempts killed at 14 h with budget unspent), so
+// the backstop must sit far above the slowest plausible path to $1. 48 h means a timeout
+// verdict is "genuinely hung", never "slow but working".
 const BUDGET_STD = parseFloat(A["budget-std"]);
 const TIMEOUT_S = parseInt(A.timeout);
 const CONCURRENCY = parseInt(A.concurrency);

@@ -30,9 +30,11 @@ export const GRADE_TIMEOUT_MS = AGENT_CHECK_TIMEOUT_MS;
 const CLIENT_WAIT_MS = 30 * 60_000; // server queue is serialized; be patient
 
 // Names of the declarations the benchmark expects (theorem + optional _solution abbrev).
+// Lean names are not \w: subscripts (eval₂_…), primes (M'), and pure-unicode idents
+// (τ, 𝔽) are all legal, so match everything up to a delimiter instead of an ASCII set.
 export function benchmarkDecls(originalSource) {
   const decls = [];
-  for (const m of originalSource.matchAll(/^\s*(?:noncomputable\s+)?(?:abbrev|def|theorem)\s+([\w.]+)/gm)) {
+  for (const m of originalSource.matchAll(/^\s*(?:noncomputable\s+)?(?:abbrev|def|theorem)\s+([^\s:({\[⦃]+)/gm)) {
     decls.push(m[1]);
   }
   return decls;

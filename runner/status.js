@@ -7,10 +7,11 @@
 // Shows per-problem state (finished from results.jsonl; running = problem dir exists
 // but no attempt.json yet; pending otherwise) plus totals.
 
-import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, statSync, writeFileSync, openSync, readSync, closeSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { green, red, yellow, dim, bold, money, secs, LEAN_URL } from "./common.js";
+import { green, red, yellow, dim, bold, money, secs, LEAN_URL, costStd } from "./common.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const RESULTS = join(ROOT, "results");
@@ -52,7 +53,50 @@ console.log();
 // abnormal end if there was one, else the grader's reason; ?? = legacy fail_reason fallback
 const reasonOf = (r) => (r.end ? (r.end !== "completed" ? r.end : r.grade?.reason) : r.fail_reason) ?? "failed";
 
-let solved = 0, cost = 0;
+// --- live spend for running attempts ----------------------------------------
+// Sums usage out of each running attempt's events.jsonl the same way run.js does
+// (assistant message_end usage; costStd over in/out/cacheRead), so the live number
+// converges to the recorded one. Incremental: a per-run cache in tmpdir keeps a byte
+// offset per problem and each tick reads only the new bytes — event files reach tens
+// of MB and a full re-parse every 10 s would compete with the run itself. The number
+// trails reality by the turn currently being generated; that is inherent to reading
+// logs. Cache corruption/absence just means one full re-read, never a wrong verdict.
+const CACHE = join(tmpdir(), `cmp-status-${runId}.json`);
+let cache = {};
+try { cache = JSON.parse(readFileSync(CACHE, "utf8")); } catch {}
+function liveStats(p) {
+  const f = join(runDir, p, "events.jsonl");
+  if (!existsSync(f)) return null;
+  const ent = (cache[p] ??= { off: 0, in: 0, out: 0, cache_read: 0, cost: 0, turns: 0, checks: 0 });
+  const size = statSync(f).size;
+  if (size < ent.off) Object.assign(ent, { off: 0, in: 0, out: 0, cache_read: 0, cost: 0, turns: 0, checks: 0 });
+  if (size > ent.off) {
+    const fd = openSync(f, "r");
+    const buf = Buffer.alloc(size - ent.off);
+    const n = readSync(fd, buf, 0, buf.length, ent.off);
+    closeSync(fd);
+    const lastNl = buf.lastIndexOf(10, n - 1);
+    if (lastNl >= 0) {
+      for (const line of buf.toString("utf8", 0, lastNl + 1).split("\n")) {
+        if (line.includes('"type":"turn_end"')) { ent.turns++; continue; }
+        if (line.includes('"type":"tool_execution_end"') && line.includes('"toolName":"lean_check"')) { ent.checks++; continue; }
+        if (!line.includes('"type":"message_end"') || !line.includes('"role":"assistant"')) continue;
+        try {
+          const u = JSON.parse(line).message?.usage;
+          if (!u) continue;
+          ent.in += u.input ?? 0;
+          ent.out += u.output ?? 0;
+          ent.cache_read += u.cacheRead ?? 0;
+          ent.cost += u.cost?.total ?? 0;
+        } catch {}
+      }
+      ent.off += lastNl + 1;
+    }
+  }
+  return ent;
+}
+
+let solved = 0, cost = 0, liveCost = 0;
 for (const p of run.problems) {
   const r = finished.get(p);
   if (r) {
@@ -66,12 +110,16 @@ for (const p of run.problems) {
     const startMs = statSync(join(runDir, p)).ctimeMs;
     const ev = join(runDir, p, "events.jsonl");
     const lastMs = existsSync(ev) ? statSync(ev).mtimeMs : startMs;
-    console.log(`  ${yellow("… running")}  ${p.padEnd(20)} ${dim(`${secs(Date.now() - startMs)} elapsed, active ${secs(Date.now() - lastMs)} ago`)}`);
+    const s = liveStats(p);
+    const spend = s ? ` · ~${money(costStd(s))}${run.budget_std ? `/${money(run.budget_std)}` : ""} std, ${s.turns}t ${s.checks}chk` : "";
+    liveCost += s?.cost ?? 0;
+    console.log(`  ${yellow("… running")}  ${p.padEnd(20)} ${dim(`${secs(Date.now() - startMs)} elapsed, active ${secs(Date.now() - lastMs)} ago${spend}`)}`);
   } else {
     console.log(`  ${dim("· pending")}  ${p}`);
   }
 }
 
 const done = finished.size;
-console.log(`\n  ${bold(`${solved}/${done} solved`)} ${dim(`of ${run.problems.length} problems   ${money(cost)} so far`)}`);
+try { writeFileSync(CACHE, JSON.stringify(cache)); } catch {}
+console.log(`\n  ${bold(`${solved}/${done} solved`)} ${dim(`of ${run.problems.length} problems   ${money(cost)} finished${liveCost ? ` + ~${money(liveCost)} running` : ""}`)}`);
 if (runComplete) console.log(dim(`  run complete (summary.json written)`));
