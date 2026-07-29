@@ -16,7 +16,8 @@ rate + cost. pi supports DeepSeek natively (`deepseek/deepseek-v4-flash`, reads
    pi --mode json --session-dir <dir> --no-extensions --no-skills -nc \
       --model deepseek/deepseek-v4-flash --tools read,edit,write,lean_check \
       -e extensions/lean-check.ts -e extensions/file-sandbox.ts \
-      -e extensions/supervisor.ts [-e extensions/lean-search.ts ...] \
+      -e extensions/cmp-edit.ts -e extensions/supervisor.ts \
+      [-e extensions/lean-search.ts ...] \
       --system-prompt <prover instructions> \
       "Prove the theorem in problem.lean"
    ```
@@ -198,9 +199,17 @@ runner/lean-server.js       persistent Lean REPL HTTP daemon (round-robin across
 runner/plan.js              plan_check core logic
 extensions/lean-check.ts    always-on agent-facing compile tool
 extensions/lean-search.ts   semantic search (LeanSearch API)
+extensions/lean-grep.ts     symbolic search (grep over the pinned local Mathlib checkout)
+runner/grep.js              grep_mathlib core: grep + expand hits to whole declarations
+extensions/lean-snippet.ts  scratch verification (PLAN.md block B): check_snippet
+runner/snippet.js           check_snippet core: stateless snippet compile, snippet: labels
 extensions/lean-plan.ts     plan_check (+ lean-plan.prompt.md)
 extensions/file-sandbox.ts  always-on: confine file tools to the attempt's work dir
+extensions/cmp-edit.ts      always-on: shadows pi's edit tool (core in runner/edit.js) —
+                            no-NFKC fuzzy matching (pi's corrupts Lean unicode: ℕ→N),
+                            failed matches return the closest file region
 extensions/supervisor.ts    always-on: in-process continuation policy (nudges, STOP file)
+runner/edit.js              edit-tool core: trailing-ws-only fuzzy match + closest-region errors
 extensions/max-tokens.ts    injects the per-response max_tokens (always on; default = model max)
 lean-env/                   shared Lean project (gitignored)
 problems/                   sanitized statements + dev.txt + stmt-types.json (grader cache)
@@ -340,13 +349,38 @@ the `.prompt.md` carries the whole arm.
 here from the baseline system prompt, so baseline stops carrying the experiment's
 minimal treatment.
 
-## Search backend (`lean-search`)
+## Search backends (`lean-search`, `lean-grep`)
 
-`search_mathlib` POSTs to the public **[LeanSearch](https://leansearch.net)** API
-(natural language → Mathlib lemmas; no indexing infra on our side). It's someone else's
-public endpoint, so if it's flaky or rate-limits during a run, fall back to
+`search_mathlib` (semantic) POSTs to the public **[LeanSearch](https://leansearch.net)**
+API (natural language → Mathlib lemmas; no indexing infra on our side). It's someone
+else's public endpoint, so if it's flaky or rate-limits during a run, fall back to
 [LeanExplore](https://arxiv.org/abs/2506.11085), which is self-hostable — removing the
 external-uptime dependency.
+
+`grep_mathlib` (symbolic, PLAN.md block A) greps the local Mathlib checkout at
+`lean-env/.lake/packages/mathlib` — the exact source the REPL compiles against, so hits
+can't be version-skewed (LeanSearch indexes a different Mathlib pin) and there's no
+external dependency. Fixed-string by default (no escaping surprises), `regex=true` for
+extended regex, automatic case-insensitive retry when exact case finds nothing. Raw hits
+are expanded to whole declarations (scan up to the column-0 head, down to `:=`, capped)
+and deduped, so the agent sees full signatures, not clipped lines. Both arms carry their
+entire prompt delta in the tool description — no `.prompt.md` — so the semantic-vs-grep
+comparison manipulates only the tool.
+
+## Scratch verification (`lean-snippet`)
+
+`check_snippet(code)` (PLAN.md block B) compiles a standalone snippet against Mathlib
+on the shared lean server — stateless, no files involved, no statement probe (a
+snippet is not the graded file, so there is nothing to preserve). Same 120 s check
+budget and the same round-robin client id as `lean_check`, so snippet checks queue
+behind the attempt's own work; `native_decide` is pre-rejected for the same two
+reasons (REPL burn, and a step "verified" with it can never count in `problem.lean`).
+The server renders positions as `problem.lean:line:col`, so the core
+(`runner/snippet.js`) rebuilds the pretty output with `snippet:` labels from the
+structured messages — relabeling client-side rather than server-side because the
+memo is keyed by code hash alone and would serve the first caller's label to
+everyone. The whole prompt delta lives in the tool description (no `.prompt.md`);
+block-C workers get this tool (+ search) instead of `lean_check`.
 
 ## Open implementation questions
 

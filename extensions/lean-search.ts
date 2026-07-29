@@ -6,22 +6,29 @@ import { Type } from "typebox";
 
 const API = "https://leansearch.net/search";
 
+// Fixed result count, deliberately not a tool parameter: how deep to retrieve is a
+// property of the arm, not a decision for the agent. With the knob exposed, 91% of
+// calls set it (mode 5, then 10, then 3), so the arm was really measuring a mix of
+// retrieval depths rather than one. 6 ≈ the old default and the observed median.
+const NUM_RESULTS = 6;
+
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "search_mathlib",
     label: "Search Mathlib",
+    // Says what the tool is and what comes back, and nothing about when or why to
+    // reach for it: any "use this to find the exact name" / "use this to explore"
+    // wording would make the arm a strategy hint rather than a retrieval mode.
     description:
-      "Semantic search over Mathlib: describe what you need in natural language " +
-      "(e.g. 'sum of first n natural numbers', 'a continuous function on a compact set attains its max') " +
-      "and get matching lemma names with type signatures. Use this to find the exact " +
-      "Mathlib lemma names to use in your proof.",
-    promptSnippet: "search_mathlib - find Mathlib lemmas by natural-language description",
+      "Semantic search over Mathlib. Queries are natural language and are matched by meaning " +
+      "rather than by exact text (e.g. 'a continuous function on a compact set attains its maximum'). " +
+      "Returns Mathlib declarations with their names and type signatures.",
+    promptSnippet: "search_mathlib - semantic search over Mathlib",
     parameters: Type.Object({
-      query: Type.String({ description: "Natural-language description of the lemma you need" }),
-      num_results: Type.Optional(Type.Number({ description: "How many results (default 6, max 20)" })),
+      query: Type.String({ description: "What to search for, in natural language" }),
     }),
     async execute(_toolCallId, params, signal) {
-      const n = Math.min(params.num_results ?? 6, 20);
+      const n = NUM_RESULTS;
       const ac = new AbortController();
       const t = setTimeout(() => ac.abort(), 30_000);
       signal?.addEventListener("abort", () => ac.abort());

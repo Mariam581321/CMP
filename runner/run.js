@@ -161,16 +161,21 @@ try { piVersion = execSync("pi --version", { env: process.env }).toString().trim
 const RUN_STARTED = Date.now();
 writeFileSync(join(runDir, "run.json"), JSON.stringify({ run_id: RUN_ID, combo: COMBO, model: MODEL, thinking: THINKING, max_tokens: MAX_TOKENS || null, budget_std: BUDGET_STD || null, timeout_s: TIMEOUT_S, check_timeout_s: CHECK_TIMEOUT_S, concurrency: CONCURRENCY, problems, problems_dir: PROBLEMS_DIR, git_sha: gitSha, pi_version: piVersion, peak_pricing_at_launch: IS_DEEPSEEK && inPeak(new Date(RUN_STARTED)), started_at: new Date(RUN_STARTED).toISOString() }, null, 2));
 
-const SYSTEM_PROMPT = `You are proving a theorem from a mathematics competition, formalized in Lean 4 with Mathlib.
+// Benchmark-neutral by design: no "competition" framing, since the problem source
+// changes between blocks (Putnam -> FATE -> whatever is next) and the prompt must not
+// have to change with it. The lean_check rule states the tool's RETURN SHAPE (errors +
+// per-sorry goal states) rather than teaching what to do with it: disclosure is
+// baseline, technique ("leave a step sorry'd to read off the goal") would be an arm.
+const SYSTEM_PROMPT = `Your goal is to solve a mathematics problem, formalized in Lean 4 with Mathlib.
 
-The file problem.lean in your working directory contains the theorem statement with \`sorry\` placeholders.
+The file problem.lean in your working directory contains the theorem statement, with the proof left as \`sorry\`.
 
 Rules:
-- Replace every \`sorry\` with real content. If there is an \`abbrev ..._solution := sorry\`, you must determine the answer yourself and fill it in too.
+- Replace \`sorry\` with a complete proof. If there is an \`abbrev ..._solution := sorry\`, you must determine the answer yourself and fill it in too.
 - NEVER modify the theorem statement, imports, or \`open\` lines. Only replace what comes after \`:=\` / fill in sorries. You may add helper lemmas ABOVE the theorem.
 - No new \`axiom\` declarations. No \`native_decide\`.
-- Use the lean_check tool to compile and verify your work. lean_check compiles exactly one file — problem.lean; no other file you create is ever compiled, checked, or graded, so scratch .lean files are inert text. You are NOT done until lean_check reports no errors and no 'declaration uses sorry' warnings.
-- Work efficiently: think before checking, since each check takes about a minute.
+- There is no shell in this environment: bash, grep, and similar commands do not exist. Your only file operations are read, write, and edit.
+- Use the lean_check tool to compile and verify your work. It returns the full Lean compiler output: every error and warning with its line number, and the goal state at each remaining \`sorry\`. lean_check compiles exactly one file — problem.lean; no other file you create is ever compiled, checked, or graded, so scratch .lean files are inert text. You are NOT done until lean_check reports no errors and no 'declaration uses sorry' warnings.
 - NEVER end your response without a tool call unless lean_check has passed. Analysis alone is not an answer — put your reasoning into the proof and verify it.`;
 
 // Per-arm prompt addenda: extensions/<name>.prompt.md is appended to the system prompt
@@ -213,6 +218,7 @@ async function attempt(name, idx) {
     "--tools", toolList.join(","),
     "-e", join(ROOT, "extensions", "lean-check.ts"),
     "-e", join(ROOT, "extensions", "file-sandbox.ts"),
+    "-e", join(ROOT, "extensions", "cmp-edit.ts"),
     "-e", join(ROOT, "extensions", "supervisor.ts"),
     ...(MAX_TOKENS > 0 ? ["-e", join(ROOT, "extensions", "max-tokens.ts")] : []),
     ...COMBO.flatMap((x) => ["-e", join(ROOT, "extensions", `${x}.ts`)]),

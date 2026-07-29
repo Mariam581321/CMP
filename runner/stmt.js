@@ -27,7 +27,7 @@ const STMT_CACHE = join(ROOT, "problems", "stmt-types.json");
 // REPL stays ≤ ~2 min); clients wait longer since queueing is unbounded.
 export const AGENT_CHECK_TIMEOUT_MS = cmpConfig().check_timeout_ms ?? 120_000;
 export const GRADE_TIMEOUT_MS = AGENT_CHECK_TIMEOUT_MS;
-const CLIENT_WAIT_MS = 30 * 60_000; // server queue is serialized; be patient
+export const CLIENT_WAIT_MS = 30 * 60_000; // server queue is serialized; be patient
 
 // Names of the declarations the benchmark expects (theorem + optional _solution abbrev).
 // Lean names are not \w: subscripts (eval₂_…), primes (M'), and pure-unicode idents

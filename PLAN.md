@@ -168,12 +168,14 @@ per-run artifacts under `results/`.
 
 ## Next steps
 
-- [ ] Remaining grader fixes (the `lean_check` prompt clarification landed, 4f4a247);
-      **then freeze** for the whole grid. The calibration run predates the freeze,
-      which is why it isn't a grid cell.
-- [ ] Implement `grep_search` + FATE-M smoke.
+- [x] Remaining grader fixes; **FROZEN 2026-07-29** for the grid — the freeze commit
+      is the one introducing this line (harness_git_sha of every grid run must be it
+      or a descendant; edit here if anything has to change mid-grid and re-freeze).
+      The calibration run predates the freeze, which is why it isn't a grid cell.
+- [x] Implement `grep_mathlib` + FATE-M smoke (2/2, tool-path probes green).
 - [ ] **Block A runs**: base, semantic, grep → repeat the winner (noise floor).
-- [ ] Implement `check_snippet` + FATE-M smoke.
+- [x] Implement `check_snippet` (smoked via scripted probes incl. timeout/memo paths;
+      FATE-M arm smoke still cheap to add before the Block B run).
 - [ ] **Block B run**: snippet on the winning search → substitution analysis
       (per-problem search-call counts vs block A); contingent no-search+snippet run
       if search usage collapses.
