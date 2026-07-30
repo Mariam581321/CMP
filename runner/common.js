@@ -6,6 +6,14 @@ import { request } from "node:http";
 export const LEAN_PORT = process.env.CMP_LEAN_PORT ?? "8787";
 export const LEAN_URL = `http://127.0.0.1:${LEAN_PORT}`;
 
+// pi's normal terminal stopReasons. Anything else — "error", or whatever a pi/provider
+// upgrade introduces next — means the turn died in transport rather than in the model:
+// zero usage, and problem.lean untouched because the model never ran. Shared by run.js
+// (which turns a count of these into the provider_error verdict) and the supervisor
+// (which must not mistake one for the model giving up).
+export const EXPECTED_STOP = new Set(["toolUse", "stop", "endTurn", "length", "aborted"]);
+export const isProviderError = (stopReason) => !!stopReason && !EXPECTED_STOP.has(stopReason);
+
 // deepseek-v4-flash standard (off-peak) rates in $/1M tokens — the only place prices
 // live; update ONLY when DeepSeek reprices or the default model changes.
 // cost_std = tokens re-priced at this fixed table. Unlike billed cost_usd it is
