@@ -23,17 +23,12 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { checkedCompile, serverCheck } from "../runner/stmt.js";
-import { cmpConfig, costStd, isProviderError } from "../runner/common.js";
+import { cmpConfig, costStd } from "../runner/common.js";
 
 export default function (pi: ExtensionAPI) {
   const cfg = cmpConfig();
   const budget: number = cfg.budget_std ?? 0;
   const maxNudges: number = cfg.max_nudges ?? 3; // consecutive no-progress nudges; resets on non-read tool activity
-  // Separate cap for consecutive ERROR-recovery nudges (see decide): in runner-managed
-  // attempts run.js's kill-streak SIGKILLs a dead link first, so this cap exists for
-  // adhoc pi sessions with no runner watching — without it a dead provider would nudge
-  // forever. Resets whenever a turn comes back normally.
-  const maxErrorNudges: number = cfg.max_error_nudges ?? 5;
   const problem: string = cfg.problem ?? "supervisor";
   const work = process.cwd(); // run.js spawns pi with cwd = the attempt's work dir
 
@@ -48,7 +43,6 @@ export default function (pi: ExtensionAPI) {
   let actions = 0;
   let actionsAtNudge = 0;
   let noProgress = 0;
-  let errorNudges = 0;
   let lastStopReason: string | null = null;
 
   // No configured toolset (adhoc run) => nothing counts and nudging self-limits at
@@ -72,10 +66,9 @@ export default function (pi: ExtensionAPI) {
   const dbg = (...a: any[]) => { if (process.env.CMP_SUPERVISOR_DEBUG) console.error("[supervisor]", ...a); };
 
   // pi re-enters agent_end for every errored message, including each internal
-  // auto-retry — four invocations per failed request. Everything below reads and writes
-  // noProgress across an await, so without this guard those invocations interleave and
-  // the nudge cap silently stops holding (0729: 20 nudges under maxNudges = 3). One
-  // settle, one decision.
+  // auto-retry. Everything below reads and writes noProgress across an await, so without
+  // this guard those invocations interleave and the nudge cap silently stops holding
+  // (0729: 20 nudges under maxNudges = 3). One settle, one decision.
   let deciding = false;
   pi.on("agent_end", async (_event: any) => {
     if (deciding) { dbg("agent_end re-entered mid-decision, ignored"); return; }
@@ -84,14 +77,13 @@ export default function (pi: ExtensionAPI) {
   });
 
   async function decide() {
-    dbg("agent_end", { lastStopReason, actions, noProgress, errorNudges });
+    dbg("agent_end", { lastStopReason, actions, noProgress });
     if (lastStopReason === "aborted") return;
-    // NB: an errored turn (transport, not the model) deliberately still nudges. Once
-    // pi's internal auto-retry is exhausted, the queued message is the only thing that
-    // keeps the session alive, so this is the recovery path for an outage that outlasts
-    // the retries. Error nudges run on their own ledger (see below) so a burst can't
-    // eat the stuck-model cap; storms are bounded by maxErrorNudges here and by
-    // run.js's kill-streak.
+    // A turn that died in transport rather than in the model gets no special treatment:
+    // it is nudged on the same ledger as a stalled one. Bursts of them no longer reach
+    // here — pi-agent/settings.json retries inside the SDK, below the message layer — so
+    // only a drop mid-stream (which the SDK cannot retry) lands in this path, and the
+    // nudge is what keeps the session alive when pi's own retries are spent.
     if (existsSync(join(work, "..", "STOP"))) return;
     if (budget > 0 && costStd(tokens) >= budget) return;
 
@@ -132,35 +124,12 @@ export default function (pi: ExtensionAPI) {
     dbg("check:", { ok: check?.ok, sorries: (check?.sorries ?? []).length, stmtBad });
     if (check?.ok && (check.sorries ?? []).length === 0 && !stmtBad) return; // verified done — let the attempt end
 
-    // Two kinds of interrupted turn, two ledgers. An ERRORED turn (transport died; the
-    // message was lost before it entered the model's context) is zero evidence about
-    // the model, so it must not consume the stuck-model nudge cap — on 0729, 12 of 21
-    // solves resumed through outage windows only because recovery nudges flowed, and
-    // that run's cap was accidentally broken; with the cap fixed, exempting errors is
-    // what keeps that recovery behavior. Bounded its own way: maxErrorNudges here
-    // (consecutive, resets on any normal turn), run.js's kill-streak and rerun
-    // classification outside. A NORMAL turn runs the usual no-progress accounting.
-    const errored = isProviderError(lastStopReason);
-    if (errored) {
-      errorNudges++;
-      if (errorNudges > maxErrorNudges) { dbg("error-nudge cap reached"); return; }
-    } else {
-      errorNudges = 0;
-      noProgress = actions > actionsAtNudge ? 0 : noProgress + 1;
-      actionsAtNudge = actions;
-      if (noProgress > maxNudges) return; // wall-clock/budget still bound everything
-    }
+    noProgress = actions > actionsAtNudge ? 0 : noProgress + 1;
+    actionsAtNudge = actions;
+    if (noProgress > maxNudges) return; // wall-clock/budget still bound everything
 
     const nudge =
-      (errored
-        // Keep the marker phrase "lost to a provider connection error" in sync with
-        // run.js, which counts recovery nudges by matching it. Neutral and re-orienting
-        // by design: the lost message is NOT in the model's context (it has no memory
-        // of writing it), so "you are not done" would read as a rebuke for a stop it
-        // never chose — and one flat sentence per error is all the context pollution
-        // an outage is allowed to leave.
-        ? `Your previous message was lost to a provider connection error — nothing in it was processed, no tool calls ran, nothing was saved. Re-orient from the check result below and continue from your last successful step.\n\n`
-        : lastStopReason === "length"
+      (lastStopReason === "length"
         ? `Your last message hit the output-token limit and was CUT OFF — everything after the cutoff is lost. Do not restart the derivation in chat. Write your current best attempt into problem.lean NOW (state intermediate facts as \`have\` steps closed by ring/linarith/norm_num etc.; leave hard parts as sorry'd steps) and run lean_check.\n\n`
         : `You are not done. `) +
       (stmtBad

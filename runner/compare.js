@@ -53,8 +53,10 @@ for (const p of problems) {
 console.log("");
 for (const r of runs) {
   const all = problems.map((p) => r.byProblem[p]).filter(Boolean);
-  // Attempts the provider aborted say nothing about the arm — rating them as failures
-  // would let a throttle burst during one run masquerade as an arm difference.
+  // Back-compat only: runs before 2026-07-30 could end an attempt "provider_error" when
+  // an outage truncated it, and those records are still on disk. Nothing writes that end
+  // any more — pi-agent/settings.json retries inside the SDK instead — so for new runs
+  // both filters are no-ops.
   const aborted = all.filter((x) => reasonOf(x) === "provider_error");
   const recs = all.filter((x) => reasonOf(x) !== "provider_error");
   const solved = recs.filter((x) => x.solved);

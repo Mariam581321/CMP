@@ -22,3 +22,5 @@ problems-fatem/*
 !problems-fatem/pick12.txt
 problems-fc/
 COSTS.md
+pi-agent/auth.json
+pi-agent/sessions/

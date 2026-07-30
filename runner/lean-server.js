@@ -46,7 +46,13 @@ const WORKERS = Math.max(1, parseInt(process.env.CMP_REPL_WORKERS ?? "1"));
 const MAX_RSS_MB = parseInt(process.env.CMP_REPL_MAX_RSS_MB ?? "9000");
 const MIN_AVAIL_MB = parseInt(process.env.CMP_MIN_AVAIL_MB ?? "1200");
 const DEFAULT_TIMEOUT_MS = 120_000; // = the one check budget (see runner/stmt.js)
-const IMPORT_TIMEOUT_MS = 420_000;
+// Importing Mathlib is ~1.8 GB of .olean reads. Warm it takes 20-60 s, but under WSL2
+// balloon pressure the kernel drops the pages as fast as they load (measured 2026-07-30:
+// reading all 7878 oleans grew the page cache by 121 MB, with 6.4 GB free) and the same
+// import crawls past several minutes. That is slow, not hung — and run.js aborts the
+// WHOLE run when the server fails to come up, so this bound must sit above the slow case
+// or a memory-pressure blip costs a launch. Overridable for a laptop having a bad day.
+const IMPORT_TIMEOUT_MS = parseInt(process.env.CMP_IMPORT_TIMEOUT_MS ?? "900000");
 const MAX_HEARTBEATS = 400_000; // 2x lean default; bounds runaway tactic searches
 const MEMO_MAX = 2000;
 

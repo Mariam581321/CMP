@@ -177,7 +177,7 @@ file was, and a verified proof counts regardless of how the attempt ended
  "model": "deepseek-v4-flash", "started_at": "...", "wall_s": 412, "turns": 14,
  "tokens": {"in": 84000, "out": 9100, "cache_read": 2400000}, "cost_usd": 0.021, "cost_std": 0.021,
  "tool_calls": {"lean_check": 6, "search_mathlib": 3}, "nudges": 1,
- "end": "completed|timeout|budget_exceeded|provider_error|runner_error",
+ "end": "completed|timeout|budget_exceeded|runner_error",
  "grade": {"solved": false, "reason": "uses_sorry|compile_error|statement_changed|unsafe_decl|bad_axioms|no_file",
            "detail": "...", "axioms": null, "suspicious_keywords": null},
  "solved": false, "harness_git_sha": "...", "pi_version": "..."}

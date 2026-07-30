@@ -10,8 +10,6 @@
 //        --problems-dir <dir> (problems/; e.g. problems-nl/ for statements with
 //        the informal NL docstring kept)
 //        --check-timeout <s> (120, REPL budget per agent-facing lean_check)
-//        --max-provider-errors <n> (8, above this the attempt is a rerun, not a result)
-//        --provider-kill-streak <n> (12, consecutive errors = the link is down, SIGKILL)
 //        --peak-ok (allow launching during DeepSeek peak-hour pricing)
 
 import { spawn, execSync } from "node:child_process";
@@ -20,7 +18,7 @@ import { mkdirSync, readFileSync, writeFileSync, appendFileSync, copyFileSync, c
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { grade } from "./grade.js";
-import { costStd, isProviderError, LEAN_PORT, LEAN_URL, green, red, yellow, dim, bold, cyan, money, secs } from "./common.js";
+import { costStd, LEAN_PORT, LEAN_URL, green, red, yellow, dim, bold, cyan, money, secs } from "./common.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -41,8 +39,6 @@ try {
       thinking: { type: "string", default: "off" },
       "max-tokens": { type: "string", default: "384000" },
       "check-timeout": { type: "string", default: "120" },
-      "max-provider-errors": { type: "string", default: "8" },
-      "provider-kill-streak": { type: "string", default: "12" },
       "run-id": { type: "string" },
       "peak-ok": { type: "boolean", default: false },
     },
@@ -75,41 +71,6 @@ const THINKING = A.thinking;
 // --max-tokens 8192; 0 falls back to the provider default (don't use in real runs).
 const MAX_TOKENS = parseInt(A["max-tokens"]);
 const CHECK_TIMEOUT_S = parseInt(A["check-timeout"]);
-// Two independent decisions about unexpected errors (isProviderError), kept apart
-// because one is cheap and reversible and the other is not.
-//
-// A provider error is token-free (pi records zero usage on the errored message —
-// verified against the 0729 events) and the message it killed never entered the model's
-// context; the supervisor answers each one with a free recovery nudge. So a SCATTERED
-// error, cleanly recovered, costs wall clock and one redone turn — not tokens, not
-// context — and the attempt stays a fair sample of the arm. What invalidates an attempt
-// is OUTAGE-shaped damage: errors dense enough that the agent spent the attempt fighting
-// the link instead of the problem.
-//
-// (1) TRUST — more than MAX_PROVIDER_ERRORS in total and the attempt is a rerun, not a
-// result. Calibration (0729, 50 problems through a flaky-then-dead uplink): solves
-// carried up to 8 scattered errors; every outage-degraded unsolved attempt had 12+.
-// Default 8 = top of the observed healthy band. Cheap to revisit: provider_errors and
-// provider_errors_streak are in every record, so the cutoff can be re-applied to a
-// finished run by re-deriving over results.jsonl — no rerunning (note compare.js reads
-// the baked-in `end` field, so a re-derive must rewrite that or filter on the counts).
-// 2026-07-29: a dead uplink produced 24 false compile_error/uses_sorry verdicts, because
-// the rule then in force fired only for attempts that made ZERO tool calls — i.e. only
-// for the problems that started after the link had already died.
-//
-// (2) SPEND — PROVIDER_KILL_STREAK *consecutive* errors means the link is down right
-// now, so stop paying for the retry storm and free the concurrency slot. Consecutive,
-// not total: scattered flakiness across a long healthy attempt must never trigger a
-// kill, and the streak resets on any message that comes back normally. Default 12 =
-// three full exhausted retry cycles (pi emits 4 errored messages per cycle): three
-// complete retry-and-recover rounds failed back-to-back. Irreversible (the attempt is
-// graded on what it had reached), hence sized in whole cycles.
-const MAX_PROVIDER_ERRORS = parseInt(A["max-provider-errors"]);
-const PROVIDER_KILL_STREAK = parseInt(A["provider-kill-streak"]);
-if (!(MAX_PROVIDER_ERRORS >= 0) || !(PROVIDER_KILL_STREAK >= 1)) {
-  console.error("--max-provider-errors (>= 0) and --provider-kill-streak (>= 1) must be integers");
-  process.exit(1);
-}
 const RUN_ID = A["run-id"] ?? `${COMBO.join("+") || "baseline"}-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "")}`;
 
 // DeepSeek bills all items at 2x during peak hours: 01:00–04:00 and 06:00–10:00 UTC
@@ -134,6 +95,16 @@ if (existsSync(dotenv)) process.loadEnvFile(dotenv);
 process.env.PATH = `${process.env.HOME}/.local/node/bin:${process.env.HOME}/.elan/bin:${process.env.PATH}`;
 process.env.CMP_LEAN_ENV = join(ROOT, "lean-env");
 process.env.CMP_LEAN_PORT = LEAN_PORT;
+// pi reads settings from here instead of ~/.pi/agent/, so the retry policy is versioned
+// with the experiment: pi-agent/settings.json turns on the SDK-level retry that makes a
+// wifi drop invisible to the model. Set before the --list-models preflight so the
+// catalog it validates against is the one the run will actually use.
+process.env.PI_CODING_AGENT_DIR = join(ROOT, "pi-agent");
+// Log every request and every retry the SDK absorbs. Absorbed retries emit no pi event,
+// so without this a bad-wifi night leaves no trace at all. pi rebinds stray stdout to
+// stderr in non-interactive modes, so these lines land in each attempt's stderr.log and
+// cannot corrupt the JSON event stream.
+process.env.OPENAI_LOG = "info";
 
 // Persistent lean server: reuse one that's already up, else spawn and wait for
 // Mathlib to load (~1-2 min). Spawned server is killed when this run exits.
@@ -144,13 +115,24 @@ async function ensureLeanServer(logPath) {
   if (await health()) return null;
   const fd = openSync(logPath, "a");
   const child = spawn("node", [join(ROOT, "runner/lean-server.js")], { env: process.env, stdio: ["ignore", fd, fd] });
+  // Register the kill BEFORE anything below can throw. Both throws here abort the whole
+  // run, and until this existed the server we just spawned — plus its detached 6 GB
+  // repl — survived as orphans nobody knew to look for (2026-07-30). lean-server.js
+  // turns SIGTERM into exit, which kills its repl process groups.
+  process.on("exit", () => { try { child.kill("SIGTERM"); } catch {} });
   process.stdout.write(dim("  starting lean server (importing Mathlib)... "));
-  for (let i = 0; i < 180; i++) {
+  // Wait out the server's OWN import bound plus a margin, read from the same env var, so
+  // the two can't drift: a runner deadline shorter than the import bound shoots a
+  // healthy-but-slow import and costs the whole launch (which is exactly what a 9 min
+  // runner deadline did against a 15 min import bound).
+  const waitMs = parseInt(process.env.CMP_IMPORT_TIMEOUT_MS ?? "900000") + 120_000;
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 3000));
     if (await health()) { console.log(dim("ready")); return child; }
     if (child.exitCode != null) throw new Error(`lean server died; see ${logPath}`);
   }
-  throw new Error("lean server did not become ready in 9 min");
+  throw new Error(`lean server did not become ready in ${Math.round(waitMs / 60000)} min; see ${logPath}`);
 }
 
 for (const ext of COMBO)
@@ -198,7 +180,7 @@ try { gitSha = execSync("git rev-parse --short HEAD", { cwd: ROOT }).toString().
 let piVersion = "unknown";
 try { piVersion = execSync("pi --version", { env: process.env }).toString().trim(); } catch {}
 const RUN_STARTED = Date.now();
-writeFileSync(join(runDir, "run.json"), JSON.stringify({ run_id: RUN_ID, combo: COMBO, model: MODEL, thinking: THINKING, max_tokens: MAX_TOKENS || null, budget_std: BUDGET_STD || null, timeout_s: TIMEOUT_S, check_timeout_s: CHECK_TIMEOUT_S, concurrency: CONCURRENCY, max_provider_errors: MAX_PROVIDER_ERRORS, provider_kill_streak: PROVIDER_KILL_STREAK, problems, problems_dir: PROBLEMS_DIR, git_sha: gitSha, pi_version: piVersion, peak_pricing_at_launch: IS_DEEPSEEK && inPeak(new Date(RUN_STARTED)), started_at: new Date(RUN_STARTED).toISOString() }, null, 2));
+writeFileSync(join(runDir, "run.json"), JSON.stringify({ run_id: RUN_ID, combo: COMBO, model: MODEL, thinking: THINKING, max_tokens: MAX_TOKENS || null, budget_std: BUDGET_STD || null, timeout_s: TIMEOUT_S, check_timeout_s: CHECK_TIMEOUT_S, concurrency: CONCURRENCY, problems, problems_dir: PROBLEMS_DIR, git_sha: gitSha, pi_version: piVersion, peak_pricing_at_launch: IS_DEEPSEEK && inPeak(new Date(RUN_STARTED)), started_at: new Date(RUN_STARTED).toISOString() }, null, 2));
 
 // Benchmark-neutral by design: no "competition" framing, since the problem source
 // changes between blocks (Putnam -> FATE -> whatever is next) and the prompt must not
@@ -269,10 +251,9 @@ async function attempt(name, idx) {
   const events = createWriteStream(join(probDir, "events.jsonl"));
   const stderrLog = createWriteStream(join(probDir, "stderr.log"));
   const started = Date.now();
-  const stats = { turns: 0, userMsgs: 0, errorNudges: 0, toolCalls: {}, tokens: { in: 0, out: 0, cache_read: 0 }, cost: 0, providerErrors: 0, errorStreak: 0, maxErrorStreak: 0, lastError: null };
+  const stats = { turns: 0, userMsgs: 0, toolCalls: {}, tokens: { in: 0, out: 0, cache_read: 0 }, cost: 0 };
   let timedOut = false;
   let budgetExceeded = false;
-  let providerDown = false;
 
   // One pi process per attempt. The supervisor extension keeps the agent going
   // in-process (nudges are follow-up messages inside the same session); the runner
@@ -318,37 +299,9 @@ async function attempt(name, idx) {
           if (e.type === "turn_end") stats.turns++;
           if (e.type === "tool_execution_start")
             stats.toolCalls[e.toolName] = (stats.toolCalls[e.toolName] ?? 0) + 1;
-          // Every user message beyond the CLI prompt is a supervisor nudge. Error-
-          // recovery nudges are told apart by their fixed prefix (keep the marker in
-          // sync with the error nudge in extensions/supervisor.ts) so `nudges` can be
-          // split into "model needed a push" vs "link needed a retry" without parsing
-          // session files.
-          if (e.type === "message_end" && e.message?.role === "user") {
-            stats.userMsgs++;
-            const txt = typeof e.message.content === "string" ? e.message.content : JSON.stringify(e.message.content ?? "");
-            if (txt.includes("lost to a provider connection error")) stats.errorNudges++;
-          }
+          // Every user message beyond the CLI prompt is a supervisor nudge.
+          if (e.type === "message_end" && e.message?.role === "user") stats.userMsgs++;
           if (e.type === "message_end" && e.message?.role === "assistant") {
-            // A provider error (throttle, 4xx, dead uplink) is NOT a failed proof: pi
-            // emits a zero-usage message with stopReason "error" and still exits 0, so
-            // without this the attempt would be graded on whatever the outage left on
-            // disk — infrastructure noise landing in the solve rate.
-            const stop = e.message.stopReason;
-            if (isProviderError(stop)) {
-              stats.providerErrors++;
-              stats.errorStreak++;
-              stats.maxErrorStreak = Math.max(stats.maxErrorStreak, stats.errorStreak);
-              stats.lastError = (e.message.errorMessage || stop).slice(0, 300);
-              // The link is down, not the model stuck: nothing this attempt does from
-              // here can succeed, so stop burning wall clock and hold the concurrency
-              // slot for nobody. Same SIGKILL path as the budget cap.
-              if (!providerDown && stats.errorStreak >= PROVIDER_KILL_STREAK) {
-                providerDown = true;
-                try { process.kill(-child.pid, "SIGKILL"); } catch {}
-              }
-            } else if (stop) {
-              stats.errorStreak = 0; // a message came back normally — the link is alive
-            }
             const u = e.message.usage;
             if (u) {
               stats.tokens.in += u.input ?? 0;
@@ -378,39 +331,17 @@ async function attempt(name, idx) {
   // the grader's judgment of the final file is never overwritten by how the attempt
   // ended, so "how close were the timeouts?" is a query, not a re-grading session.
   const g = await grade(name, join(work, "problem.lean"), join(PROBLEMS_DIR, `${name}.lean`));
-  // Not "did the agent ever call a tool": an outage landing mid-proof leaves all the
-  // earlier tool calls behind and still truncates the attempt. Counting the errors is
-  // what separates the populations (0729: solves carried up to 8 scattered errors,
-  // degraded unsolved attempts 12+). The trust check outranks timeout and budget:
-  // retry cycles eat wall clock, so an outage CAUSES timeouts — classifying such an
-  // attempt "timeout" would leak it into the valid denominator during exactly the
-  // runs where exclusion matters.
-  const end = providerDown || stats.providerErrors > MAX_PROVIDER_ERRORS ? "provider_error"
-    : timedOut ? "timeout"
-    : budgetExceeded ? "budget_exceeded"
-    : "completed";
+  const end = timedOut ? "timeout" : budgetExceeded ? "budget_exceeded" : "completed";
 
   const record = {
     run_id: RUN_ID, problem: name, combo: COMBO, model: MODEL, thinking: THINKING,
     started_at: new Date(started).toISOString(), wall_s: Math.round(wallMs / 1000),
     turns: stats.turns, tokens: stats.tokens, cost_usd: +stats.cost.toFixed(5),
     cost_std: +costStd(stats.tokens).toFixed(5),
-    // Both counts are kept so the MAX_PROVIDER_ERRORS cutoff can be re-applied to a
-    // finished run: total decides trust, longest streak shows whether they were one
-    // outage or scattered flakiness.
-    provider_errors: stats.providerErrors, provider_errors_streak: stats.maxErrorStreak,
     tool_calls: stats.toolCalls, exit_code: exitCode,
-    // nudges = ALL supervisor messages (userMsgs minus the CLI prompt); the error-
-    // recovery subset is split out so nudges - nudges_error_recovery measures the
-    // model's stalls, not the provider's.
+    // nudges = ALL supervisor messages (userMsgs minus the CLI prompt).
     budget_std: BUDGET_STD || null, nudges: Math.max(0, stats.userMsgs - 1),
-    nudges_error_recovery: stats.errorNudges,
     end,
-    end_detail: end === "provider_error"
-      ? `${stats.providerErrors} unexpected provider errors (longest streak ${stats.maxErrorStreak})` +
-        `${providerDown ? `; KILLED after ${PROVIDER_KILL_STREAK} consecutive — link was down` : ""}` +
-        ` — RERUN this problem; last: ${stats.lastError ?? "(none)"}`
-      : null,
     grade: {
       solved: g.solved, reason: g.solved ? null : g.reason,
       detail: g.solved ? null : (g.detail ?? "").slice(0, 500),
@@ -423,11 +354,7 @@ async function attempt(name, idx) {
   appendFileSync(join(runDir, "results.jsonl"), JSON.stringify(record) + "\n");
 
   const tag =
-    (g.solved ? green("✓ solved ") : end === "timeout" ? yellow("⏱ timeout") : end === "budget_exceeded" ? yellow("$ budget ") : end === "provider_error" ? red(providerDown ? "✗ provider — KILLED, RERUN" : "✗ provider — RERUN") : red(`✗ ${g.reason}`)) +
-    // Errors below the rerun cutoff are tolerated, never hidden: the count prints on
-    // every affected line, so a run degraded end to end can't read as a clean result
-    // (the original 0729 failure was exactly this invisibility).
-    (stats.providerErrors > 0 ? yellow(` ⚠ ${stats.providerErrors} provider errors`) : "") +
+    (g.solved ? green("✓ solved ") : end === "timeout" ? yellow("⏱ timeout") : end === "budget_exceeded" ? yellow("$ budget ") : red(`✗ ${g.reason}`)) +
     (g.suspicious_keywords ? yellow(` ⚠ ${g.suspicious_keywords.join(",")}`) : "");
   const checks = stats.toolCalls.lean_check ?? 0;
   console.log(
@@ -465,39 +392,14 @@ const costStdTotal = records.reduce((s, r) => s + (r.cost_std ?? 0), 0);
 const reasonOf = (r) => (r.end !== "completed" ? r.end : r.grade?.reason ?? "unknown");
 const reasons = {};
 for (const r of records) if (!r.solved) reasons[reasonOf(r)] = (reasons[reasonOf(r)] ?? 0) + 1;
-// Attempts the provider mangled are not evidence about the arm. Rate them out of the
-// valid denominator, or an outage during one arm reads as a real solve-rate difference
-// between arms — the exact quantity the factorial design is measuring. A solved attempt
-// is never excluded: the proof was verified, so it counts no matter how it got there
-// (this matches compare.js, whose reasonOf() is null for solved records).
-const aborted = records.filter((r) => r.end === "provider_error" && !r.solved);
-const valid = records.length - aborted.length;
-
-// Degraded solves (over the cutoff yet verified) are kept in the rate but must never
-// be invisible — computed and reported outside the aborted branch, or a run where every
-// errored attempt happened to solve would print no warning at all.
-const degraded = records.filter((r) => r.solved && r.end === "provider_error");
-const errorsTotal = records.reduce((s, r) => s + (r.provider_errors ?? 0), 0);
-
-console.log(bold(`\n${COMBO.join("+") || "baseline"}: ${solved.length}/${valid} solved  (${money(costStdTotal)} @std, ${money(cost)} billed)`));
-if (aborted.length) {
-  const killed = aborted.filter((r) => (r.provider_errors_streak ?? 0) >= PROVIDER_KILL_STREAK);
-  console.log(`  ${red(`⚠ ${aborted.length}/${records.length} attempt(s) hit >${MAX_PROVIDER_ERRORS} provider errors — NOT results, excluded from the rate above. RERUN:`)}`);
-  console.log(`  ${red(aborted.map((r) => r.problem).join(", "))}`);
-  if (killed.length) console.log(`  ${red(`${killed.length} of those were killed mid-attempt after ${PROVIDER_KILL_STREAK} consecutive errors (link down).`)}`);
-}
-if (degraded.length) console.log(`  ${yellow(`⚠ ${degraded.length} attempt(s) over the error cutoff still verified a proof — kept as solved: ${degraded.map((r) => r.problem).join(", ")}`)}`);
-if (errorsTotal > 0 && !aborted.length && !degraded.length) console.log(`  ${yellow(`⚠ ${errorsTotal} scattered provider error(s) across the run, all under the cutoff — tolerated.`)}`);
+console.log(bold(`\n${COMBO.join("+") || "baseline"}: ${solved.length}/${records.length} solved  (${money(costStdTotal)} @std, ${money(cost)} billed)`));
 if (solved.length) console.log(`  ${green("solved:")} ${solved.map((r) => r.problem).join(", ")}`);
 for (const [reason, n] of Object.entries(reasons)) console.log(`  ${dim(`${reason}: ${n}`)}`);
 console.log(dim(`  full records: results/${RUN_ID}/results.jsonl\n`));
 
 const summary = {
   run_id: RUN_ID, combo: COMBO, model: MODEL, thinking: THINKING, git_sha: gitSha,
-  problems: records.length, valid_attempts: valid,
-  provider_aborted: aborted.length, provider_aborted_problems: aborted.map((r) => r.problem),
-  provider_degraded_solves: degraded.map((r) => r.problem), provider_errors_total: errorsTotal,
-  solved: solved.length, cost_usd: +cost.toFixed(4), cost_std: +costStdTotal.toFixed(4),
+  problems: records.length, solved: solved.length, cost_usd: +cost.toFixed(4), cost_std: +costStdTotal.toFixed(4),
   fail_reasons: reasons, finished_at: new Date().toISOString(),
 };
 writeFileSync(join(runDir, "summary.json"), JSON.stringify(summary, null, 2));
