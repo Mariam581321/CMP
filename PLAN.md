@@ -168,10 +168,19 @@ per-run artifacts under `results/`.
 
 ## Next steps
 
-- [x] Remaining grader fixes; **FROZEN 2026-07-29** for the grid — the freeze commit
-      is the one introducing this line (harness_git_sha of every grid run must be it
-      or a descendant; edit here if anything has to change mid-grid and re-freeze).
-      The calibration run predates the freeze, which is why it isn't a grid cell.
+- [x] Remaining grader fixes; **FROZEN 2026-07-29 at `2f89a7c`, re-cut 2026-07-30 at
+      `d66e12e`** — the grid freeze is `d66e12e`: harness_git_sha of every grid run
+      must be that commit or a descendant. Edit here if anything has to change
+      mid-grid and re-freeze. The calibration run predates both freezes, which is why
+      it isn't a grid cell.
+      Why re-cut: the first block-A cell launched at `2f89a7c` (lean-grep, 50 FATE-H)
+      was destroyed by a DeepSeek uplink outage, and that harness could only flag a
+      provider error when an attempt made zero tool calls — so an outage landing
+      mid-proof was graded on whatever it left on disk and printed as a clean 21/46.
+      `d66e12e` makes infrastructure noise separable from results (error counts per
+      attempt, a trust cutoff that marks an attempt rerun-not-result, a kill on a dead
+      link) — no arm semantics changed, so the block design is untouched. The 0729
+      grep attempt is discarded, not a cell: `results/_archive/provider-error-0729/`.
 - [x] Implement `grep_mathlib` + FATE-M smoke (2/2, tool-path probes green).
 - [ ] **Block A runs**: base, semantic, grep → repeat the winner (noise floor).
 - [x] Implement `check_snippet` (smoked via scripted probes incl. timeout/memo paths;
