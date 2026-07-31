@@ -137,9 +137,14 @@ line when one exists — bare bullets, mirroring `search_mathlib`. Loogle's own 
 pre-filter, and a count larger than the visible results induces narrowing calls hunting
 for hits that do not exist in this environment. The only count shown is the filtered one
 (`note: showing 10 of N`, `+` when Loogle itself truncated at its 200-hit cap). Zero
-hits → `"No results."` (a result). A query Loogle cannot parse or elaborate → tool
-failure carrying Loogle's message and at most 8 of its suggestions (the analogue of
-grep's bad-regex failure). Module names — a path signal — never reach the model (the
+hits → `"No results."` (a result). An **unknown identifier** in the query is also a
+result, not a failure — `No results: unknown identifier 'X'.` plus Loogle's
+suggestions — because a bare-name probe is the confirmation question and "no such
+constant" is its answer, exactly as grep's zero-hit is (decided from the first smoke:
+32 of 56 rejections were this shape). A query Loogle cannot parse or elaborate
+("Function expected…") → tool failure carrying Loogle's message and at most 8 of its
+suggestions (the analogue of grep's bad-regex failure). Module names — a path signal —
+never reach the model (the
 24ed9ae reversal applies); they are logged in `details`, as are dropped names and
 Loogle's raw counts.
 

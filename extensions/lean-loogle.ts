@@ -107,6 +107,17 @@ export default function (pi: ExtensionAPI) {
           // a result's worth of tokens.
           const sugs = (data.suggestions ?? []).slice(0, 8);
           const sug = sugs.length ? ` Did you mean: ${sugs.join(", ")}` : "";
+          // "Unknown identifier" is a well-formed existence probe whose answer is "no
+          // such constant" — a RESULT, mirroring grep's zero-hit answer to the same
+          // confirmation question (the smoke run showed 32 of 56 rejections were
+          // exactly this shape). Parse errors and ill-typed patterns ("Function
+          // expected at ...") remain failures, the analogue of grep's bad regex.
+          if (/unknown (identifier|constant)/i.test(data.error)) {
+            return {
+              content: [{ type: "text", text: `No results: ${data.error}.${sug}` }],
+              details: { count: 0, queryError: data.error },
+            };
+          }
           throw new ToolFailure(`Loogle rejected the query: ${data.error}.${sug}`);
         }
         const raw = data.hits ?? [];
