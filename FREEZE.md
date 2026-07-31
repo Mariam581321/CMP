@@ -1,6 +1,6 @@
 # Harness freeze log
 
-**Current grid freeze: `24ed9ae`** (2026-07-31). The `harness_git_sha` of every grid run
+**Current grid freeze: `7629f39`** (2026-07-31). The `harness_git_sha` of every grid run
 must be that commit or a descendant.
 
 **Every re-cut below predates the first grid cell.** The grid has not started; no run has
@@ -138,6 +138,50 @@ expected: that is a signature-vs-behaviour gap, and `check_snippet` is what addr
 Whether agents still reach for source once `check_snippet` exists is the pre-registered
 trigger for revisiting source access as a block-B follow-on, rather than spending a block-A
 cell on it now.
+
+## `7629f39` — 2026-07-31, seventh re-cut: third search arm + pre-freeze scan
+
+Block A becomes a three-way comparison: **`lean-loogle`** (structure-retrieval — public
+Loogle over the compiled environment, hits filtered to the pin; skew measured 9.5%
+unfiltered vs LeanSearch's 0.2%, which is why the no-filter rule flips here — numbers
+and rationale in `SEARCH.md`). New derived artifact `problems/env-names.txt`
+(regenerate: `scripts/dump-env-names.mjs`); preflighted at launch for loogle combos.
+
+A four-agent review sweep over runner/, extensions/ and scripts/ before cutting, fixes
+landed in this commit:
+
+1. **Grader anti-spoof** — axiom reports are now parsed only from messages whose line
+   number lies past the solution, where the probe's `#print axioms` output lives. A
+   `trace "'decl' depends on axioms: []"` in the solution previously spoofed the
+   first-match parse into `solved` on a sorry'd proof (verified both ways: real solve
+   still grades solved, spoof now `uses_sorry`).
+2. **Edit tool** — the fuzzy path duplicated the newline a match consumed, silently
+   inserting a blank line per boundary-matched edit. Ten-case battery green.
+3. **Sanitizer** — `classifyLines` now tracks nested `/- -/` block comments; the
+   "corpus has none" claim was false (putnam_2022_a4 shipped an NL hypothesis hint,
+   now stripped — the only file affected; FATE corpora verified clean).
+4. **Runner** — interrupt/kill now takes in-flight pi children down with it (orphaned
+   spenders); non-runner deaths recorded `end: "agent_died"` instead of `"completed"`;
+   NaN flag values refuse to launch; run-dir reuse guard covers pre-first-record
+   crashes; log-stream errors no longer kill the run; balance sampling retries;
+   UTF-8-safe event decoding; duplicate problem lists refuse to launch.
+5. **Lean server** — repl process/stdin `error` handlers (spawn failure or a
+   dying-repl EPIPE no longer kills the whole server). **Watchdog** — liveness is not
+   readiness: a live-but-permanently-not-ready server is killed after 20 min.
+6. **Grep surface** — zero-hit message stripped of retry coaching the other arms never
+   had; the qualified-name note no longer asserts a namespace decomposition that is
+   false for prefix-written heads.
+
+Model-visible surfaces moved: `grep_mathlib` (two wording changes), the edit tool
+(correct writes), and the new `loogle_mathlib`. Grading strictness moved only against
+spoofing. No budget, nudge, or scheduling semantics changed.
+
+Known and deferred (documented, not fixed — all outside the single-worker regime the
+grid runs in): a `/recycle` admitted during multi-worker traffic can strand a worker;
+a boot-time import fuse kill exits the whole server; a requeued check's final attempt
+can outlast the client's 30 min socket under extreme memory pressure; the memo key
+omits `check_cpu_ms` (fine while every run uses the default 120 s — do not vary it
+against a warm server).
 
 ---
 
