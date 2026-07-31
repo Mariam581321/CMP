@@ -54,9 +54,14 @@ at a time and isolate what moved the needle.
   first — every realistic system ships retrieval, and later arms should stack on the
   better version of it. Comparisons are clean *within* a block; cross-block
   attributions are conditional on the chosen path, and are reported that way.
-- **Metric:** proof accepted sorry-free by the Lean compiler within the shared 120 s
-  check budget — one budget for agent, supervisor, and grader, so a solve is always
-  observable inside the agent's own loop; the grader's verdict is a fresh compile.
+- **Metric:** proof accepted sorry-free by the Lean compiler within the shared **120
+  CPU-second** check budget — one budget for agent, supervisor, and grader, so a solve is
+  always observable inside the agent's own loop; the grader's verdict is a fresh compile.
+  CPU-seconds, not wall clock, since 2026-07-31: a wall-clock budget measures the file's
+  cost plus the machine's load, and 52% of one run's "too expensive" verdicts compiled
+  fine when replayed idle (`SKELETON.md`, "Why CPU-seconds"). Kills that are *not* the
+  CPU bound (wall fuse, memory fuses) are machine events, not fails, and are recorded as
+  `grader_error`.
 - **Budget:** per-problem cost cap (cost_std, peak-invariant) as the binding limit;
   wall-clock is only a hang backstop. No budget parity across arms — we report
   *(solve rate, cost)* and let the tradeoff be part of the result. For worker arms,

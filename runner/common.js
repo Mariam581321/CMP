@@ -76,7 +76,7 @@ export function arg(name, dflt) {
 // --- extension config --------------------------------------------------------
 // run.js passes per-attempt config to the pi subprocess's extensions as ONE JSON
 // env var (CMP_CONFIG): original_file, problem, budget_std, max_nudges, max_tokens,
-// check_timeout_ms. Empty object outside a run (e.g. grader in the runner process).
+// check_cpu_ms. Empty object outside a run (e.g. grader in the runner process).
 export function cmpConfig() {
   try { return JSON.parse(process.env.CMP_CONFIG ?? "{}"); } catch { return {}; }
 }

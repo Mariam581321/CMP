@@ -69,15 +69,19 @@ export default function (pi: ExtensionAPI) {
         }
 
         if (r.error) {
-          // The server classifies its own failures. A check the REPL watchdog killed
-          // is DETERMINISTIC for that file — "try again" wording on it sends weak
-          // models into a check-spam loop (seen: 406 calls) while each retry burns
-          // minutes of the shared serialized REPL.
+          // A check_timeout reaching this point is always a real, memoized verdict about
+          // the file: the server swallows and requeues the kills that were about the
+          // machine (runCheck), so no agent ever burns a turn on our REPL's bad day.
+          // What is asserted here is the RULE plus the cache, both of which the harness
+          // enforces — never a prediction that Lean will behave the same way twice.
+          // The old "deterministic ... WILL fail the same way" wording was false: 52% of
+          // one run's timeouts compiled fine on an idle server, and each one steered an
+          // agent off a proof that had ordinary fixable errors.
           const text =
             r.kind === "check_timeout"
-              ? `lean_check gave up: ${r.error}. This outcome is deterministic for this exact file — ` +
-                `your proof relies on tactics too expensive to check (heavy \`decide\`, huge \`interval_cases\`/\`simp\` searches, ...). ` +
-                `Retrying the unchanged file WILL fail the same way; simplify the expensive step instead.`
+              ? `lean_check gave up: ${r.error}. This verdict is cached — resubmitting this exact file returns the same answer ` +
+                `without recompiling. Some step costs more than a single check is allowed (heavy \`decide\`, huge ` +
+                `\`interval_cases\`/\`simp\` searches, ...); make that step cheaper.`
               : `lean_check unavailable (${r.error}) — transient, try again`;
           throw new ToolFailure(text);
         }

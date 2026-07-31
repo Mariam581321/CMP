@@ -51,14 +51,13 @@ export default function (pi: ExtensionAPI) {
         }
 
         if (r.error) {
-          // Mirror lean_check's wording: a watchdog-killed check is deterministic
-          // for this exact code — "try again" phrasing sends weak models into a
-          // check-spam loop while each retry burns minutes of the shared REPL.
+          // Mirror lean_check's wording: a check_timeout here is always a real, cached
+          // verdict — the server requeues machine-fault kills instead of reporting them.
           const text =
             r.kind === "check_timeout"
-              ? `check_snippet gave up: ${r.error}. This outcome is deterministic for this exact snippet — ` +
-                `it relies on tactics too expensive to check (heavy \`decide\`, huge \`interval_cases\`/\`simp\` searches, ...). ` +
-                `Retrying the unchanged snippet WILL fail the same way; simplify the expensive step instead.`
+              ? `check_snippet gave up: ${r.error}. This verdict is cached — resubmitting this exact snippet returns the same answer ` +
+                `without recompiling. Some step costs more than a single check is allowed (heavy \`decide\`, huge ` +
+                `\`interval_cases\`/\`simp\` searches, ...); make that step cheaper.`
               : `check_snippet unavailable (${r.error}) — transient, try again`;
           throw new ToolFailure(text);
         }

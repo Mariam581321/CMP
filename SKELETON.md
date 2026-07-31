@@ -127,16 +127,48 @@ re-verification of an unchanged file is ~free; memo hits skip the queue entirely
 the grader is just another client) and are served round-robin across clients, so an
 attempt with many queued checks waits behind itself, not in front of everyone else
 (one check-spamming attempt once starved a whole run). ONE compile budget (default
-120 s, `--check-timeout`) defines "compiles" for agent checks, supervisor, and
+**120 CPU-seconds**, `--check-cpu`) defines "compiles" for agent checks, supervisor, and
 grader alike (2026-07-27: a solve must be observable inside the agent's own loop; a
 480 s probe of the 0726 timeout files found no solves in the 120–480 s band) —
 honest proof steps check in seconds, and the bound caps head-of-line blocking. The
 grader's final verdict bypasses the memo (`force`) so it always comes from a real
-compile. A
-watchdog-killed check is *deterministic* for that file, so the server tags it
-(`kind: check_timeout`), memoizes the verdict (resubmitting the identical file is
-free), and `lean_check` tells the agent to simplify instead of "try again" — error
-wording is harness design surface (the 406-check spam incident).
+compile.
+
+**Why CPU-seconds and not wall clock (2026-07-31).** Wall clock measures the file's cost
+plus whatever else the box was doing, against a hard threshold, so borderline files flip
+with load. Replaying 0730b's 31 "too expensive" files on an idle server: **16 (52%)
+compiled fine**, returning ordinary type errors the agent could have fixed — all 16 from
+the one problem whose proofs sat near the line, while files well over it (fateh_85, _30,
+_36) timed out again. CPU-seconds separates those populations by construction: a
+genuinely expensive check is CPU-bound and burns its budget under any load, while a
+starved check is starved precisely because it is *not* getting CPU. Each kill is tagged
+with the bound that fired (`bound: cpu | wall | rss | mem`) and every check records its
+own `wall_ms`/`cpu_ms` (absent on memo hits, so replays are distinguishable from
+measurements).
+
+**Only `bound: cpu` is a statement about the file.** A wall-fuse or memory-fuse kill is
+an event on this machine — the `MIN_AVAIL` fuse does not even choose its victim by what
+the victim is doing — so it is **never reported to the client at all**: the server
+requeues the check and answers only once it has a real verdict. Telling an agent "the
+machine faltered, try again" would teach it about our REPL and spend a whole turn, the
+growing context re-billed as input, on something it cannot act on — the same reasoning
+that already keeps connection retries inside the tools. The requeued check always runs on
+a *different* REPL process (the kill marks its worker unready before the retry can be
+dispatched: with one worker it waits out the reimport, with several it goes to a
+sibling), so the second measurement is taken under different machine state — that, not
+pristineness, is what makes it informative. A check that really is the balloon would
+otherwise re-kill a worker forever, so a *second* resource kill is accepted as the file's
+own cost — **except `mem`**, which is never charged: the `MIN_AVAIL` fuse selects its
+victim by worker size, so its casualty is whichever check was in flight, and it carries
+no evidence at all about the file (`wall` and `rss` at least implicate the check that was
+running). A retry deadline, not a kill count, bounds the memory case; past it the client
+gets `unavailable` — not a verdict, never memoized. The grader stays stricter than the
+agent-facing side: a non-CPU kill is recorded `grader_error`, visible and re-gradeable,
+never a silent fail.
+
+Error wording is harness design surface (the 406-check spam incident): the tool asserts
+the rule and the cache, both of which the harness enforces, and never predicts that Lean
+will behave the same way twice.
 
 **`native_decide` pre-reject (agent-facing only).** The ban line is *kernel-checked
 or it doesn't count*: `decide`/`norm_num`/`omega` are kernel-verified computation and
@@ -227,7 +259,7 @@ results/                    per-run dirs + results.jsonl (gitignored)
 --model <id>         deepseek/deepseek-v4-flash | --thinking <level> (off)
 --max-tokens <n>     per-response output cap, always sent (default 384000 = model max;
                      set low, e.g. 8192, only for capped experiment cells)
---check-timeout <s>  (120) REPL budget per check — the ONE budget shared by agent
+--check-cpu <s>      (120) CPU-seconds per check — the ONE budget shared by agent
                      checks, supervisor, and grader (it defines "compiles")
 --run-id <s>         default combo+timestamp
 ```

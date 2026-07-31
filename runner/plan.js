@@ -15,7 +15,7 @@
 // post-hoc analysis.
 
 import { postCheck } from "./common.js";
-import { checkedCompile, benchmarkDecls, AGENT_CHECK_TIMEOUT_MS } from "./stmt.js";
+import { checkedCompile, benchmarkDecls, AGENT_CHECK_CPU_MS } from "./stmt.js";
 
 const CLIENT_WAIT_MS = 30 * 60_000; // server queue is serialized; be patient
 
@@ -80,7 +80,7 @@ export async function planCheck(original, solution, problemName = "adhoc") {
   // theorem's sorry goal(s). Logged only — never shown to the agent, never gated.
   let helpers = [];
   try {
-    const orig = await postCheck({ code: original, timeoutMs: AGENT_CHECK_TIMEOUT_MS, client: problemName }, CLIENT_WAIT_MS);
+    const orig = await postCheck({ code: original, cpuMs: AGENT_CHECK_CPU_MS, client: problemName }, CLIENT_WAIT_MS);
     const origGoals = (orig.sorries ?? []).map((s) => s.goal).filter(Boolean);
     helpers = helperSorries.map((s) => ({
       line: s.line,

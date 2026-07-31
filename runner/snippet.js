@@ -5,7 +5,7 @@
 // lean_check).
 
 import { postCheck } from "./common.js";
-import { AGENT_CHECK_TIMEOUT_MS, CLIENT_WAIT_MS, bannedTactic } from "./stmt.js";
+import { AGENT_CHECK_CPU_MS, CLIENT_WAIT_MS, bannedTactic } from "./stmt.js";
 
 // The server renders message positions as `problem.lean:line:col` (historically its
 // only compiled file); for a snippet that label is actively misleading — the agent
@@ -44,7 +44,7 @@ export async function checkSnippet(code, { client }) {
       sorries: [],
     };
   }
-  const r = await postCheck({ code, timeoutMs: AGENT_CHECK_TIMEOUT_MS, client }, CLIENT_WAIT_MS);
+  const r = await postCheck({ code, cpuMs: AGENT_CHECK_CPU_MS, client }, CLIENT_WAIT_MS);
   if (r.error) return r; // typed server failure ({error, kind, ...}) — caller words it for the agent
   return { ...r, ...renderSnippet(r.messages, r.sorries) };
 }

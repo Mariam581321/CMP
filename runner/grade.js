@@ -83,12 +83,17 @@ export async function grade(problemName, solutionPath, originalPath) {
   } catch (e) {
     return fail("grader_error", `lean server unreachable: ${e.message}`);
   }
-  // A check_timeout is a determinate verdict under the one-budget metric ("compiles"
-  // = compiles within the shared 120 s), not a grader malfunction: the file is too
-  // expensive to compile, which is a fail the same way a compile error is.
-  if (r.error && r.kind === "check_timeout")
-    return fail("compile_error", `statement unknown (grading check timed out — file too expensive to compile within the shared check budget)\n${r.error}`);
-  if (r.error) return fail("grader_error", r.error);
+  // Exhausting the CPU budget is a determinate verdict under the one-budget metric
+  // ("compiles" = compiles within the shared CPU budget), not a grader malfunction:
+  // the file costs more than the budget allows, which fails the same way a compile
+  // error does. Every OTHER kill (wall fuse, rss/mem fuse) started as an event on this
+  // machine; the server already retried it on a second REPL instance, so reaching here
+  // means it reproduced. Still not recorded as the file's fail: this
+  // verdict is permanent, and grader_error is visible and re-gradeable where a wrong
+  // compile_error would be silent. Deliberately stricter than the agent-facing side.
+  if (r.error && r.kind === "check_timeout" && r.bound === "cpu")
+    return fail("compile_error", `statement unknown (grading check exhausted the shared CPU budget — file too expensive to compile)\n${r.error}`);
+  if (r.error) return fail("grader_error", `${r.error}${r.bound ? ` [bound: ${r.bound}]` : ""}`);
   // Probe/axiom internals stay out of recorded details — only real compiler output.
   const pretty = stripProbeOutput(r.pretty);
 

@@ -22,11 +22,13 @@ const STMT_CACHE = join(ROOT, "problems", "stmt-types.json");
 // loop: with a larger grader budget, a proof the agent's tool rejects as "too
 // expensive" could secretly count as solved, and the verdict for a file would depend
 // on who compiled it first (the memo is keyed by code hash alone). Probe of the
-// 0726 night's 120 s-timeout files at 480 s: every one still failed — the band held
-// no solves. timeoutMs bounds REPL execution (head-of-line blocking on the shared
-// REPL stays ≤ ~2 min); clients wait longer since queueing is unbounded.
-export const AGENT_CHECK_TIMEOUT_MS = cmpConfig().check_timeout_ms ?? 120_000;
-export const GRADE_TIMEOUT_MS = AGENT_CHECK_TIMEOUT_MS;
+// 0726 night's 120 s files at 480 s: every one still failed — the band held no solves.
+// The budget is CPU-seconds of the REPL's process group, not wall clock (2026-07-31 —
+// see DEFAULT_CHECK_CPU_MS in lean-server.js for why wall clock was flipping borderline
+// files). It bounds a check's own work, so head-of-line blocking on the shared REPL
+// stays ~2 min of CPU; clients wait longer since queueing is unbounded.
+export const AGENT_CHECK_CPU_MS = cmpConfig().check_cpu_ms ?? 120_000;
+export const GRADE_CHECK_CPU_MS = AGENT_CHECK_CPU_MS;
 export const CLIENT_WAIT_MS = 30 * 60_000; // server queue is serialized; be patient
 
 // Names of the declarations the benchmark expects (theorem + optional _solution abbrev).
@@ -141,8 +143,8 @@ export function parseStmtProbe(messages) {
 // force=true bypasses the server memo: the final grading verdict must come from an
 // actual compile, never a cache entry (memo is bounded/evicting, and crashes are
 // unmemoized anyway — this closes the remaining gap).
-export function serverCheck(code, timeoutMs = GRADE_TIMEOUT_MS, client = "grader", force = false) {
-  return postCheck({ code, timeoutMs, client, force }, CLIENT_WAIT_MS);
+export function serverCheck(code, cpuMs = GRADE_CHECK_CPU_MS, client = "grader", force = false) {
+  return postCheck({ code, cpuMs, client, force }, CLIENT_WAIT_MS);
 }
 
 // --- original-side types (cached) -------------------------------------------
@@ -253,7 +255,7 @@ export async function checkedCompile(code, { original, problemName, client }) {
     };
   }
   const r = await postCheck(
-    { code: `${code}\n${stmtProbe(benchmarkDecls(original))}\n`, timeoutMs: AGENT_CHECK_TIMEOUT_MS, client },
+    { code: `${code}\n${stmtProbe(benchmarkDecls(original))}\n`, cpuMs: AGENT_CHECK_CPU_MS, client },
     CLIENT_WAIT_MS,
   );
   if (r.error) return r; // { ok:false, error, kind, pretty, ... } — caller words it for the agent

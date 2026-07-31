@@ -9,7 +9,7 @@
 //        --concurrency <n> (6) --model <id> --thinking <level> --run-id <s>
 //        --problems-dir <dir> (problems/; e.g. problems-nl/ for statements with
 //        the informal NL docstring kept)
-//        --check-timeout <s> (120, REPL budget per agent-facing lean_check)
+//        --check-cpu <s> (120, CPU-second budget per check — the ONE compile budget)
 
 import { spawn, execSync } from "node:child_process";
 import { parseArgs } from "node:util";
@@ -37,7 +37,7 @@ try {
       model: { type: "string", default: "deepseek/deepseek-v4-flash" },
       thinking: { type: "string", default: "off" },
       "max-tokens": { type: "string", default: "384000" },
-      "check-timeout": { type: "string", default: "120" },
+      "check-cpu": { type: "string", default: "120" },
       "run-id": { type: "string" },
     },
     strict: true,
@@ -68,7 +68,7 @@ const THINKING = A.thinking;
 // factor. Default = deepseek-v4-flash's max output. Capped experiment cells pass e.g.
 // --max-tokens 8192; 0 falls back to the provider default (don't use in real runs).
 const MAX_TOKENS = parseInt(A["max-tokens"]);
-const CHECK_TIMEOUT_S = parseInt(A["check-timeout"]);
+const CHECK_CPU_S = parseInt(A["check-cpu"]);
 const RUN_ID = A["run-id"] ?? `${COMBO.join("+") || "baseline"}-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "")}`;
 
 // No peak-hour guard. DeepSeek "will soon adopt" peak-valley pricing (2x during
@@ -97,13 +97,43 @@ process.env.PI_CODING_AGENT_DIR = join(ROOT, "pi-agent");
 // cannot corrupt the JSON event stream.
 process.env.OPENAI_LOG = "info";
 
+// A reused server is the normal case, not the exception — the watchdog keeps one alive
+// across runs — so without this every run inherited whatever state hours of serving had
+// left the workers in: ~2.5 GB of accumulated heap each, part swapped, and drifted onto
+// different slices of the .olean cache so they barely shared any (measured 2026-07-31).
+// The recycle costs ~1 min and nothing is queued behind it yet. Best effort by design:
+// a stale-but-working server beats losing the launch, which is the same reason the
+// import bound below is generous.
+async function recycleWorkers() {
+  process.stdout.write(dim("  reusing lean server — recycling workers... "));
+  try {
+    const r = await fetch(`${LEAN_URL}/recycle`, { method: "POST", signal: AbortSignal.timeout(10_000) });
+    if (!r.ok) {
+      const why = await r.json().then((j) => j.error).catch(() => `HTTP ${r.status}`);
+      return console.log(yellow(`skipped (${why})`));
+    }
+  } catch (e) {
+    return console.log(yellow(`skipped (${e.message})`));
+  }
+  // Poll rather than hold the POST open: undici kills a response whose headers take
+  // >5 min, and a recycle under memory pressure can outlast that (see postCheck).
+  const deadline = Date.now() + parseInt(process.env.CMP_IMPORT_TIMEOUT_MS ?? "900000") + 120_000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 3000));
+    const h = await fetch(`${LEAN_URL}/health`, { signal: AbortSignal.timeout(2000) })
+      .then((r) => r.json()).catch(() => null);
+    if (h && !h.recycling && h.ready) return console.log(dim("ready"));
+  }
+  console.log(yellow("timed out — starting anyway"));
+}
+
 // Persistent lean server: reuse one that's already up, else spawn and wait for
 // Mathlib to load (~1-2 min). Spawned server is killed when this run exits.
 async function ensureLeanServer(logPath) {
   const health = () =>
     fetch(`${LEAN_URL}/health`, { signal: AbortSignal.timeout(2000) })
       .then((r) => r.json()).then((j) => j.ready).catch(() => null);
-  if (await health()) return null;
+  if (await health()) { await recycleWorkers(); return null; }
   const fd = openSync(logPath, "a");
   const child = spawn("node", [join(ROOT, "runner/lean-server.js")], { env: process.env, stdio: ["ignore", fd, fd] });
   // Register the kill BEFORE anything below can throw. Both throws here abort the whole
@@ -199,7 +229,7 @@ async function deepseekBalance() {
 }
 const balanceBefore = await deepseekBalance();
 const RUN_STARTED = Date.now();
-writeFileSync(join(runDir, "run.json"), JSON.stringify({ run_id: RUN_ID, combo: COMBO, model: MODEL, thinking: THINKING, max_tokens: MAX_TOKENS || null, budget_std: BUDGET_STD || null, timeout_s: TIMEOUT_S, check_timeout_s: CHECK_TIMEOUT_S, concurrency: CONCURRENCY, problems, problems_dir: PROBLEMS_DIR, git_sha: gitSha, pi_version: piVersion, balance_before: balanceBefore, started_at: new Date(RUN_STARTED).toISOString() }, null, 2));
+writeFileSync(join(runDir, "run.json"), JSON.stringify({ run_id: RUN_ID, combo: COMBO, model: MODEL, thinking: THINKING, max_tokens: MAX_TOKENS || null, budget_std: BUDGET_STD || null, timeout_s: TIMEOUT_S, check_cpu_s: CHECK_CPU_S, concurrency: CONCURRENCY, problems, problems_dir: PROBLEMS_DIR, git_sha: gitSha, pi_version: piVersion, balance_before: balanceBefore, started_at: new Date(RUN_STARTED).toISOString() }, null, 2));
 
 // Benchmark-neutral by design: no "competition" framing, since the problem source
 // changes between blocks (Putnam -> FATE -> whatever is next) and the prompt must not
@@ -289,7 +319,7 @@ async function attempt(name, idx) {
           budget_std: BUDGET_STD,
           max_nudges: MAX_NUDGES,
           max_tokens: MAX_TOKENS > 0 ? MAX_TOKENS : null,
-          check_timeout_ms: CHECK_TIMEOUT_S * 1000,
+          check_cpu_ms: CHECK_CPU_S * 1000,
           tools: toolList,
         }),
       },

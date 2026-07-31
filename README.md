@@ -38,7 +38,7 @@ node runner/run.js --combo lean-search --problems problems/dev.txt  # + semantic
 Flags: `--combo a,b` `--problems <file>` `--budget-std <usd>` ($1.00 cost_std cap per
 problem) `--timeout <s>` (43200, wall-clock backstop) `--concurrency <n>` (6)
 `--model <id>` (deepseek/deepseek-v4-flash) `--thinking <level>` (off)
-`--check-timeout <s>` (120, REPL budget per agent-facing check) `--run-id <s>`.
+`--check-cpu <s>` (120, CPU-seconds per check — the one compile budget) `--run-id <s>`.
 Unknown flags are hard errors. Output is uncapped by default (model-max `max_tokens`
 sent explicitly); `--max-tokens` sets a tight cap only for capped experiment cells.
 
