@@ -11,6 +11,8 @@ problems); PutnamBench built the harness and stays a secondary anchor.
   questions, and todos.
 - **[`SKELETON.md`](SKELETON.md)** — the implementation: how one attempt runs end-to-end,
   independent grading, the persistent lean server, logging, and tool-level arm designs.
+- **[`FREEZE.md`](FREEZE.md)** — the harness freeze log: the current grid freeze, every
+  re-cut and what it invalidates, and which runs are comparable to which.
 - **[`NOTES.md`](NOTES.md)** — the full collection of research ideas
 - **[`papers/INDEX.md`](papers/INDEX.md)** — annotated reference papers + candidate
   benchmarks with open-source verification notes (PDFs gitignored; the index is the

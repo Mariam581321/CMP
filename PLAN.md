@@ -177,78 +177,12 @@ per-run artifacts under `results/`.
 
 ## Next steps
 
-- [x] Remaining grader fixes; **FROZEN 2026-07-29 at `2f89a7c`, re-cut 2026-07-30 at
-      `d66e12e` and again at `900c364`, re-cut 2026-07-31 at `b1dfcb6`, `60e8fa0`,
-      `bd3251b` and again at `24ed9ae`** —
-      the grid freeze is that last commit: harness_git_sha of every grid
-      run must be that commit or a descendant. Edit here if anything has to change
-      mid-grid and re-freeze. The calibration run predates every freeze, which is why it
-      isn't a grid cell.
-      Why the sixth re-cut: `grep_mathlib` returned a file location per hit and the
-      declaration as the source writes it — so the heading was the one thing the agent
-      could not use (`theorem r_zero`, callable only as `DihedralGroup.r_zero`) and the
-      namespace had to be decoded from the path. It now heads each hit with the assembled
-      name instead, quoted as the source quotes it; `private` is flagged; locations move to
-      the log details. Two reasons, both from the logs. (1) The arm's job is
-      confirmation-retrieval — verifying a name the model can nearly guess — and it was
-      withholding the name. (2) Returning a path induced a retrieval this environment can
-      never serve: 27% of all attempts tried to read Mathlib source (63% in the grep arm
-      against 11% semantic, 2% baseline), 546 of those reads used a path the tool had just
-      printed against 8 guessed, and not one of 833 such reads has ever returned content —
-      the checkout sits outside every agent's working directory and always has. A further
-      35 attempts said they could not read it without testing, so the demand is larger than
-      the attempts. Retrieval is unchanged and verified so: over a 120-query replay of the
-      0730b logs, hits, order, rung and truncation are identical to `bd3251b`, and only the
-      heading differs. Emitted names were checked against the compiled environment (80/80
-      resolve under `#check`; `private` ones correctly do not). This also makes the two
-      search arms' output shapes match — both now return names and signatures — which
-      block A wanted and did not have. **Only `grep_mathlib`'s model-visible surface
-      moved**; no other arm, the grader, budget or nudge policy is touched, so the block
-      design stands. Wanting the source did **not** predict failure (grep arm: 59% solved
-      among attempts that tried, 55% among those that did not), so this is a token-cost and
-      arm-cleanliness fix, not an expected score lever — and whether agents still reach for
-      source once `check_snippet` exists is the pre-registered trigger for revisiting
-      source access as a block-B follow-on.
-      Why the fifth re-cut: the check budget moved from wall-clock to CPU-seconds. A
-      wall-clock bound measures the file's cost plus the machine's load against a hard
-      threshold, so borderline files flip — 52% of one run's "too expensive" verdicts
-      compiled fine when replayed idle, each one steering an agent off a proof with
-      ordinary fixable errors. This changes the metric itself ("compiles" now means
-      "within 120 CPU-seconds"), so no pre-`bd3251b` run is comparable to a grid cell.
-      Why the third re-cut: three tool-layer defects, all found by autopsying the
-      0730b grep cell. (1) pi decides a tool call's `isError` from a *thrown* error
-      only, so the six extension tools — which returned `{isError:true}` — logged their
-      failures as successes (273 of 312 failed edits in 0730b). Telemetry only: the
-      openai-completions path never sends the flag to the model. (2) `grep_mathlib`
-      made the model pick literal-vs-regex, and it picked wrong on 38% of all calls —
-      regex patterns sent with `regex=false`, matched literally, 99% empty. The
-      parameter is gone; the tool now tries the readings in order itself. (3) a
-      fully-qualified name is assembled by the elaborator and appears nowhere in the
-      source, so `grep_mathlib` answered "no matches" about declarations that exist
-      (21 of the 204 dotted queries that came back empty in 0730b); it now rebuilds
-      the name from `namespace`/`end` and answers exact matches only. Also: the
-      peak-hour launch guard is gone (billing checked 0731 is flat) and `billed_usd`
-      now comes from the account balance either side of a run.
-      **Only `grep_mathlib`'s model-visible surface moved.** `search_mathlib` gained
-      per-result telemetry (`distance`/`kind`/`module`) that is not serialized to the
-      model, and the nudge policy, budget, grader and arm design are untouched — so
-      block A's design is unchanged and the semantic and base arms are unaffected by
-      this re-cut. Both retrieval arms are now defined exactly in `SEARCH.md`.
-      Why the fourth re-cut: rung 0 was right in principle and wrong in practice. The
-      walk that rebuilds a qualified name tracked only *named* sections, so a bare `end`
-      popped a scope it had never closed and took the enclosing namespaces with it —
-      plus five more defects of the same kind (untracked `mutual` blocks and modifier
-      forms of `section`, dotted namespaces that close one component at a time,
-      ASCII-only identifiers, scope words in comment prose, `class abbrev`). One of them
-      returned a WRONG declaration rather than none: `def d₁` inside
-      `namespace HomologicalComplex₂` assembled to `HomologicalComplex.d`, which exists
-      and is unrelated — the near-miss this rung promises never to return. Settled by
-      ground truth instead of inspection: assembled names are now checked against the
-      constants of the compiled environment, and all 217,968 declaration heads in the
-      checkout resolve to a name that exists there (2,227 more than before), with
-      nothing that resolved before failing now. `grep_mathlib`'s interface is unchanged
-      — what moved is which declarations rung 0 finds — and no other arm is affected, so
-      block A's design still stands as written.
+- [x] Remaining grader fixes; **grid freeze: `24ed9ae`** — the `harness_git_sha` of every
+      grid run must be that commit or a descendant. Re-cutting before a grid cell runs means
+      updating the SHA here; re-cutting mid-grid means re-freezing and saying so. Freeze
+      history, what each re-cut invalidates, and the 2026-07-31 model boundary (which does
+      not move the freeze but cuts run comparability the same way): `FREEZE.md`. The
+      cost-calibration run predates every freeze, which is why it isn't a grid cell.
       Settled here so they are not relitigated: `max_nudges` stays 3 (across 12 runs
       and three benchmarks, 0 of 50 attempts that ever reached three consecutive
       refusals went on to solve); grep returns exact qualified-name matches only, never
@@ -258,34 +192,6 @@ per-run artifacts under `results/`.
       than LeanSearch); Mathlib stays at PutnamBench's `v4.27.0` pin, 802 commits
       behind the `v4.28.0` that FATE itself targets — a documented divergence, not
       drift.
-      **Model boundary 2026-07-31**: DeepSeek re-pointed the `deepseek-v4-flash` alias to
-      the 0731 GA build (same architecture and size as the preview, re-post-trained, tuned
-      for agentic tool use). There are no dated snapshots — `GET /models` serves only
-      `deepseek-v4-flash` and `deepseek-v4-pro` — so the preview weights are gone and
-      nothing run before today is reproducible. Every grid run is on 0731; every run under
-      `results/` predating it is a different model and cannot be quoted beside a grid cell.
-      This boundary is not a harness change, so it does not move the freeze, but it cuts
-      the same way: pre-0731 runs are not samples of the same thing.
-      Why the first re-cut: the first block-A cell launched at `2f89a7c` (lean-grep, 50
-      FATE-H) was destroyed by a DeepSeek uplink outage, and that harness could only flag
-      a provider error when an attempt made zero tool calls — so an outage landing
-      mid-proof was graded on whatever it left on disk and printed as a clean 21/46.
-      `d66e12e` answered that by measuring the damage: error counts per attempt, a trust
-      cutoff marking an attempt rerun-not-result, a kill on a dead link.
-      Why the second: that was the wrong level. pi retries at two levels and the lower
-      one — inside the openai SDK, below the message layer — emits nothing into the
-      session or the model's context, but defaulted to zero retries on the DeepSeek
-      path. `900c364` turns it on (`pi-agent/settings.json`, 500 retries at a
-      backoff clamped to 8s ≈ an hour of re-probing), which makes an outage a slow run
-      rather than a damaged one, and deletes `d66e12e`'s accounting as dead weight.
-      Measured across 0726-0730, 2-5% of requests failed on a stable night and 7-8% on a
-      bad one; those are now absorbed, leaving `stderr.log` (OPENAI_LOG=info) as the only
-      record. No arm semantics changed at either re-cut, so the block design is
-      untouched. Grid runs must not mix the two: an attempt that never sees a nudge it
-      would have seen at `d66e12e` is not the same sample, which is the whole reason the
-      freeze moves rather than being edited in place. The 0729 grep attempt stays
-      discarded, not a cell: `results/_archive/provider-error-0729/`. The 0730 grep
-      attempt died with its runner at 30/50 and is likewise not a cell.
 - [x] Implement `grep_mathlib` + FATE-M smoke (2/2, tool-path probes green).
 - [ ] **Block A runs**: base, semantic, grep → repeat the winner (noise floor).
 - [x] Implement `check_snippet` (smoked via scripted probes incl. timeout/memo paths;
