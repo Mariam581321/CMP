@@ -71,6 +71,10 @@ at a time and isolate what moved the needle.
 
 **Block A — search: what kind of retrieval matters?**
 
+Both arms are defined exactly — protocol, result shape, limits — in `SEARCH.md`; cite
+that rather than the sketch here. `grep_mathlib` in particular is not an off-the-shelf
+tool and needs its own definition in any write-up.
+
 - **base** — no search. The floor and effect-size ruler.
 - **semantic** (`lean-search`) — natural-language semantic search over Mathlib.
 - **grep** — exact/substring/regex search over Mathlib declaration names and
@@ -169,10 +173,46 @@ per-run artifacts under `results/`.
 ## Next steps
 
 - [x] Remaining grader fixes; **FROZEN 2026-07-29 at `2f89a7c`, re-cut 2026-07-30 at
-      `d66e12e` and again at `900c364`** — the grid freeze is `900c364`: harness_git_sha
-      of every grid run must be that commit or a descendant. Edit here if anything has
-      to change mid-grid and re-freeze. The calibration run predates every freeze, which
-      is why it isn't a grid cell.
+      `d66e12e` and again at `900c364`, re-cut 2026-07-31 at `b1dfcb6`** — the grid
+      freeze is `b1dfcb6`: harness_git_sha of every grid run must be that commit or a
+      descendant. Edit here if anything has to change mid-grid and re-freeze. The
+      calibration run predates every freeze, which is why it isn't a grid cell.
+      Why the third re-cut: three tool-layer defects, all found by autopsying the
+      0730b grep cell. (1) pi decides a tool call's `isError` from a *thrown* error
+      only, so the six extension tools — which returned `{isError:true}` — logged their
+      failures as successes (273 of 312 failed edits in 0730b). Telemetry only: the
+      openai-completions path never sends the flag to the model. (2) `grep_mathlib`
+      made the model pick literal-vs-regex, and it picked wrong on 38% of all calls —
+      regex patterns sent with `regex=false`, matched literally, 99% empty. The
+      parameter is gone; the tool now tries the readings in order itself. (3) a
+      fully-qualified name is assembled by the elaborator and appears nowhere in the
+      source, so `grep_mathlib` answered "no matches" about declarations that exist
+      (21 of the 204 dotted queries that came back empty in 0730b); it now rebuilds
+      the name from `namespace`/`end` and answers exact matches only. Also: the
+      peak-hour launch guard is gone (billing checked 0731 is flat) and `billed_usd`
+      now comes from the account balance either side of a run.
+      **Only `grep_mathlib`'s model-visible surface moved.** `search_mathlib` gained
+      per-result telemetry (`distance`/`kind`/`module`) that is not serialized to the
+      model, and the nudge policy, budget, grader and arm design are untouched — so
+      block A's design is unchanged and the semantic and base arms are unaffected by
+      this re-cut. Both retrieval arms are now defined exactly in `SEARCH.md`.
+      Settled here so they are not relitigated: `max_nudges` stays 3 (across 12 runs
+      and three benchmarks, 0 of 50 attempts that ever reached three consecutive
+      refusals went on to solve); grep returns exact qualified-name matches only, never
+      near-miss leads; semantic results are not filtered against our environment (0.2%
+      of the 11,698 distinct names LeanSearch returned in the 0727 runs do not exist
+      in it — measured, and filtering would make the arm a curated LeanSearch rather
+      than LeanSearch); Mathlib stays at PutnamBench's `v4.27.0` pin, 802 commits
+      behind the `v4.28.0` that FATE itself targets — a documented divergence, not
+      drift.
+      **Model boundary 2026-07-31**: DeepSeek re-pointed the `deepseek-v4-flash` alias to
+      the 0731 GA build (same architecture and size as the preview, re-post-trained, tuned
+      for agentic tool use). There are no dated snapshots — `GET /models` serves only
+      `deepseek-v4-flash` and `deepseek-v4-pro` — so the preview weights are gone and
+      nothing run before today is reproducible. Every grid run is on 0731; every run under
+      `results/` predating it is a different model and cannot be quoted beside a grid cell.
+      This boundary is not a harness change, so it does not move the freeze, but it cuts
+      the same way: pre-0731 runs are not samples of the same thing.
       Why the first re-cut: the first block-A cell launched at `2f89a7c` (lean-grep, 50
       FATE-H) was destroyed by a DeepSeek uplink outage, and that harness could only flag
       a provider error when an attempt made zero tool calls — so an outage landing
