@@ -71,6 +71,22 @@ const TIMEOUT_S = parseInt(A.timeout);
 const CONCURRENCY = parseInt(A.concurrency);
 const MODEL = A.model;
 const THINKING = A.thinking;
+// Flag NAMES are strict above; VALUES were not: `--budget-std 1..0` parsed to NaN and
+// silently disabled the cap (recorded as if intentional), and a NaN --timeout became a
+// ~1 ms setTimeout that SIGKILLed every attempt at birth. A typo'd number must be as
+// hard an error as a typo'd flag.
+for (const [flag, v, min] of [
+  ["budget-std", BUDGET_STD, 0],
+  ["timeout", TIMEOUT_S, 1],
+  ["concurrency", CONCURRENCY, 1],
+  ["max-tokens", parseInt(A["max-tokens"]), 0],
+  ["check-cpu", parseInt(A["check-cpu"]), 1],
+]) {
+  if (!Number.isFinite(v) || v < min) {
+    console.error(`--${flag} ${A[flag]}: not a number ≥ ${min}`);
+    process.exit(1);
+  }
+}
 // Always send an explicit output cap — DeepSeek's server default is 8192/response when
 // none is sent, and PLAN's protocol says a tight cap may only ever be a manipulated
 // factor. Default = deepseek-v4-flash's max output. Capped experiment cells pass e.g.
@@ -170,6 +186,13 @@ for (const ext of COMBO)
     process.exit(1);
   }
 
+// lean-loogle's environment filter reads a derived, gitignored file; without it every
+// loogle call of a multi-day run would fail while the budget burned. Refuse to launch.
+if (COMBO.includes("lean-loogle") && !existsSync(join(ROOT, "problems", "env-names.txt"))) {
+  console.error("lean-loogle needs problems/env-names.txt — regenerate with `node scripts/dump-env-names.mjs` (lean server must be up)");
+  process.exit(1);
+}
+
 // A model id pi's catalog doesn't know does NOT fail: pi clones the provider's default
 // model and swaps only the id, so an unknown/mistyped id runs fine but is priced with
 // the default model's cost table — silently wrong cost_usd in every result.
@@ -196,9 +219,20 @@ const extTools = (name) => {
 const toolList = ["read", "edit", "write", ...extTools("lean-check"), ...COMBO.flatMap(extTools)];
 
 const problems = readFileSync(PROBLEMS_FILE, "utf8").split("\n").map((s) => s.trim()).filter(Boolean);
+// A duplicated line would give two concurrent attempts the same work dir and
+// events.jsonl — both corrupted, both graded on the other's file.
+if (new Set(problems).size !== problems.length) {
+  const seen = new Set();
+  const dupes = problems.filter((p) => (seen.has(p) ? true : (seen.add(p), false)));
+  console.error(`duplicate problems in ${PROBLEMS_FILE}: ${[...new Set(dupes)].join(", ")}`);
+  process.exit(1);
+}
 const runDir = join(ROOT, "results", RUN_ID);
-if (existsSync(join(runDir, "results.jsonl"))) {
-  console.error(`results/${RUN_ID}/ already has results — pick a new --run-id or move the old run aside`);
+// Guard on run.json too, not only results.jsonl: a launch that died before its first
+// record (a wide window — first records can take hours) left a dir the old guard
+// happily reused, interleaving two generations of attempts in one run dir.
+if (existsSync(join(runDir, "results.jsonl")) || existsSync(join(runDir, "run.json"))) {
+  console.error(`results/${RUN_ID}/ already exists — pick a new --run-id or move the old run aside`);
   process.exit(1);
 }
 mkdirSync(runDir, { recursive: true });
@@ -220,20 +254,26 @@ try { piVersion = execSync("pi --version", { env: process.env }).toString().trim
 // as a negative delta (flagged, not trusted); and the balance carries 2 decimals, so the
 // floor on resolution is $0.01 — exact enough for a grid cell, coarse for a smoke test.
 const BALANCE_SETTLE_MS = 20_000;
+// A few retries at each boundary: the two samples are the run's only ground-truth
+// billing numbers, an unrecorded boundary is unrecoverable, and a single wifi blip at
+// launch used to null BOTH (the closing sample is skipped when the opening one is null).
 async function deepseekBalance() {
   if (!IS_DEEPSEEK || !process.env.DEEPSEEK_API_KEY) return null;
-  try {
-    const res = await fetch("https://api.deepseek.com/user/balance", {
-      headers: { Authorization: `Bearer ${process.env.DEEPSEEK_API_KEY}` },
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!res.ok) return null;
-    const usd = (await res.json())?.balance_infos?.find((b) => b.currency === "USD");
-    const v = Number(usd?.total_balance);
-    return Number.isFinite(v) ? v : null;
-  } catch {
-    return null; // never let billing telemetry take down a run
+  for (let tries = 3; tries > 0; tries--) {
+    try {
+      const res = await fetch("https://api.deepseek.com/user/balance", {
+        headers: { Authorization: `Bearer ${process.env.DEEPSEEK_API_KEY}` },
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (res.ok) {
+        const usd = (await res.json())?.balance_infos?.find((b) => b.currency === "USD");
+        const v = Number(usd?.total_balance);
+        if (Number.isFinite(v)) return v;
+      }
+    } catch {} // never let billing telemetry take down a run
+    if (tries > 1) await new Promise((r) => setTimeout(r, 10_000));
   }
+  return null;
 }
 const balanceBefore = await deepseekBalance();
 const RUN_STARTED = Date.now();
@@ -278,7 +318,20 @@ const leanServer = await ensureLeanServer(join(runDir, "lean-server.log"));
 leanServer?.unref(); // don't let the child keep the event loop alive after the summary is written
 const stopServer = () => { try { leanServer?.kill("SIGTERM"); } catch {} };
 process.on("exit", stopServer);
-process.on("SIGINT", () => { stopServer(); process.exit(130); });
+// Killing the runner must kill the attempts. The pi children are detached (their own
+// process groups, so the budget SIGKILL can target a group), which also means they do
+// NOT die with us: an interrupted run used to leave every in-flight agent alive and
+// spending against DeepSeek with all enforcement gone, and their attempts unrecorded.
+// SIGTERM matters as much as SIGINT — `pkill -f run.js` is the documented ops move,
+// and Node's default SIGTERM death runs no 'exit' handlers (the 2026-07-30 orphan).
+const liveAttempts = new Set(); // pids of in-flight pi children
+for (const sig of ["SIGINT", "SIGTERM"]) {
+  process.on(sig, () => {
+    for (const pid of liveAttempts) { try { process.kill(-pid, "SIGKILL"); } catch {} }
+    stopServer();
+    process.exit(sig === "SIGINT" ? 130 : 143);
+  });
+}
 
 // ---------- one attempt ----------
 async function attempt(name, idx) {
@@ -307,6 +360,11 @@ async function attempt(name, idx) {
 
   const events = createWriteStream(join(probDir, "events.jsonl"));
   const stderrLog = createWriteStream(join(probDir, "stderr.log"));
+  // A log stream error (disk full, quota) must degrade that attempt's logging, not
+  // crash the whole runner: an unhandled stream 'error' is an uncaught exception that
+  // would take down every in-flight attempt and skip the summary/closing balance.
+  events.on("error", (e) => console.error(`  ${red("events.jsonl write error")} ${name}: ${e.message}`));
+  stderrLog.on("error", (e) => console.error(`  ${red("stderr.log write error")} ${name}: ${e.message}`));
   const started = Date.now();
   const stats = { turns: 0, userMsgs: 0, toolCalls: {}, tokens: { in: 0, out: 0, cache_read: 0 }, cost: 0 };
   let timedOut = false;
@@ -316,7 +374,7 @@ async function attempt(name, idx) {
   // in-process (nudges are follow-up messages inside the same session); the runner
   // owns hard enforcement only: budget SIGKILL (overshoot ≤ 1 message) and the
   // wall-clock backstop for hangs that emit no usage events.
-  const exitCode = await new Promise((resolveExit) => {
+  const exit = await new Promise((resolveExit) => {
     const child = spawn("pi", args, {
       cwd: work,
       env: {
@@ -334,6 +392,10 @@ async function attempt(name, idx) {
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
+    liveAttempts.add(child.pid);
+    // Decode as UTF-8 across chunk boundaries: per-chunk Buffer→string coercion turned
+    // a ℕ/→/∀ that straddled a 64 KB pipe chunk into U+FFFD in events.jsonl.
+    child.stdout.setEncoding("utf8");
     const killer = setTimeout(() => {
       timedOut = true;
       try { process.kill(-child.pid, "SIGKILL"); } catch {}
@@ -375,9 +437,10 @@ async function attempt(name, idx) {
       }
     });
     child.stderr.on("data", (d) => stderrLog.write(d));
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
+      liveAttempts.delete(child.pid);
       clearTimeout(killer);
-      resolveExit(code);
+      resolveExit({ code, signal });
     });
   });
   events.end();
@@ -391,14 +454,19 @@ async function attempt(name, idx) {
   // CMP_CONFIG, so an ambient read would hold the grader at 120 s while the agent ran
   // on --check-cpu. One budget for agent, supervisor and grader is the metric.
   const g = await grade(name, join(work, "problem.lean"), join(PROBLEMS_DIR, `${name}.lean`), CHECK_CPU_S * 1000);
-  const end = timedOut ? "timeout" : budgetExceeded ? "budget_exceeded" : "completed";
+  // A death the runner did not order — OOM kill, pi crash, provider-retry exhaustion —
+  // is not "completed": it used to be recorded as one and silently counted as an
+  // ordinary arm failure (one such record already exists in the 0727 data). The file
+  // still grades on its merits; `end` says the attempt is a rerun candidate, not a
+  // clean sample of the arm.
+  const end = timedOut ? "timeout" : budgetExceeded ? "budget_exceeded" : exit.code === 0 ? "completed" : "agent_died";
 
   const record = {
     run_id: RUN_ID, problem: name, combo: COMBO, model: MODEL, thinking: THINKING,
     started_at: new Date(started).toISOString(), wall_s: Math.round(wallMs / 1000),
     turns: stats.turns, tokens: stats.tokens, cost_usd: +stats.cost.toFixed(5),
     cost_std: +costStd(stats.tokens).toFixed(5),
-    tool_calls: stats.toolCalls, exit_code: exitCode,
+    tool_calls: stats.toolCalls, exit_code: exit.code, exit_signal: exit.signal ?? null,
     // nudges = ALL supervisor messages (userMsgs minus the CLI prompt).
     budget_std: BUDGET_STD || null, nudges: Math.max(0, stats.userMsgs - 1),
     end,
@@ -437,7 +505,9 @@ await Promise.all(
       } catch (err) {
         console.log(`  ${red("✗ runner error")} ${name}: ${err.message}`);
         records.push({ run_id: RUN_ID, problem: name, combo: COMBO, end: "runner_error", grade: { solved: false, reason: "runner_error", detail: String(err).slice(0, 500) }, solved: false });
-        appendFileSync(join(runDir, "results.jsonl"), JSON.stringify(records.at(-1)) + "\n");
+        // If even the error record cannot be written (the disk-full double fault),
+        // keep the worker alive: the in-memory record still reaches the summary.
+        try { appendFileSync(join(runDir, "results.jsonl"), JSON.stringify(records.at(-1)) + "\n"); } catch (e2) { console.error(`  ${red("results.jsonl write error")}: ${e2.message}`); }
       }
     }
   }),

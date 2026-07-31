@@ -130,13 +130,24 @@ export async function grade(problemName, solutionPath, originalPath, cpuMs = GRA
   }
   if (!r.ok) return fail("compile_error", pretty.slice(0, 4000));
 
+  // Axiom reports are parsed ONLY from messages the probe itself emitted — those with
+  // a line number past the solution's end, where the appended `#print axioms` commands
+  // live. Parsing the whole stream let the agent's own file spoof the verdict: a
+  // `trace "'decl' depends on axioms: []"` inside the solution precedes the real
+  // report, and the old first-match parse took it, turning a sorry'd proof into
+  // `solved` with zero tripwire (same attack class parseStmtProbe's last-wins guard
+  // exists for; a line-number gate is stronger than last-wins because it does not
+  // assume message ordering). Agent-emitted messages always carry positions inside
+  // the solution, so they cannot cross this line.
+  const solLines = solution.split("\n").length;
+  const probeText = (r.messages ?? []).filter((m) => (m.line ?? 0) > solLines).map((m) => m.text).join("\n");
   const allText = (r.messages ?? []).map((m) => m.text).join("\n");
   const axioms = {};
   for (const d of decls) {
     const esc = d.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const m =
-      allText.match(new RegExp(`'${esc}' depends on axioms: \\[([^\\]]*)\\]`)) ??
-      (allText.match(new RegExp(`'${esc}' does not depend on any axioms`)) ? [null, ""] : null);
+      probeText.match(new RegExp(`'${esc}' depends on axioms: \\[([^\\]]*)\\]`)) ??
+      (probeText.match(new RegExp(`'${esc}' does not depend on any axioms`)) ? [null, ""] : null);
     if (!m) return fail("grader_error", `no axiom report for ${d}\n${allText.slice(0, 2000)}`);
     axioms[d] = m[1] === "" ? [] : m[1].split(",").map((s) => s.trim());
     const bad = axioms[d].filter((a) => !ALLOWED_AXIOMS.has(a));

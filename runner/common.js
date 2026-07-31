@@ -98,19 +98,35 @@ export const secs = (ms) => `${Math.round(ms / 1000)}s`;
 // One definition of "what is a docstring vs a comment vs code" shared by the
 // sanitizer (which strips comments = answers) and the grader (which checks the
 // statement survived). If these two disagree, the pipeline breaks silently.
-// PutnamBench files contain no /- -/ block comments (verified over the corpus).
+// Whole-line `/- -/` block comments are tracked with nesting depth (Lean block
+// comments nest): the earlier claim that PutnamBench contains none was false —
+// putnam_2022_a4 ships an indented block comment explaining a hypothesis in prose,
+// which classified as "code", survived sanitization, and passed the leak check.
+// Inline forms (`foo /- c -/ bar`, trailing `-- c`) still classify as code: none
+// exist in either corpus, and mangling strings containing `--` would be worse.
 export function classifyLines(source) {
   const out = [];
   let inDocstring = false;
+  let blockDepth = 0;
+  const opens = (s) => (s.match(/\/-/g) ?? []).length;
+  const closes = (s) => (s.match(/-\//g) ?? []).length;
   for (const line of source.split("\n")) {
     const stripped = line.trim();
     let kind;
-    if (inDocstring) {
+    if (blockDepth > 0) {
+      kind = "comment";
+      blockDepth += opens(stripped) - closes(stripped);
+      if (blockDepth < 0) blockDepth = 0;
+    } else if (inDocstring) {
       kind = "docstring";
       if (stripped.endsWith("-/")) inDocstring = false;
     } else if (stripped.startsWith("/--")) {
       kind = "docstring";
       if (!stripped.endsWith("-/") || stripped === "/--") inDocstring = true;
+    } else if (stripped.startsWith("/-")) {
+      kind = "comment";
+      blockDepth += opens(stripped) - closes(stripped);
+      if (blockDepth < 0) blockDepth = 0;
     } else if (stripped.startsWith("--")) {
       kind = "comment";
     } else if (stripped === "") {

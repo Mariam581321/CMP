@@ -76,18 +76,27 @@ at a time and isolate what moved the needle.
 
 **Block A — search: what kind of retrieval matters?**
 
-Both arms are defined exactly — protocol, result shape, limits — in `SEARCH.md`; cite
+All arms are defined exactly — protocol, result shape, limits — in `SEARCH.md`; cite
 that rather than the sketch here. `grep_mathlib` in particular is not an off-the-shelf
-tool and needs its own definition in any write-up.
+tool and needs its own definition in any write-up; `loogle_mathlib` is off-the-shelf
+Loogle but environment-filtered, which needs stating too.
 
 - **base** — no search. The floor and effect-size ruler.
-- **semantic** (`lean-search`) — natural-language semantic search over Mathlib.
+- **semantic** (`lean-search`) — natural-language semantic search over Mathlib:
+  retrieval by *meaning*.
 - **grep** — exact/substring/regex search over Mathlib declaration names and
-  signatures. The autopsies say agents often need *confirmation of a name they can
-  nearly guess*, not discovery: one attempt produced 398 unknown-identifier errors
-  across 193 hallucinated lemma names; another made 127 semantic searches and wrongly
-  concluded an API was absent. Semantic vs grep separates discovery-retrieval from
-  confirmation-retrieval.
+  signatures: retrieval by *spelling*. The autopsies say agents often need
+  *confirmation of a name they can nearly guess*, not discovery: one attempt produced
+  398 unknown-identifier errors across 193 hallucinated lemma names; another made 127
+  semantic searches and wrongly concluded an API was absent.
+- **loogle** (`lean-loogle`, added 2026-07-31) — Loogle over the compiled environment:
+  retrieval by *structure* (type-shape patterns, constants, name fragments), the mode
+  for when the agent knows neither the name nor the phrasing, only the goal shape. Sees
+  the `to_additive`/`alias` names grep structurally cannot. Public API, hits filtered
+  to our pin (`SEARCH.md` has the skew numbers and the filter rationale).
+
+Semantic vs grep vs loogle separates discovery-retrieval from confirmation-retrieval
+from shape-retrieval.
 
 ⇒ Choose the better search as the default for everything after; **run the winner
 twice** — the flip count between identical runs is the noise floor for every later
@@ -186,14 +195,19 @@ per-run artifacts under `results/`.
       Settled here so they are not relitigated: `max_nudges` stays 3 (across 12 runs
       and three benchmarks, 0 of 50 attempts that ever reached three consecutive
       refusals went on to solve); grep returns exact qualified-name matches only, never
-      near-miss leads; semantic results are not filtered against our environment (0.2%
+      near-miss leads; loogle results ARE filtered against our environment while
+      semantic's are not — the same question priced at different measured skews (9.5%
+      vs 0.2%), decided the same way both times, cheapest-validity-first
+      (`SEARCH.md` has both measurements); semantic results are not filtered (0.2%
       of the 11,698 distinct names LeanSearch returned in the 0727 runs do not exist
       in it — measured, and filtering would make the arm a curated LeanSearch rather
       than LeanSearch); Mathlib stays at PutnamBench's `v4.27.0` pin, 802 commits
       behind the `v4.28.0` that FATE itself targets — a documented divergence, not
       drift.
 - [x] Implement `grep_mathlib` + FATE-M smoke (2/2, tool-path probes green).
-- [ ] **Block A runs**: base, semantic, grep → repeat the winner (noise floor).
+- [x] Implement `loogle_mathlib` (public API + environment filter; skew measured, probe
+      suite green) + FATE-M smoke.
+- [ ] **Block A runs**: base, semantic, grep, loogle → repeat the winner (noise floor).
 - [x] Implement `check_snippet` (smoked via scripted probes incl. timeout/memo paths;
       FATE-M arm smoke still cheap to add before the Block B run).
 - [ ] **Block B run**: snippet on the winning search → substitution analysis

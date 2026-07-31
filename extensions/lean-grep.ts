@@ -42,7 +42,10 @@ export default function (pi: ExtensionAPI) {
         const r = await grepMathlib(params.pattern, { maxResults }, signal);
         if (r.hits.length === 0) {
           return {
-            content: [{ type: "text", text: "No matches (case-insensitive included). Try a shorter fragment, different name segments, or statement text." }],
+            // Bare statement of fact, mirroring search_mathlib's "No results." — the
+            // earlier "Try a shorter fragment..." sentence was retry coaching that
+            // semantic-arm agents never got, i.e. a strategy asymmetry, not a result.
+            content: [{ type: "text", text: "No matches (case-insensitive included)." }],
             details: { count: 0 },
           };
         }
@@ -65,10 +68,13 @@ export default function (pi: ExtensionAPI) {
         // A qualified-name hit answers a different question from the text rungs — "yes,
         // this declaration exists" — and the note also states why the source looks
         // nothing like the query, which is the thing the agent cannot see.
-        const qualifiedNote = () => {
-          const i = params.pattern.lastIndexOf(".");
-          return `note: \`${params.pattern}\` exists. Mathlib's source writes it as \`${params.pattern.slice(i + 1)}\` inside \`namespace ${params.pattern.slice(0, i)}\`, which is why a text search for the full name finds nothing.`;
-        };
+        // No claim about HOW the source splits the name across namespaces: rung 0 also
+        // matches heads written with an explicit prefix (`theorem Foo.bar` inside
+        // `namespace A`), where the last-dot split asserted a decomposition that is
+        // simply false. The existence statement and the why-text-search-fails hint hold
+        // in every case; the split does not.
+        const qualifiedNote = () =>
+          `note: \`${params.pattern}\` exists. The source may declare it under an enclosing namespace with a shorter written name, which is why a text search for the full name can find nothing.`;
         const MODE_NOTE: Record<string, string> = {
           "literal-ci": "note: exact-case search found nothing; these are case-insensitive matches.",
           regex: "note: no literal matches; your pattern was read as a regular expression.",

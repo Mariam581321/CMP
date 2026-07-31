@@ -111,13 +111,17 @@ function applyPreservingUntouchedLines(original, base, reps) {
   for (const g of groups) {
     out += origLines.slice(lineIdx, g.startLine).map((l) => l + "\n").join("");
     const gStart = starts[g.startLine];
-    const gEnd = starts[g.endLine - 1] + baseLines[g.endLine - 1].length;
+    // The slice INCLUDES the group's trailing line separator (when one exists), so a
+    // match that consumed the newline replaces it too. The old form ended the slice at
+    // the last line's text and re-appended "\n" unconditionally — an oldText ending in
+    // "\n" then got its newline twice, silently inserting a blank line per fuzzy edit.
+    const gEnd = g.endLine - 1 < baseLines.length - 1 ? starts[g.endLine] : base.length;
     let slice = base.slice(gStart, gEnd);
     for (const r of [...g.reps].sort((a, b) => b.index - a.index)) {
       const i = r.index - gStart;
       slice = slice.slice(0, i) + r.newText + slice.slice(i + r.length);
     }
-    out += slice + (g.endLine - 1 < baseLines.length - 1 ? "\n" : "");
+    out += slice;
     lineIdx = g.endLine;
   }
   out += origLines.slice(lineIdx).map((l, i) => (lineIdx + i < origLines.length - 1 ? l + "\n" : l)).join("");

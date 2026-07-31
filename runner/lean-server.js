@@ -154,6 +154,17 @@ async function startRepl(w) {
   // detached => repl gets its own process group, so killing -pid takes down the
   // lake wrapper AND the repl binary (otherwise restarts leak 6 GB orphans)
   const proc = spawn("lake", ["env", REPL_BIN], { cwd: LEAN_ENV, env: process.env, stdio: ["pipe", "pipe", "pipe"], detached: true });
+  // Without these two handlers an unhandled 'error' event is an uncaught exception
+  // that kills the WHOLE server: (a) spawn failure (broken PATH — a session-spawned
+  // server does not get the watchdog's exports); (b) EPIPE on stdin when a check is
+  // dispatched in the ms between an OOM-killed repl dying and its 'close' event being
+  // processed. Both reject the in-flight command as a crash; 'close' handles restart.
+  proc.on("error", (e) => {
+    if (w.repl !== proc) return;
+    log(`w${w.id} repl process error:`, e.message);
+    w.pending?.reject(Object.assign(new Error(`REPL process error: ${e.message}`), { kind: "crash" }));
+  });
+  proc.stdin.on("error", (e) => log(`w${w.id} repl stdin error (${e.code ?? e.message}) — close event will handle it`));
   w.repl = proc;
   let buf = "";
   proc.stdout.on("data", (d) => {

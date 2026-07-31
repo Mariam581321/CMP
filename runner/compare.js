@@ -21,7 +21,9 @@ const runs = dirs.map((dir) => {
   const byProblem = {};
   for (const line of readFileSync(f, "utf8").split("\n")) {
     if (!line.trim()) continue;
-    const r = JSON.parse(line);
+    // A torn tail line (runner killed mid-append) must not sink the whole comparison.
+    let r;
+    try { r = JSON.parse(line); } catch { console.error(`skipping unparseable line in ${f}`); continue; }
     byProblem[r.problem] = r; // last record wins if rerun
   }
   return { name: basename(dir), byProblem };

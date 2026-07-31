@@ -1,10 +1,11 @@
-# The two retrieval arms, exactly
+# The three retrieval arms, exactly
 
-Block A compares two ways of finding a Mathlib lemma. They have the same interface shape
-(one string in, ranked declarations out, fixed result count, no knobs) and differ only in
-the retrieval mechanism. This file is the citable definition of each; design rationale is
-in `PLAN.md`, implementation in `runner/grep.js` + `runner/snippet.js` and the `extensions/`
-wrappers.
+Block A compares three ways of finding a Mathlib lemma — by **meaning** (semantic), by
+**spelling** (grep over source), and by **structure** (Loogle over the compiled
+environment). They have the same interface shape (one string in, ranked declarations out,
+fixed result count, no knobs) and differ only in the retrieval mechanism. This file is the
+citable definition of each; design rationale is in `PLAN.md`, implementation in
+`runner/grep.js` + `runner/snippet.js` and the `extensions/` wrappers.
 
 Result depth is fixed per arm and deliberately not a tool parameter: with the knob exposed
 the agent set it on 91% of calls, so the arm measured a mix of depths rather than one.
@@ -119,11 +120,69 @@ declarations and 2,329 `alias`es. Those resolve only in the compiled environment
 
 ---
 
+## `loogle_mathlib` — structure-based retrieval, filtered to the pinned environment
+
+**Mechanism.** One GET to the public Loogle API (`https://loogle.lean-lang.org/json?q=`),
+30 s abort, no retries. Loogle searches the **compiled environment**, not source text:
+queries are name substrings (`"mul_pow"`), constants (`Real.sin`), term patterns with
+wildcards (`(_ * _) ^ _`, named `?a` for repetition), or conclusion-only patterns
+(`⊢ tsum _ = _ * tsum _`), combinable with commas. Because it searches elaborated
+declarations it sees the generated names the grep arm structurally cannot (`@[to_additive]`
+and `alias` declarations — the gap noted under grep's "what it cannot do").
+
+**Returns.** Up to 10 hits (grep's depth, for grep's reason: Loogle orders by module
+import order, not relevance), each `• <name><binders> : <type>` plus the first docstring
+line when one exists — bare bullets, mirroring `search_mathlib`. Loogle's own header line
+("Found N declarations…") is deliberately **not** passed through: its count is
+pre-filter, and a count larger than the visible results induces narrowing calls hunting
+for hits that do not exist in this environment. The only count shown is the filtered one
+(`note: showing 10 of N`, `+` when Loogle itself truncated at its 200-hit cap). Zero
+hits → `"No results."` (a result). A query Loogle cannot parse or elaborate → tool
+failure carrying Loogle's message and at most 8 of its suggestions (the analogue of
+grep's bad-regex failure). Module names — a path signal — never reach the model (the
+24ed9ae reversal applies); they are logged in `details`, as are dropped names and
+Loogle's raw counts.
+
+**The environment filter — the one deliberate asymmetry with `search_mathlib`.** Hits
+whose name does not exist in our compiled environment are dropped before the agent sees
+them (a set lookup against `problems/env-names.txt`, every non-internal constant of the
+resident environment; regenerate with `scripts/dump-env-names.mjs`). Measured 2026-07-31
+over 2,559 sampled hit names: **9.5% do not exist in our pin** — the public instance
+tracks current Mathlib, ~800 commits past us — versus LeanSearch's measured 0.2%. The
+no-filter rule was priced at 0.2%, where the cure costs more validity than the disease;
+at 9.5% the disease is the arm: a tool whose confirmations are wrong one time in ten is
+not a version of Loogle, it is a hallucination amplifier. The filter only ever removes
+false-presents; the reverse direction (our names unknown to public Loogle) sampled at
+1/30, the one miss a compiler-internal equation lemma. Dropped names are logged per call
+(`details.droppedNames`), so Loogle-as-deployed is reconstructible from the run logs. A
+locally-built Loogle against our pin would have zero skew in both directions and is the
+pre-registered upgrade if this arm wins block A.
+
+**Properties that matter for the write-up.**
+- The index is **external and live** (same caveat as semantic): ranking and coverage can
+  drift between runs, so results are not reproducible from the repo — but unlike
+  semantic, every hit the agent sees provably exists in its environment.
+- Per-call `heartbeats` (Loogle's own work counter) is logged: pattern queries cost
+  thousands of heartbeats, name queries single digits — retrieval cost is analyzable
+  post hoc.
+- It answers *"what has this shape"* — the case where the agent knows neither the name
+  nor the informal phrasing, only the goal structure. Discovery vs confirmation vs
+  shape-matching is the three-way contrast block A now measures.
+
+---
+
 ## What the agent is told
 
-Only the capability and the return shape — never the technique, and never the rung order,
-mirroring `search_mathlib` so the two arms differ in retrieval mode and nothing else. The
-agent learns which reading answered from the per-result `note:` line, i.e. as feedback
-after the call rather than as instruction before it. The tool descriptions in
-`extensions/lean-grep.ts` and `extensions/lean-search.ts` are the full model-visible
-surface: with a custom `--system-prompt`, pi's own tool guidelines are not sent.
+Only the capability and the return shape — never the technique, never the rung order,
+never the environment filter — so the three arms differ in retrieval mode and nothing
+else. The one exception is syntax: `loogle_mathlib`'s description teaches Loogle's query
+grammar (wildcards, `⊢`, commas), because without it the arm would measure syntax
+guessing rather than structure search; it still says nothing about when or why to reach
+for the tool. The agent learns which reading answered from feedback after the call (the
+grep `note:` line; Loogle's error messages on rejected queries), not instruction before
+it. The tool
+descriptions in `extensions/lean-grep.ts`, `extensions/lean-search.ts` and
+`extensions/lean-loogle.ts` are the full model-visible surface: with a custom
+`--system-prompt`, pi's own tool guidelines are not sent. Zero-hit messages are equally
+bare in all three arms ("No results." / "No matches (case-insensitive included).") —
+no arm gets retry coaching the others lack.
