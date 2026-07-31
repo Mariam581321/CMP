@@ -178,11 +178,37 @@ per-run artifacts under `results/`.
 ## Next steps
 
 - [x] Remaining grader fixes; **FROZEN 2026-07-29 at `2f89a7c`, re-cut 2026-07-30 at
-      `d66e12e` and again at `900c364`, re-cut 2026-07-31 at `b1dfcb6`, `60e8fa0` and
-      again at `bd3251b`** — the grid freeze is `bd3251b`: harness_git_sha of every grid
+      `d66e12e` and again at `900c364`, re-cut 2026-07-31 at `b1dfcb6`, `60e8fa0`,
+      `bd3251b` and again at `24ed9ae`** —
+      the grid freeze is that last commit: harness_git_sha of every grid
       run must be that commit or a descendant. Edit here if anything has to change
       mid-grid and re-freeze. The calibration run predates every freeze, which is why it
       isn't a grid cell.
+      Why the sixth re-cut: `grep_mathlib` returned a file location per hit and the
+      declaration as the source writes it — so the heading was the one thing the agent
+      could not use (`theorem r_zero`, callable only as `DihedralGroup.r_zero`) and the
+      namespace had to be decoded from the path. It now heads each hit with the assembled
+      name instead, quoted as the source quotes it; `private` is flagged; locations move to
+      the log details. Two reasons, both from the logs. (1) The arm's job is
+      confirmation-retrieval — verifying a name the model can nearly guess — and it was
+      withholding the name. (2) Returning a path induced a retrieval this environment can
+      never serve: 27% of all attempts tried to read Mathlib source (63% in the grep arm
+      against 11% semantic, 2% baseline), 546 of those reads used a path the tool had just
+      printed against 8 guessed, and not one of 833 such reads has ever returned content —
+      the checkout sits outside every agent's working directory and always has. A further
+      35 attempts said they could not read it without testing, so the demand is larger than
+      the attempts. Retrieval is unchanged and verified so: over a 120-query replay of the
+      0730b logs, hits, order, rung and truncation are identical to `bd3251b`, and only the
+      heading differs. Emitted names were checked against the compiled environment (80/80
+      resolve under `#check`; `private` ones correctly do not). This also makes the two
+      search arms' output shapes match — both now return names and signatures — which
+      block A wanted and did not have. **Only `grep_mathlib`'s model-visible surface
+      moved**; no other arm, the grader, budget or nudge policy is touched, so the block
+      design stands. Wanting the source did **not** predict failure (grep arm: 59% solved
+      among attempts that tried, 55% among those that did not), so this is a token-cost and
+      arm-cleanliness fix, not an expected score lever — and whether agents still reach for
+      source once `check_snippet` exists is the pre-registered trigger for revisiting
+      source access as a block-B follow-on.
       Why the fifth re-cut: the check budget moved from wall-clock to CPU-seconds. A
       wall-clock bound measures the file's cost plus the machine's load against a hard
       threshold, so borderline files flip — 52% of one run's "too expensive" verdicts
