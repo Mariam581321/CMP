@@ -186,7 +186,7 @@ per-run artifacts under `results/`.
 
 ## Next steps
 
-- [x] Remaining grader fixes; **grid freeze: `7629f39`** — the `harness_git_sha` of every
+- [x] Remaining grader fixes; **grid freeze: `3084411`** — the `harness_git_sha` of every
       grid run must be that commit or a descendant. Re-cutting before a grid cell runs means
       updating the SHA here; re-cutting mid-grid means re-freezing and saying so. Freeze
       history, what each re-cut invalidates, and the 2026-07-31 model boundary (which does

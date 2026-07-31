@@ -1,6 +1,6 @@
 # Harness freeze log
 
-**Current grid freeze: `7629f39`** (2026-07-31). The `harness_git_sha` of every grid run
+**Current grid freeze: `3084411`** (2026-07-31). The `harness_git_sha` of every grid run
 must be that commit or a descendant.
 
 **Every re-cut below predates the first grid cell.** The grid has not started; no run has
@@ -182,6 +182,14 @@ a boot-time import fuse kill exits the whole server; a requeued check's final at
 can outlast the client's 30 min socket under extreme memory pressure; the memo key
 omits `check_cpu_ms` (fine while every run uses the default 120 s — do not vary it
 against a warm server).
+
+## `3084411` — 2026-07-31, eighth re-cut: loogle unknown-identifier is a result
+
+The loogle smoke (10/10, 115 calls) showed 49% of calls rejected, 32 of 56 being
+bare-name existence probes — the confirmation question, which grep answers with a
+zero-hit *result* while loogle answered with a tool *failure*. Reclassified: unknown
+identifier → `No results: …` + Loogle's suggestions; parse/ill-typed patterns stay
+failures. Only `loogle_mathlib`'s surface moved. Smoked again after the change.
 
 ---
 
