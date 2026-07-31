@@ -173,10 +173,11 @@ per-run artifacts under `results/`.
 ## Next steps
 
 - [x] Remaining grader fixes; **FROZEN 2026-07-29 at `2f89a7c`, re-cut 2026-07-30 at
-      `d66e12e` and again at `900c364`, re-cut 2026-07-31 at `b1dfcb6`** — the grid
-      freeze is `b1dfcb6`: harness_git_sha of every grid run must be that commit or a
-      descendant. Edit here if anything has to change mid-grid and re-freeze. The
-      calibration run predates every freeze, which is why it isn't a grid cell.
+      `d66e12e` and again at `900c364`, re-cut 2026-07-31 at `b1dfcb6` and again at
+      `60e8fa0`** — the grid freeze is `60e8fa0`: harness_git_sha of every grid run must
+      be that commit or a descendant. Edit here if anything has to change mid-grid and
+      re-freeze. The calibration run predates every freeze, which is why it isn't a grid
+      cell.
       Why the third re-cut: three tool-layer defects, all found by autopsying the
       0730b grep cell. (1) pi decides a tool call's `isError` from a *thrown* error
       only, so the six extension tools — which returned `{isError:true}` — logged their
@@ -196,6 +197,21 @@ per-run artifacts under `results/`.
       model, and the nudge policy, budget, grader and arm design are untouched — so
       block A's design is unchanged and the semantic and base arms are unaffected by
       this re-cut. Both retrieval arms are now defined exactly in `SEARCH.md`.
+      Why the fourth re-cut: rung 0 was right in principle and wrong in practice. The
+      walk that rebuilds a qualified name tracked only *named* sections, so a bare `end`
+      popped a scope it had never closed and took the enclosing namespaces with it —
+      plus five more defects of the same kind (untracked `mutual` blocks and modifier
+      forms of `section`, dotted namespaces that close one component at a time,
+      ASCII-only identifiers, scope words in comment prose, `class abbrev`). One of them
+      returned a WRONG declaration rather than none: `def d₁` inside
+      `namespace HomologicalComplex₂` assembled to `HomologicalComplex.d`, which exists
+      and is unrelated — the near-miss this rung promises never to return. Settled by
+      ground truth instead of inspection: assembled names are now checked against the
+      constants of the compiled environment, and all 217,968 declaration heads in the
+      checkout resolve to a name that exists there (2,227 more than before), with
+      nothing that resolved before failing now. `grep_mathlib`'s interface is unchanged
+      — what moved is which declarations rung 0 finds — and no other arm is affected, so
+      block A's design still stands as written.
       Settled here so they are not relitigated: `max_nudges` stays 3 (across 12 runs
       and three benchmarks, 0 of 50 attempts that ever reached three consecutive
       refusals went on to solve); grep returns exact qualified-name matches only, never
