@@ -23,6 +23,12 @@ if (!dirs.length) {
 for (const runDir of dirs) {
   const runMeta = JSON.parse(readFileSync(join(runDir, "run.json"), "utf8"));
   const problemsDir = runMeta.problems_dir ?? join(ROOT, "problems");
+  // Grade at the run's own budget, so a regrade reproduces that run's metric instead of
+  // whatever the default happens to be today. Runs before 2026-07-31 recorded
+  // check_timeout_s, a WALL-clock bound — reusing the number as CPU-seconds is the
+  // intended reading (the same file gets at least as much room under the new metric),
+  // not an equivalence between the two quantities.
+  const checkCpuMs = (runMeta.check_cpu_s ?? runMeta.check_timeout_s ?? 120) * 1000;
   const probs = readdirSync(runDir).filter((f) => statSync(join(runDir, f)).isDirectory());
   console.log(bold(`\n${runMeta.run_id} (${probs.length} attempts)`));
 
@@ -32,7 +38,7 @@ for (const runDir of dirs) {
     const solPath = join(runDir, name, "work", "problem.lean");
     if (!existsSync(attemptPath) || !existsSync(solPath)) { skipped++; continue; }
     const old = JSON.parse(readFileSync(attemptPath, "utf8"));
-    const now = await grade(name, solPath, join(problemsDir, `${name}.lean`));
+    const now = await grade(name, solPath, join(problemsDir, `${name}.lean`), checkCpuMs);
     // v2 records carry the grader's verdict separately (grade.*) — compare it to the
     // fresh grade directly. Legacy records merged run outcome into fail_reason, so
     // timeout/budget/provider must be carried over to stay comparable.

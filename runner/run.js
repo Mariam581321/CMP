@@ -6,7 +6,7 @@
 //
 // Flags: --combo a,b ("" = baseline) --problems <file> --budget-std <usd> (1.00)
 //        --timeout <s> (172800, wall-clock backstop)
-//        --concurrency <n> (6) --model <id> --thinking <level> --run-id <s>
+//        --concurrency <n> (12) --model <id> --thinking <level> (high) --run-id <s>
 //        --problems-dir <dir> (problems/; e.g. problems-nl/ for statements with
 //        the informal NL docstring kept)
 //        --check-cpu <s> (120, CPU-second budget per check — the ONE compile budget)
@@ -33,9 +33,17 @@ try {
       "problems-dir": { type: "string", default: join(ROOT, "problems") },
       "budget-std": { type: "string", default: "1.00" },
       timeout: { type: "string", default: "172800" },
-      concurrency: { type: "string", default: "6" },
+      // 12: with checks served warm by the REPL pool the LLM is the bottleneck, so
+      // the useful band is 8-16 (SKELETON, "Concurrency"). The old default of 6
+      // under-used the box; the 25-30 of the pre-freeze runs put a run and a Claude
+      // session together over the memory floor (see the 0727 VM death).
+      concurrency: { type: "string", default: "12" },
       model: { type: "string", default: "deepseek/deepseek-v4-flash" },
-      thinking: { type: "string", default: "off" },
+      // Thinking is fixed config for the whole grid, not an arm (PLAN: a model knob,
+      // not a harness answer; the on/off pilot found thinking-on same-or-better and
+      // cheaper). It defaults to the grid value so a forgotten flag can no longer
+      // produce an off-protocol run that looks perfectly normal in the output.
+      thinking: { type: "string", default: "high" },
       "max-tokens": { type: "string", default: "384000" },
       "check-cpu": { type: "string", default: "120" },
       "run-id": { type: "string" },
@@ -379,7 +387,10 @@ async function attempt(name, idx) {
   // Verdict (grade) and outcome (end) are orthogonal and both recorded truthfully:
   // the grader's judgment of the final file is never overwritten by how the attempt
   // ended, so "how close were the timeouts?" is a query, not a re-grading session.
-  const g = await grade(name, join(work, "problem.lean"), join(PROBLEMS_DIR, `${name}.lean`));
+  // Budget passed, not inherited: grade() runs here in the runner, which has no
+  // CMP_CONFIG, so an ambient read would hold the grader at 120 s while the agent ran
+  // on --check-cpu. One budget for agent, supervisor and grader is the metric.
+  const g = await grade(name, join(work, "problem.lean"), join(PROBLEMS_DIR, `${name}.lean`), CHECK_CPU_S * 1000);
   const end = timedOut ? "timeout" : budgetExceeded ? "budget_exceeded" : "completed";
 
   const record = {

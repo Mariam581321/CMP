@@ -28,6 +28,13 @@ const STMT_CACHE = join(ROOT, "problems", "stmt-types.json");
 // files). It bounds a check's own work, so head-of-line blocking on the shared REPL
 // stays ~2 min of CPU; clients wait longer since queueing is unbounded.
 export const AGENT_CHECK_CPU_MS = cmpConfig().check_cpu_ms ?? 120_000;
+// Only a DEFAULT, and only for adhoc callers (the grade.js CLI, a bare stmt probe).
+// It cannot be the grid's budget: CMP_CONFIG is set on the pi child's env alone, so
+// this module reads the flag inside an attempt but falls back to 120 000 in the runner
+// process — which is exactly where grade() runs. run.js and regrade.js therefore PASS
+// the budget in (a value, not an ambient read), or a non-default --check-cpu would give
+// agents one budget and the grader another and silently record proofs the agent had
+// verified as compile_error.
 export const GRADE_CHECK_CPU_MS = AGENT_CHECK_CPU_MS;
 export const CLIENT_WAIT_MS = 30 * 60_000; // server queue is serialized; be patient
 
@@ -160,7 +167,7 @@ const memoOrig = new Map();
 // sha key alone would keep serving it and silently skip the value check — treat it
 // as a miss and recompute.
 const hasValues = (entry) => Object.values(entry?.decls ?? {}).every((d) => d.value !== undefined);
-export async function originalStmtTypes(problemName, originalSource, decls) {
+export async function originalStmtTypes(problemName, originalSource, decls, cpuMs = GRADE_CHECK_CPU_MS) {
   const sha = createHash("sha256").update(originalSource).digest("hex");
   const hit = memoOrig.get(problemName);
   if (hit?.sha === sha) return hit.decls;
@@ -170,7 +177,7 @@ export async function originalStmtTypes(problemName, originalSource, decls) {
     memoOrig.set(problemName, { sha, decls: disk[problemName].decls });
     return disk[problemName].decls;
   }
-  const r = await serverCheck(`${originalSource}\n${stmtProbe(decls)}\n`);
+  const r = await serverCheck(`${originalSource}\n${stmtProbe(decls)}\n`, cpuMs);
   if (r.error) throw new Error(`lean server: ${r.error}`);
   if (!r.ok) throw new Error(`original does not compile: ${(r.pretty ?? "").slice(0, 500)}`);
   const probe = parseStmtProbe(r.messages);
@@ -214,10 +221,32 @@ export async function verifyStatement(problemName, originalSource, messages) {
   return { ok: true };
 }
 
-// Remove the probe's CMPSTMT info lines from server pretty-output before showing it
-// to the agent (grader internals are not part of the compiler feedback).
-export function stripProbeOutput(pretty) {
-  return (pretty ?? "").split("\n\n").filter((p) => !p.includes("CMPSTMT") && !p.includes("CMPVAL")).join("\n\n");
+// The probe's CMPSTMT/CMPVAL lines are harness internals, not compiler feedback about
+// the agent's file, so they are removed before anyone sees the output. Rebuilt from the
+// STRUCTURED messages rather than filtered out of the server's rendered `pretty`, which
+// is what the old stripProbeOutput did: it split on blank lines and dropped whole
+// blocks, and render() joins its "compiled with output:" header to the first message
+// with a single newline — so on a clean compile, where the probe lines are the ONLY
+// output, the header was dropped along with them, the string emptied, and lean_check
+// answered "no output" at the exact moment the agent had succeeded. Measured in 31 of
+// 50 attempts in the 0730b run and again on 0731: agents responded by re-checking the
+// byte-identical file, spending a turn to re-ask a question already answered. It also
+// left the statement-changed message quoting an empty "Compiler output:".
+// Same shape as lean-server's render() and snippet.js's renderSnippet(), so one error
+// format is used everywhere; `ok` is recomputed from the visible messages, which is the
+// same verdict since the probe only ever emits info.
+const PROBE_LINE = /^\s*CMP(?:STMT|VAL)\|/;
+export function renderWithoutProbe(messages, sorries) {
+  const visible = (messages ?? []).filter((m) => !PROBE_LINE.test(m.text ?? ""));
+  const parts = [];
+  for (const m of visible) parts.push(`${m.severity}: problem.lean:${m.line}:${m.column}: ${m.text}`);
+  for (const s of sorries ?? []) parts.push(`sorry at line ${s.line}, goal:\n  ${s.goal}`);
+  const ok = !visible.some((m) => m.severity === "error");
+  let pretty = parts.join("\n\n") || "compiled successfully: no errors, no warnings";
+  if (ok && parts.length) pretty = `compiled with output:\n${pretty}`;
+  if (!ok) pretty = `compilation FAILED:\n${pretty}`;
+  if (pretty.length > 8000) pretty = pretty.slice(0, 8000) + "\n... (truncated)";
+  return pretty;
 }
 
 // --- agent-facing check client ----------------------------------------------
@@ -261,5 +290,5 @@ export async function checkedCompile(code, { original, problemName, client }) {
   if (r.error) return r; // { ok:false, error, kind, pretty, ... } — caller words it for the agent
   const probe = parseStmtProbe(r.messages);
   const stmt = await verifyStatement(problemName, original, r.messages);
-  return { ...r, pretty: stripProbeOutput(r.pretty), probe, stmt };
+  return { ...r, pretty: renderWithoutProbe(r.messages, r.sorries), probe, stmt };
 }

@@ -23,7 +23,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { classifyLines, withConnRetry } from "./common.js";
-import { benchmarkDecls, stmtProbe, parseStmtProbe, originalStmtTypes, serverCheck, stripProbeOutput } from "./stmt.js";
+import { benchmarkDecls, stmtProbe, parseStmtProbe, originalStmtTypes, serverCheck, renderWithoutProbe, GRADE_CHECK_CPU_MS } from "./stmt.js";
 
 export { serverCheck } from "./stmt.js";
 
@@ -51,9 +51,13 @@ export function suspiciousKeywords(source) {
 }
 
 /**
+ * `cpuMs` is the run's check budget, passed in rather than read from the environment:
+ * the grader runs in the RUNNER process, which has no CMP_CONFIG, so an ambient read
+ * would pin it to the 120 000 default while the agent used --check-cpu. Same number on
+ * both sides is what makes "compiles" one budget (see GRADE_CHECK_CPU_MS in stmt.js).
  * @returns {Promise<{solved: boolean, reason?: string, detail?: string, axioms?: object, suspicious_keywords?: string[]}>}
  */
-export async function grade(problemName, solutionPath, originalPath) {
+export async function grade(problemName, solutionPath, originalPath, cpuMs = GRADE_CHECK_CPU_MS) {
   if (!existsSync(solutionPath)) return { solved: false, reason: "no_file", detail: "problem.lean missing" };
   const original = readFileSync(originalPath, "utf8");
   const solution = readFileSync(solutionPath, "utf8");
@@ -67,7 +71,7 @@ export async function grade(problemName, solutionPath, originalPath) {
 
   let orig;
   try {
-    orig = await withConnRetry(() => originalStmtTypes(problemName, original, decls));
+    orig = await withConnRetry(() => originalStmtTypes(problemName, original, decls, cpuMs));
   } catch (e) {
     return fail("grader_error", `original stmt types: ${e.message}`);
   }
@@ -79,7 +83,7 @@ export async function grade(problemName, solutionPath, originalPath) {
     // an agent-side timeout memoized under the same code hash must not stand in for
     // the grader's own run. Connection failures are retried for 5 min (withConnRetry):
     // this verdict is permanent, so a REPL mid-restart must be waited out, not recorded.
-    r = await withConnRetry(() => serverCheck(`${solution}\n${probes}`, undefined, "grader", true));
+    r = await withConnRetry(() => serverCheck(`${solution}\n${probes}`, cpuMs, "grader", true));
   } catch (e) {
     return fail("grader_error", `lean server unreachable: ${e.message}`);
   }
@@ -95,7 +99,7 @@ export async function grade(problemName, solutionPath, originalPath) {
     return fail("compile_error", `statement unknown (grading check exhausted the shared CPU budget — file too expensive to compile)\n${r.error}`);
   if (r.error) return fail("grader_error", `${r.error}${r.bound ? ` [bound: ${r.bound}]` : ""}`);
   // Probe/axiom internals stay out of recorded details — only real compiler output.
-  const pretty = stripProbeOutput(r.pretty);
+  const pretty = renderWithoutProbe(r.messages, r.sorries);
 
   // Classification order (statement first, matching the old grader's priority):
   // probe output → statement checks → compile status → axiom checks.
