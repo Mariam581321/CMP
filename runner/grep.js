@@ -134,34 +134,129 @@ function collectHits(rawLines, { inText, maxResults, truncatedRaw, declOnly = fa
 // often does appear at *usage* sites in other files, so the search half-works and
 // returns lemmas that merely mention it — the symptom recorded in the 0729 smoke and
 // treated then as a ranking problem. This reconstructs the prefix the way Lean does.
-const QUALIFIED = /^[A-Za-z_][\w']*(?:\.[A-Za-z_][\w']*)+$/;
+// A Lean identifier is not ASCII: Mathlib names carry subscripts and Greek throughout
+// (`d₁`, `ε₁`, `HomologicalComplex₂`), and `!`/`?` are ordinary name characters
+// (`Array.get!`, `List.find?`). Matching only [A-Za-z_] silently truncates such a name to
+// its ASCII prefix, which is worse than not matching at all — `def d₁` inside
+// `namespace HomologicalComplex₂` came out as `HomologicalComplex.d`, a name that EXISTS
+// (the differential field of `HomologicalComplex`) and points at an unrelated
+// declaration. A near-miss returned as a confirmed hit is precisely what rung 0 promises
+// never to do, so the classes below stay Unicode-aware everywhere a name is read.
+// `«...»` quotes a segment that would otherwise be a keyword (`namespace «Prop»`).
+const SEG = String.raw`(?:«[^»]*»|[\p{L}_][\p{L}\p{N}_'!?]*)`;
+const NAME = String.raw`${SEG}(?:\.${SEG})*`;
+const QUALIFIED = new RegExp(String.raw`^${SEG}(?:\.${SEG})+$`, "u");
+// Split a dotted name into the scopes it opens, unquoting as Lean does: the namespace
+// `«Prop»` is named `Prop`. A quoted segment may itself contain dots, so this cannot be
+// a plain split(".").
+const splitName = (s) => (s.match(/«[^»]*»|[^.]+/gu) ?? []).map((p) => p.replace(/^«|»$/gu, ""));
 const DECL_KW = "theorem|lemma|def|abbrev|instance|structure|class|inductive|axiom|opaque";
 // Strict, JS-side: grep only generates candidates, this decides what is really a head.
+// The name stops at the last dotted segment, so a universe annotation (`theorem foo.{u}`,
+// 295 heads in Mathlib) does not leave a trailing dot glued to the captured name.
 const DECL_NAME_RE = new RegExp(
-  `^(?:@\\[[^\\]]*\\]\\s*)?(?:protected\\s+|private\\s+|noncomputable\\s+|nonrec\\s+|unsafe\\s+|partial\\s+|scoped\\s+)*(?:${DECL_KW})\\s+([A-Za-z_][\\w'.]*)`,
+  // `class abbrev` / `class inductive` are two-word keywords (9 in Mathlib); listed first
+  // so the alternation does not stop at `class` and read the second word as the name.
+  String.raw`^(?:@\[[^\]]*\]\s*)?(?:protected\s+|private\s+|noncomputable\s+|nonrec\s+|unsafe\s+|partial\s+|scoped\s+)*(?:class\s+abbrev|class\s+inductive|${DECL_KW})\s+(${NAME})`,
+  "u",
 );
+
+// Scope lines. Every form that Mathlib actually writes has to be recognised, because a
+// scope that is opened without being tracked gets closed by an `end` that then pops
+// something else. Counted over the checkout: `@[expose] public section` (5564),
+// `public section` (1430), `noncomputable section` (1165), `public meta section` (309),
+// `meta section` (27), the `@[expose] public noncomputable` combination (20), plus plain
+// and named sections. `mutual` opens a scope too, and like an anonymous section it is
+// closed by a bare `end` (19 files; missing it mis-attributed all 9 theorems below the
+// `mutual` in Mathlib/SetTheory/Nimber/Field.lean).
+// Scope names use the same identifier grammar as declaration names, for the same reason:
+// a name the pattern cannot represent is a push or a pop that silently goes missing.
+// Mathlib closes sections named `Foo₂`/`Foo₀` (59 of them) and opens
+// `namespace Mathlib.Tactic.Erw?`, whose `end` line failed to parse at all — leaving the
+// namespace open for the rest of the file. Trailing line comments are tolerated
+// (`end Foo -- section`).
+const NAMESPACE_RE = new RegExp(String.raw`^namespace\s+(${NAME})`, "u");
+const SECTION_RE = new RegExp(
+  String.raw`^(?:@\[[^\]]*\]\s*)?(?:(?:public|meta|noncomputable|private)\s+)*section(?:\s+(${NAME}))?\s*(?:--.*)?$`,
+  "u",
+);
+const MUTUAL_RE = /^mutual\s*(?:--.*)?$/;
+const END_RE = new RegExp(String.raw`^end(?:\s+(${NAME}))?\s*(?:--.*)?$`, "u");
+
+// Depth of open `/- -/` comments after this line (they nest). Prose inside a module
+// docstring is not scope structure: Mathlib/CategoryTheory/NatIso.lean wraps a line
+// beginning "namespace so that they are available..." in its `/-! -/` header, which
+// otherwise pushes a namespace called `so` and mis-qualifies all 25 declarations below it.
+function commentDepthAfter(line, depth) {
+  for (let j = 0; j < line.length - 1; j++) {
+    if (depth === 0 && line[j] === "-" && line[j + 1] === "-") break; // rest is a line comment
+    if (line[j] === "/" && line[j + 1] === "-") { depth++; j++; }
+    else if (line[j] === "-" && line[j + 1] === "/" && depth > 0) { depth--; j++; }
+  }
+  return depth;
+}
 
 // The name Lean gives the declaration on `declLine`: enclosing namespaces, in order,
 // prepended to the name as written. `section`s contribute nothing to the name but DO
-// consume a matching `end`, so they must sit on the stack — popping on every `end`
-// silently mis-attributes every declaration after a closed section (live example:
-// `section ULift` inside `namespace FinEnum`, Mathlib/Data/FinEnum.lean).
+// consume an `end`, so they must sit on the stack — popping a namespace on an `end` that
+// closed a section silently mis-attributes every declaration below it.
+//
+// EVERY scope has to be pushed, not just the named sections. Because only those were, a
+// bare `end` popped the nearest non-namespace entry — reaching past the scope it actually
+// closed to a named section further out, and the truncation took the namespaces stacked
+// above that one with it. 360 declarations in 32 files came out unqualified (`zero_mem`
+// for `LieSubalgebra.zero_mem`, and likewise `LinearEquiv.neg`, `StarAlgHom.comp`,
+// `ContinuousMultilinearMap.pi`), so rung 0 missed them and the query fell through to the
+// text rungs that answer with usage sites — the exact failure rung 0 exists to prevent.
+//
+// A bare `end` pops the TOP of the stack, and only when that is a scope a bare `end` can
+// legally close (anonymous section or `mutual`). Lean rejects `end` without a name for
+// anything else — verified in the REPL: `section / namespace Foo / end` errors with
+// "Missing name after `end`" — so if the top is a named scope, our tracking has drifted
+// and the safe move is to leave the stack alone. Searching DOWN for something poppable is
+// what the old code did, and an over-eager pop deletes namespaces and yields a wrong name;
+// an under-eager one only over-qualifies, which costs a rung-0 hit and nothing else.
+//
+// `namespace A.B` opens one scope PER COMPONENT, so it is pushed as two entries and may be
+// closed either as `end A.B` or as `end B` then `end A` — Mathlib does both, and reading
+// the compound name as a single indivisible scope left `Equiv.Perm` open for the rest of
+// Mathlib/Algebra/Group/End.lean, qualifying 18 `Equiv.*` lemmas as `Equiv.Perm.*`.
 function qualifiedNameAt(fileLines, declLine, nameAsWritten) {
   if (nameAsWritten.startsWith("_root_.")) return nameAsWritten.slice(7); // escapes every namespace
   const stack = [];
+  let depth = 0; // open /- -/ comments (they nest)
   for (let i = 0; i < declLine - 1; i++) {
     const l = fileLines[i];
+    const commented = depth > 0;
+    depth = commentDepthAfter(l, depth);
+    if (commented) continue;
     let m;
-    if ((m = l.match(/^namespace\s+([\w'.]+)/))) stack.push({ ns: true, name: m[1] });
-    else if ((m = l.match(/^section\s+([\w'.]+)/))) stack.push({ ns: false, name: m[1] });
-    else if ((m = l.match(/^end\s+([\w'.]+)\s*$/))) {
-      const at = stack.map((s) => s.name).lastIndexOf(m[1]);
-      if (at >= 0) stack.length = at;
-    } else if (/^end\s*$/.test(l)) {
-      for (let k = stack.length - 1; k >= 0; k--) if (!stack[k].ns) { stack.length = k; break; }
+    if ((m = l.match(NAMESPACE_RE))) for (const part of splitName(m[1])) stack.push({ ns: true, name: part });
+    else if ((m = l.match(SECTION_RE))) {
+      // A dotted section decomposes the same way a dotted namespace does: Mathlib opens
+      // `section ModuleCat.Unbundled` and closes it with `end Unbundled`.
+      if (m[1] === undefined) stack.push({ ns: false, name: null });
+      else for (const part of splitName(m[1])) stack.push({ ns: false, name: part });
+    }
+    else if (MUTUAL_RE.test(l)) stack.push({ ns: false, name: null });
+    else if ((m = l.match(END_RE))) {
+      if (m[1]) {
+        const parts = splitName(m[1]);
+        const base = stack.length - parts.length;
+        if (base >= 0 && parts.every((p, k) => stack[base + k].name === p)) stack.length = base;
+        else {
+          // Tracking has drifted (a push we did not see). Fall back to the outermost
+          // scope of that name, which is where the old code always looked.
+          const at = stack.map((s) => s.name).lastIndexOf(parts.join("."));
+          if (at >= 0) stack.length = at;
+        }
+      } else {
+        const top = stack[stack.length - 1];
+        if (top && !top.ns && top.name === null) stack.pop();
+      }
     }
   }
-  return [...stack.filter((s) => s.ns).map((s) => s.name), nameAsWritten].join(".");
+  return [...stack.filter((s) => s.ns).map((s) => s.name), ...splitName(nameAsWritten)].join(".");
 }
 
 // Declarations whose assembled name is EXACTLY the query. Exact only, by design: a
@@ -170,10 +265,14 @@ function qualifiedNameAt(fileLines, declLine, nameAsWritten) {
 // confirmation — the run shows the agent already writes names that do not exist 21%
 // of the time in that situation, so a wrong lead makes it worse, not better.
 async function qualifiedLookup(pattern, maxResults, signal) {
-  const base = pattern.split(".").pop();
+  // `?` is a legal Lean name character (`List.find?`) and an ERE quantifier, so escape
+  // before handing the segment to grep.
+  const base = pattern.split(".").pop().replace(/[.[\]{}()*+?^$|\\]/g, "\\$&");
   // Lax ERE: grep finds lines where a declaration keyword is followed by the base name
-  // (with or without an explicit prefix). DECL_NAME_RE below throws out the rest.
-  const ere = `(${DECL_KW})[[:space:]]+([A-Za-z_][A-Za-z0-9_'.]*\\.)?${base}`;
+  // (with or without an explicit prefix). DECL_NAME_RE below throws out the rest. The
+  // prefix is any non-space run, not an ASCII identifier: `theorem HomologicalComplex₂.d₁`
+  // is written with a prefix grep must be allowed to skip over.
+  const ere = `(${DECL_KW})[[:space:]]+([^[:space:]]*\\.)?${base}`;
   let r;
   try { r = await runGrep(ere, { regex: true, ci: false, cap: ANCHOR_LINE_CAP }, signal); } catch { return []; }
   const fileCache = new Map();

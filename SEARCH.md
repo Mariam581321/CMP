@@ -68,9 +68,17 @@ yields any hit wins and the rest are skipped**. Every result reports which one a
 **Rung 0 — name resolution.** A declaration's real name is assembled by the elaborator:
 `namespace IntermediateField` + `protected theorem inv_mem` = `IntermediateField.inv_mem`,
 a string that appears **nowhere** in Mathlib. So the tool reconstructs it: grep declaration
-heads for the final segment, walk each candidate file's `namespace`/`end` stack (sections
-occupy the stack for `end`-matching but contribute no name; `_root_.` escapes it), prepend,
-and keep only declarations whose assembled name **equals the query exactly**. Near-misses
+heads for the final segment, walk each candidate file's `namespace`/`end` stack, prepend,
+and keep only declarations whose assembled name **equals the query exactly**. The walk
+follows Lean's own scoping rules: sections and `mutual` blocks occupy the stack for
+`end`-matching but contribute no name, a dotted `namespace A.B` opens one scope per
+component (and may be closed as `end A.B` or as `end B` then `end A`), a bare `end` closes
+only what Lean lets it close, `_root_.` escapes every namespace, and prose inside `/- -/`
+comments is not scope structure. Identifiers are read as Lean writes them, subscripts and
+all (`HomologicalComplex₂.d₁`, `Mathlib.Tactic.Erw?`, `«Prop»`): a name truncated to its
+ASCII prefix can collide with a real but unrelated declaration, which is the one thing this
+rung must never return. Checked against the compiled environment (2026-07-31): all 217,968
+declaration heads in the checkout assemble to a name that exists in it. Near-misses
 sharing a final segment are never returned — `Fin.val_lt_val` yields nothing rather than
 offering the unrelated `Units.val_lt_val`. This rung runs *first*, so a name query is
 answered with the declaration rather than with other lemmas that happen to mention it.
