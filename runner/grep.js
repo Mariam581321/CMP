@@ -105,19 +105,23 @@ function collectHits(rawLines, { inText, maxResults, truncatedRaw, declOnly = fa
     seen.add(key);
     if (declHits.length + usageHits.length >= maxResults * 3) { truncated = true; break; }
     const path = relative(PKG_ROOT, file);
+    // Resolved from the ORIGINAL block, before the usage branch below appends its `↳`
+    // note — the note is commentary, not part of the declaration the name belongs to.
+    const named = nameOfHit(fileLines, headLine, text);
+    const loc = { path, line: headLine, name: named?.name ?? null, isPrivate: named?.isPrivate ?? false };
     const isDecl = HEAD_RE.test(text.split("\n")[0]);
     // Decl bucket needs both: the pattern visible in the expanded block AND the block
     // actually being a declaration (expandDecl falls back to the bare matched line
     // when no head is found — those are proof-body usages, not declarations).
     if (inText(text) && isDecl) {
-      declHits.push({ path, line: headLine, text });
+      declHits.push({ ...loc, text });
     } else if (declOnly) {
       continue; // anchor hit that does not satisfy the whole query
     } else if (inText(text)) {
-      usageHits.push({ path, line: headLine, text });
+      usageHits.push({ ...loc, text });
     } else {
       const matched = (fileLines[Number(lineStr) - 1] ?? "").trim().slice(0, 200);
-      usageHits.push({ path, line: headLine, text: `${text}\n  ↳ matches inside its proof, line ${lineStr}: ${matched}` });
+      usageHits.push({ ...loc, text: `${text}\n  ↳ matches inside its proof, line ${lineStr}: ${matched}` });
     }
   }
   const hits = [...declHits, ...usageHits].slice(0, maxResults);
@@ -149,7 +153,15 @@ const QUALIFIED = new RegExp(String.raw`^${SEG}(?:\.${SEG})+$`, "u");
 // Split a dotted name into the scopes it opens, unquoting as Lean does: the namespace
 // `«Prop»` is named `Prop`. A quoted segment may itself contain dots, so this cannot be
 // a plain split(".").
-const splitName = (s) => (s.match(/«[^»]*»|[^.]+/gu) ?? []).map((p) => p.replace(/^«|»$/gu, ""));
+// The same split, keeping each segment exactly as the source writes it. The assembled
+// name is what the tool now returns, so it has to parse — and whether a segment needs
+// `«»` cannot be recovered from the unquoted text: `end` and `exists` look like ordinary
+// identifiers but are Lean keywords, which is why Mathlib writes `def «end»` and
+// `namespace «Prop»`. Re-deriving the quotes by testing the shape of the segment yields
+// `Quiver.Path.end`, which does not parse; carrying the source form does.
+// `n` is the unquoted name Lean matches scopes by, `raw` is what to write in a proof.
+const splitPairs = (s) =>
+  (s.match(/«[^»]*»|[^.]+/gu) ?? []).map((raw) => ({ n: raw.replace(/^«|»$/gu, ""), raw }));
 const DECL_KW = "theorem|lemma|def|abbrev|instance|structure|class|inductive|axiom|opaque";
 // Strict, JS-side: grep only generates candidates, this decides what is really a head.
 // The name stops at the last dotted segment, so a universe annotation (`theorem foo.{u}`,
@@ -158,6 +170,16 @@ const DECL_NAME_RE = new RegExp(
   // `class abbrev` / `class inductive` are two-word keywords (9 in Mathlib); listed first
   // so the alternation does not stop at `class` and read the second word as the name.
   String.raw`^(?:@\[[^\]]*\]\s*)?(?:protected\s+|private\s+|noncomputable\s+|nonrec\s+|unsafe\s+|partial\s+|scoped\s+)*(?:class\s+abbrev|class\s+inductive|${DECL_KW})\s+(${NAME})`,
+  "u",
+);
+// `alias` declares a name too, and 3,254 of Mathlib's aliases write it plainly
+// (`alias foo := bar`). It is deliberately NOT added to DECL_KW — retrieval must not
+// change — but a hit on one is a real, nameable declaration, and leaving it unnamed would
+// render it as "no enclosing declaration" and drop the only thing this tool now returns.
+// The 1,253 anonymous-constructor aliases (`alias ⟨fwd, rev⟩ := h`) declare two names in
+// one line and are left unnamed rather than guessed at.
+const ALIAS_NAME_RE = new RegExp(
+  String.raw`^(?:@\[[^\]]*\]\s*)?(?:protected\s+|private\s+|scoped\s+)*alias\s+(${NAME})\s*:=`,
   "u",
 );
 
@@ -221,8 +243,8 @@ function commentDepthAfter(line, depth) {
 // closed either as `end A.B` or as `end B` then `end A` — Mathlib does both, and reading
 // the compound name as a single indivisible scope left `Equiv.Perm` open for the rest of
 // Mathlib/Algebra/Group/End.lean, qualifying 18 `Equiv.*` lemmas as `Equiv.Perm.*`.
-function qualifiedNameAt(fileLines, declLine, nameAsWritten) {
-  if (nameAsWritten.startsWith("_root_.")) return nameAsWritten.slice(7); // escapes every namespace
+function qualifiedSegsAt(fileLines, declLine, nameAsWritten) {
+  if (nameAsWritten.startsWith("_root_.")) return splitPairs(nameAsWritten.slice(7)); // escapes every namespace
   const stack = [];
   let depth = 0; // open /- -/ comments (they nest)
   for (let i = 0; i < declLine - 1; i++) {
@@ -231,17 +253,17 @@ function qualifiedNameAt(fileLines, declLine, nameAsWritten) {
     depth = commentDepthAfter(l, depth);
     if (commented) continue;
     let m;
-    if ((m = l.match(NAMESPACE_RE))) for (const part of splitName(m[1])) stack.push({ ns: true, name: part });
+    if ((m = l.match(NAMESPACE_RE))) for (const part of splitPairs(m[1])) stack.push({ ns: true, name: part.n, raw: part.raw });
     else if ((m = l.match(SECTION_RE))) {
       // A dotted section decomposes the same way a dotted namespace does: Mathlib opens
       // `section ModuleCat.Unbundled` and closes it with `end Unbundled`.
       if (m[1] === undefined) stack.push({ ns: false, name: null });
-      else for (const part of splitName(m[1])) stack.push({ ns: false, name: part });
+      else for (const part of splitPairs(m[1])) stack.push({ ns: false, name: part.n, raw: part.raw });
     }
     else if (MUTUAL_RE.test(l)) stack.push({ ns: false, name: null });
     else if ((m = l.match(END_RE))) {
       if (m[1]) {
-        const parts = splitName(m[1]);
+        const parts = splitPairs(m[1]).map((q) => q.n);
         const base = stack.length - parts.length;
         if (base >= 0 && parts.every((p, k) => stack[base + k].name === p)) stack.length = base;
         else {
@@ -256,7 +278,35 @@ function qualifiedNameAt(fileLines, declLine, nameAsWritten) {
       }
     }
   }
-  return [...stack.filter((s) => s.ns).map((s) => s.name), ...splitName(nameAsWritten)].join(".");
+  return [...stack.filter((s) => s.ns).map((s) => ({ n: s.name, raw: s.raw })), ...splitPairs(nameAsWritten)];
+}
+
+// Two readings of the same assembled name. The unquoted join is the matching key — rung 0
+// compares it against the query, which arrives unquoted. The raw join is what goes back to
+// the agent: the same name, written so that it parses.
+const qualifiedNameAt = (f, l, n) => qualifiedSegsAt(f, l, n).map((q) => q.n).join(".");
+const pasteableNameAt = (f, l, n) => qualifiedSegsAt(f, l, n).map((q) => q.raw).join(".");
+
+// The name to head a hit with. `text` starts at `headLine`, but its first line can be a
+// bare attribute — `@[simp]` alone on a line is a head for HEAD_RE — so the keyword line
+// is searched for inside the block rather than assumed to be the first. Returns null when
+// the block is not a declaration at all: import lines, docstring prose, wrapped binders
+// and proof-body lines all reach here (13% of hits over a 120-query replay of the 0730b
+// logs), and there is no name to give for those.
+function nameOfHit(fileLines, headLine, text) {
+  const lines = text.split("\n");
+  for (let k = 0; k < lines.length; k++) {
+    const m = lines[k].match(DECL_NAME_RE) ?? lines[k].match(ALIAS_NAME_RE);
+    if (!m) continue;
+    return {
+      name: pasteableNameAt(fileLines, headLine + k, m[1]),
+      // `private` binds to the file it is written in, so the assembled name is real but
+      // NOT usable from problem.lean. Saying so costs a clause; letting the agent spend a
+      // check discovering it costs a compile.
+      isPrivate: /(?:^|\s)private\s/.test(" " + lines[k].replace(/^@\[[^\]]*\]\s*/, " ")),
+    };
+  }
+  return null;
 }
 
 // Declarations whose assembled name is EXACTLY the query. Exact only, by design: a
@@ -290,7 +340,10 @@ async function qualifiedLookup(pattern, maxResults, signal) {
     if (!fileLines) continue;
     if (qualifiedNameAt(fileLines, Number(lineStr), nm[1]) !== pattern) continue;
     const { headLine, text } = expandDecl(fileLines, Number(lineStr));
-    hits.push({ path: relative(PKG_ROOT, file), line: headLine, text });
+    // Resolved the same way as every other hit rather than reusing `pattern`: the query
+    // arrives unquoted, and what goes back has to be the form that parses.
+    const named = nameOfHit(fileLines, headLine, text);
+    hits.push({ path: relative(PKG_ROOT, file), line: headLine, text, name: named?.name ?? null, isPrivate: named?.isPrivate ?? false });
     if (hits.length >= maxResults) break;
   }
   return hits;

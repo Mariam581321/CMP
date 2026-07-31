@@ -89,8 +89,23 @@ the longest literal fragment of the pattern (then the second longest), expands e
 candidate to its full declaration, flattens the whitespace, and tests the whole pattern
 against that. Declarations only.
 
-**Result shape.** Up to 10 hits, each `• <path>:<line>` plus the declaration expanded from
-the matched line up to its `:=` (≤10 lines / 600 chars). Declarations whose own text
+**Result shape.** Up to 10 hits, each `• <fully-qualified name>` plus the declaration
+expanded from the matched line up to its `:=` (≤10 lines / 600 chars). The heading is the
+name Lean assembles, not the name the source writes — `DihedralGroup.r_zero` for a source
+line reading `theorem r_zero` — carrying the source's own `«»` quoting so it can be written
+into a proof as it stands; every emitted name in an 80-name sample resolved under `#check`.
+A `private` declaration is named and flagged as unusable outside its own file. A hit with
+no nameable declaration — import lines, docstring prose, wrapped binders, proof-body lines,
+anonymous `instance`s, and the 1,253 `alias ⟨fwd, rev⟩` forms; 15% of hits over a 120-query
+replay of the 0730b logs — is headed `(no enclosing declaration …)` above the matched line.
+**File locations are not returned to the agent**; they are kept in the tool's log details.
+That is a deliberate reversal of the earlier shape, decided from the logs: the source text
+under a hit carries the name as *written*, so a path was the only namespace signal and had
+to be decoded, and returning it induced reads that this environment can never serve — of
+grep-arm reads with an identifiable Mathlib path, 546 used a path the tool had just printed
+against 8 guessed, and none in the project's history has ever returned content. It also
+makes the two arms' output shapes match: both now return names and signatures.
+Declarations whose own text
 matches rank above *usage sites* — matches inside a proof body — which are annotated
 `↳ matches inside its proof, line N`. Zero hits → a "no matches" message (a result, not an
 error). Bad patterns and a missing checkout → tool failure.

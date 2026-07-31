@@ -29,8 +29,9 @@ export default function (pi: ExtensionAPI) {
       "regex (e.g. 'GL.*Sylow'), or as a fully-qualified declaration name (e.g. " +
       "'IntermediateField.inv_mem'); regex patterns match across the line breaks that wrap long " +
       "signatures, and case-insensitive matching is tried when exact case finds nothing. " +
-      "Returns matching declarations with their names, type signatures, and file locations; each " +
-      "result states which of these readings produced it.",
+      "Returns matching declarations with their fully-qualified names — the name as you would " +
+      "write it in a proof, which is often not the name written in the source — and their type " +
+      "signatures; each result states which of these readings produced it.",
     promptSnippet: "grep_mathlib - text or regex search over Mathlib source",
     parameters: Type.Object({
       pattern: Type.String({ description: "Text or extended-regex pattern to search for" }),
@@ -45,7 +46,20 @@ export default function (pi: ExtensionAPI) {
             details: { count: 0 },
           };
         }
-        const blocks = r.hits.map((h) => `• ${h.path}:${h.line}\n${h.text}`);
+        // The heading is the assembled name, not the file location. Two reasons, both from
+        // the 0730b/0731 logs: the source text under it carries the name as *written*
+        // (`r_zero`), which is not what a proof can call (`DihedralGroup.r_zero`), so the
+        // namespace had to be decoded from the path — and returning a path made agents try
+        // to read it. Of the grep-arm reads with an identifiable Mathlib path, 546 used a
+        // path this tool had just printed against 8 guessed, in an environment where no
+        // such read has ever succeeded. Locations stay in `details` for the run logs, which
+        // the model never sees.
+        const blocks = r.hits.map((h) => {
+          const head = h.name
+            ? `${h.name}${h.isPrivate ? "  [private — declared private, so it cannot be used outside its own file]" : ""}`
+            : "(no enclosing declaration — the matching source line is shown as-is)";
+          return `• ${head}\n${h.text}`;
+        });
         // Say which reading of the pattern produced these, so a hit that came from a
         // looser rung is not mistaken for an exact-text match.
         // A qualified-name hit answers a different question from the text rungs — "yes,
@@ -67,7 +81,14 @@ export default function (pi: ExtensionAPI) {
         ].filter(Boolean);
         return {
           content: [{ type: "text", text: [...blocks, ...notes].join("\n\n") }],
-          details: { count: r.hits.length, truncated: r.truncated, mode: r.mode },
+          details: {
+            count: r.hits.length,
+            truncated: r.truncated,
+            mode: r.mode,
+            // Log-only (pi sends the model `content`, never `details`): keeps every hit's
+            // location for later analysis now that the agent no longer receives it.
+            hits: r.hits.map((h) => ({ name: h.name, path: h.path, line: h.line, private: h.isPrivate })),
+          },
         };
       } catch (e: any) {
         // Bad regexes land here with grep's own message — actionable for the model.
