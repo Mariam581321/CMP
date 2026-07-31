@@ -67,14 +67,20 @@ for (const r of runs) {
   const costStd = all.reduce((s, x) => s + (x.cost_std ?? x.cost_usd ?? 0), 0);
   const wall = recs.reduce((s, x) => s + (x.wall_s ?? 0), 0);
   const checks = recs.reduce((s, x) => s + (x.tool_calls?.lean_check ?? 0), 0);
-  const searches = recs.reduce((s, x) => s + (x.tool_calls?.search_mathlib ?? 0), 0);
+  // One "searches" number across both retrieval arms: an arm carries search_mathlib OR
+  // grep_mathlib, never both, so summing them keeps the column comparable between a
+  // semantic and a grep cell instead of showing the grep cell as having done no search.
+  // check_snippet is counted separately — block B's substitution question is whether
+  // snippet displaces search, so the two must stay distinguishable.
+  const searches = recs.reduce((s, x) => s + (x.tool_calls?.search_mathlib ?? 0) + (x.tool_calls?.grep_mathlib ?? 0), 0);
+  const snippets = recs.reduce((s, x) => s + (x.tool_calls?.check_snippet ?? 0), 0);
   const tokIn = recs.reduce((s, x) => s + (x.tokens?.in ?? 0), 0);
   const tokOut = recs.reduce((s, x) => s + (x.tokens?.out ?? 0), 0);
   const tok = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : `${Math.round(n / 1e3)}k`);
   console.log(
     bold(`${r.name}: `) +
       `${solved.length}/${recs.length} solved   $${costStd.toFixed(3)} @std   ` +
-      dim(`$${cost.toFixed(3)} billed, ${tok(tokIn)}/${tok(tokOut)} tok in/out, ${Math.round(wall / Math.max(recs.length, 1))}s avg, ${checks} lean_checks${searches ? `, ${searches} searches` : ""}`) +
+      dim(`$${cost.toFixed(3)} billed, ${tok(tokIn)}/${tok(tokOut)} tok in/out, ${Math.round(wall / Math.max(recs.length, 1))}s avg, ${checks} lean_checks${searches ? `, ${searches} searches` : ""}${snippets ? `, ${snippets} snippets` : ""}`) +
       (aborted.length ? red(`   ⚠ ${aborted.length} provider-aborted, excluded`) : ""),
   );
 }

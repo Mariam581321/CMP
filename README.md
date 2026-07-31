@@ -3,8 +3,8 @@
 Which agent-harness features actually matter for proving competition math in Lean 4? We
 fix one harness ([pi](https://github.com/earendil-works/pi)), implement candidate
 features as independently-toggleable pi extensions, and measure solve rate + cost for
-combinations of them on PutnamBench (first experiments; benchmark choice beyond that is
-open).
+combinations of them. The experiment grid runs on **FATE-H** (100 graduate-level algebra
+problems); PutnamBench built the harness and stays a secondary anchor.
 
 - **[`PLAN.md`](PLAN.md)** — the research plan: the factorial framework (three questions
   every harness answers), the papers and experiments as vectors in it, protocol, open
@@ -36,8 +36,8 @@ node runner/run.js --combo lean-search --problems problems/dev.txt  # + semantic
 ```
 
 Flags: `--combo a,b` `--problems <file>` `--budget-std <usd>` ($1.00 cost_std cap per
-problem) `--timeout <s>` (43200, wall-clock backstop) `--concurrency <n>` (6)
-`--model <id>` (deepseek/deepseek-v4-flash) `--thinking <level>` (off)
+problem) `--timeout <s>` (172800, wall-clock backstop) `--concurrency <n>` (12)
+`--model <id>` (deepseek/deepseek-v4-flash) `--thinking <level>` (high)
 `--check-cpu <s>` (120, CPU-seconds per check — the one compile budget) `--run-id <s>`.
 Unknown flags are hard errors. Output is uncapped by default (model-max `max_tokens`
 sent explicitly); `--max-tokens` sets a tight cap only for capped experiment cells.

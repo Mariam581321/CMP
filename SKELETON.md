@@ -190,7 +190,8 @@ hints), skipping independent grading, parallel arms while wall-time matters.
 
 ## Concurrency
 
-`--concurrency N` worker pool over problems (default 6): each attempt = own scratch dir +
+`--concurrency N` worker pool over problems (default 12, inside the 8-16 band above):
+each attempt = own scratch dir +
 own pi subprocess; checks hit the shared warm REPL. LLM calls are I/O-bound and DeepSeek
 is rate-limit-friendly; Lean compiles were the old bottleneck (now the REPL).
 
@@ -255,8 +256,8 @@ results/                    per-run dirs + results.jsonl (gitignored)
 --problems <file>    problem list | --problems-dir <dir> (problems/; problems-nl/ for the NL arm)
 --budget-std <usd>   (1.00) per-problem spend cap in cost_std dollars (peak-invariant;
                      checked per assistant message, so overshoot ≤ 1 message; 0 disables)
---timeout <s>        (172800) wall-clock backstop | --concurrency <n> (6)
---model <id>         deepseek/deepseek-v4-flash | --thinking <level> (off)
+--timeout <s>        (172800) wall-clock backstop | --concurrency <n> (12)
+--model <id>         deepseek/deepseek-v4-flash | --thinking <level> (high)
 --max-tokens <n>     per-response output cap, always sent (default 384000 = model max;
                      set low, e.g. 8192, only for capped experiment cells)
 --check-cpu <s>      (120) CPU-seconds per check — the ONE budget shared by agent
