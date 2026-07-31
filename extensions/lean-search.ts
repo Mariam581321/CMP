@@ -3,6 +3,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { ToolFailure } from "../runner/common.js";
 
 const API = "https://leansearch.net/search";
 
@@ -39,22 +40,43 @@ export default function (pi: ExtensionAPI) {
           body: JSON.stringify({ query: [params.query], num_results: n }),
           signal: ac.signal,
         });
+        // Failures THROW; pi ignores a returned isError (see runner/common.js).
+        // "No results." is a result, not a failure, and still returns normally.
         if (!resp.ok) {
-          return { content: [{ type: "text", text: `LeanSearch API error: HTTP ${resp.status}` }], isError: true };
+          throw new ToolFailure(`LeanSearch API error: HTTP ${resp.status}`);
         }
         const data = (await resp.json()) as any[][];
         const hits = data[0] ?? [];
         if (hits.length === 0) return { content: [{ type: "text", text: "No results." }] };
-        const lines = hits.map((h: any) => {
+        const parsed = hits.map((h: any) => {
           const r = h.result ?? h;
-          const name = Array.isArray(r.name) ? r.name.join(".") : String(r.name);
-          const sig = r.signature ?? r.type ?? "";
-          const informal = r.informal_name ? ` — ${r.informal_name}` : "";
-          return `• ${name} : ${sig}${informal}`;
+          return {
+            name: Array.isArray(r.name) ? r.name.join(".") : String(r.name),
+            sig: r.signature ?? r.type ?? "",
+            informal: r.informal_name ?? null,
+            kind: r.kind ?? null,
+            module: Array.isArray(r.module_name) ? r.module_name.join(".") : (r.module_name ?? null),
+            distance: typeof h.distance === "number" ? h.distance : null,
+          };
         });
-        return { content: [{ type: "text", text: lines.join("\n") }], details: { count: hits.length } };
+        const lines = parsed.map((p) => `• ${p.name} : ${p.sig}${p.informal ? ` — ${p.informal}` : ""}`);
+        return {
+          content: [{ type: "text", text: lines.join("\n") }],
+          // Telemetry only — `details` is not serialized to the model on the
+          // openai-completions path, so recording more here cannot change the arm.
+          // The API returns its own relevance score (`distance`) and a `kind`, and both
+          // are unrecoverable after the run: worth keeping for the analysis (how
+          // confident was retrieval, and is it returning theorems or generated
+          // artefacts like `ctorIdx`). The API exposes no index version, so what the
+          // index contained is only ever reconstructible from these records.
+          details: {
+            count: hits.length,
+            results: parsed.map((p) => ({ name: p.name, kind: p.kind, module: p.module, distance: p.distance })),
+          },
+        };
       } catch (e: any) {
-        return { content: [{ type: "text", text: `LeanSearch request failed: ${e?.message ?? e}` }], isError: true };
+        if (e instanceof ToolFailure) throw e; // already classified (HTTP status above)
+        throw new ToolFailure(`LeanSearch request failed: ${e?.message ?? e}`);
       } finally {
         clearTimeout(t);
       }

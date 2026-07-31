@@ -12,6 +12,7 @@ import { Type } from "typebox";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { applyEdits } from "../runner/edit.js";
+import { ToolFailure } from "../runner/common.js";
 
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
@@ -59,21 +60,20 @@ export default function (pi: ExtensionAPI) {
       return args;
     },
     async execute(_toolCallId, params: any, _signal, _onUpdate, ctx) {
+      // Failures THROW (pi ignores a returned isError — see ToolFailure in
+      // runner/common.js); applyEdits' messages, closest-region snippet included,
+      // become the result text unchanged.
       const { path, edits } = params;
       if (!Array.isArray(edits) || edits.length === 0) {
-        return { content: [{ type: "text", text: "Edit tool input is invalid. edits must contain at least one replacement." }], isError: true };
+        throw new ToolFailure("Edit tool input is invalid. edits must contain at least one replacement.");
       }
       const abs = resolve(ctx.cwd, path);
       if (!existsSync(abs)) {
-        return { content: [{ type: "text", text: `Could not edit file: ${path}. File does not exist.` }], isError: true };
+        throw new ToolFailure(`Could not edit file: ${path}. File does not exist.`);
       }
-      try {
-        const { newContent } = applyEdits(readFileSync(abs, "utf8"), edits, path);
-        writeFileSync(abs, newContent, "utf8");
-        return { content: [{ type: "text", text: `Successfully replaced ${edits.length} block(s) in ${path}.` }] };
-      } catch (e: any) {
-        return { content: [{ type: "text", text: String(e?.message ?? e) }], isError: true };
-      }
+      const { newContent } = applyEdits(readFileSync(abs, "utf8"), edits, path);
+      writeFileSync(abs, newContent, "utf8");
+      return { content: [{ type: "text", text: `Successfully replaced ${edits.length} block(s) in ${path}.` }] };
     },
   });
 }

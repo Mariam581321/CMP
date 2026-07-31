@@ -11,7 +11,7 @@ import { Type } from "typebox";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from "node:fs";
 import { join, basename } from "node:path";
 import { planCheck } from "../runner/plan.js";
-import { cmpConfig } from "../runner/common.js";
+import { cmpConfig, ToolFailure } from "../runner/common.js";
 
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
@@ -27,13 +27,16 @@ export default function (pi: ExtensionAPI) {
     promptSnippet: "plan_check - verify problem.lean is a valid plan (compiling skeleton, sorries only in helper lemmas)",
     parameters: Type.Object({}),
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+      // Failures THROW; pi ignores a returned isError (see runner/common.js). A RED
+      // plan (compiles but sorries in the wrong places) is this tool's normal output,
+      // not a failure, and still returns normally.
       const src = join(ctx.cwd, "problem.lean");
       if (!existsSync(src)) {
-        return { content: [{ type: "text", text: "error: problem.lean not found in working directory" }], isError: true };
+        throw new ToolFailure("error: problem.lean not found in working directory");
       }
       const origPath = cmpConfig().original_file;
       if (!origPath || !existsSync(origPath)) {
-        return { content: [{ type: "text", text: "plan_check unavailable: original problem file not configured" }], isError: true };
+        throw new ToolFailure("plan_check unavailable: original problem file not configured");
       }
       try {
         const solution = readFileSync(src, "utf8");
@@ -49,16 +52,20 @@ export default function (pi: ExtensionAPI) {
           hadGreen = prior.some((f) => f.endsWith("-green.lean"));
           writeFileSync(join(plansDir, `plan-${String(prior.length + 1).padStart(2, "0")}-${r.ok ? "green" : "red"}.lean`), solution);
         } catch {}
+        // A lean-server failure (flagged by runner/plan.js) is a tool failure, not a
+        // red plan — throw so it is recorded as one. The snapshot above already ran.
+        if ((r as any).isError === true) throw new ToolFailure(r.text);
         let text = r.text;
-        if (!r.ok && hadGreen && (r as any).isError !== true) {
+        if (!r.ok && hadGreen) {
           text +=
             "\n\nNote: your plan already passed plan_check earlier — the planning phase is done. " +
             "If you are now filling in helper proofs, use lean_check to compile; call plan_check " +
             "again only after deliberately revising the skeleton.";
         }
-        return { content: [{ type: "text", text }], details: { ...r.details, had_green: hadGreen }, isError: (r as any).isError === true };
+        return { content: [{ type: "text", text }], details: { ...r.details, had_green: hadGreen } };
       } catch (e: any) {
-        return { content: [{ type: "text", text: `plan_check temporarily unavailable (${e?.message ?? e}) — try again` }], isError: true };
+        if (e instanceof ToolFailure) throw e; // already classified (server error above)
+        throw new ToolFailure(`plan_check temporarily unavailable (${e?.message ?? e}) — try again`);
       }
     },
   });

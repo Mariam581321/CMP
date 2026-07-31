@@ -19,11 +19,12 @@ const HEAD_RE =
   /^(?:@\[|(?:protected\s+|private\s+|noncomputable\s+|nonrec\s+|unsafe\s+|partial\s+|scoped\s+)*(?:theorem|lemma|def|abbrev|instance|structure|class|inductive|axiom|opaque)\b)/;
 
 const RAW_LINE_CAP = 400; // enough raw hits to fill any maxResults after dedup; bounds memory on patterns like "e"
+const ANCHOR_LINE_CAP = 4000; // the cross-line pass filters after grep, so it needs a wider net
 const GREP_TIMEOUT_MS = 15_000;
 const DECL_MAX_LINES = 10;
 const DECL_MAX_CHARS = 600;
 
-function runGrep(pattern, { regex, ci }, signal) {
+function runGrep(pattern, { regex, ci, cap = RAW_LINE_CAP }, signal) {
   return new Promise((resolve, reject) => {
     const args = ["-rnI", "--include=*.lean", regex ? "-E" : "-F"];
     if (ci) args.push("-i");
@@ -37,7 +38,7 @@ function runGrep(pattern, { regex, ci }, signal) {
       out += d;
       // Early kill once we have plenty of raw lines; grep exits with SIGKILL but the
       // collected prefix is a valid (truncated) result.
-      if (out.split("\n").length > RAW_LINE_CAP) child.kill("SIGKILL");
+      if (out.split("\n").length > cap) child.kill("SIGKILL");
     });
     child.stderr.on("data", (d) => (err += d));
     child.on("error", (e) => finish(reject, e));
@@ -73,37 +74,22 @@ function expandDecl(fileLines, hitLine) {
   return { headLine: head + 1, text };
 }
 
-// Main entry. Returns { hits: [{path, line, text}], truncated, ci } — ci flags that
-// the case-sensitive pass found nothing and results come from a case-insensitive
-// retry (saves the agent a round trip on a wrong-case guess).
-export async function grepMathlib(pattern, { regex = false, maxResults = 10 } = {}, signal) {
-  if (!pattern || !pattern.trim()) throw new Error("empty pattern");
-  if (!existsSync(MATHLIB_SRC)) throw new Error(`Mathlib checkout not found at ${MATHLIB_SRC}`);
-  let ci = false;
-  let r = await runGrep(pattern, { regex, ci }, signal);
-  if (r.lines.length === 0) {
-    ci = true;
-    r = await runGrep(pattern, { regex, ci }, signal);
-    if (r.lines.length === 0) return { hits: [], truncated: false, ci: false };
-  }
-  // Does the expanded declaration text itself contain the pattern? If yes the hit is
-  // (part of) the declaration/signature — what a name query is after. If not, the raw
-  // match sits in the proof body below (a usage site): rank it after definition hits
-  // and append the matched line, otherwise the output shows a containing lemma with
-  // no visible connection to the query (smoke 0729: a query for an exact lemma name
-  // returned only baffling-looking lemmas that merely *used* it).
-  const inText = regex
-    ? (() => { try { const re = new RegExp(pattern, ci ? "i" : ""); return (t) => re.test(t); } catch { return () => true; } })()
-    : ci
-      ? (t) => t.toLowerCase().includes(pattern.toLowerCase())
-      : (t) => t.includes(pattern);
-
+// Turn raw `file:line:` grep output into deduplicated, declaration-expanded hits.
+// inText(text) decides bucketing: the pattern visible in the expanded declaration
+// means the hit IS the declaration/signature — what a name query is after; otherwise
+// the raw match sits in the proof body below (a usage site), which is ranked after
+// definitions with its matched line appended, or the output shows a containing lemma
+// with no visible connection to the query (smoke 0729: a query for an exact lemma
+// name returned only baffling-looking lemmas that merely *used* it).
+// declOnly drops anything that is not a matching declaration — the cross-line pass
+// uses it, because there grep matched an anchor fragment, not the query.
+function collectHits(rawLines, { inText, maxResults, truncatedRaw, declOnly = false }) {
   const fileCache = new Map();
   const seen = new Set();
   const declHits = [];
   const usageHits = [];
-  let truncated = r.truncatedRaw;
-  for (const raw of r.lines) {
+  let truncated = truncatedRaw;
+  for (const raw of rawLines) {
     // grep output is file:line:text; the path contains no colons (repo-controlled).
     const m = raw.match(/^(.*?):(\d+):/);
     if (!m) continue;
@@ -119,11 +105,14 @@ export async function grepMathlib(pattern, { regex = false, maxResults = 10 } = 
     seen.add(key);
     if (declHits.length + usageHits.length >= maxResults * 3) { truncated = true; break; }
     const path = relative(PKG_ROOT, file);
+    const isDecl = HEAD_RE.test(text.split("\n")[0]);
     // Decl bucket needs both: the pattern visible in the expanded block AND the block
     // actually being a declaration (expandDecl falls back to the bare matched line
     // when no head is found — those are proof-body usages, not declarations).
-    if (inText(text) && HEAD_RE.test(text.split("\n")[0])) {
+    if (inText(text) && isDecl) {
       declHits.push({ path, line: headLine, text });
+    } else if (declOnly) {
+      continue; // anchor hit that does not satisfy the whole query
     } else if (inText(text)) {
       usageHits.push({ path, line: headLine, text });
     } else {
@@ -133,5 +122,189 @@ export async function grepMathlib(pattern, { regex = false, maxResults = 10 } = 
   }
   const hits = [...declHits, ...usageHits].slice(0, maxResults);
   if (declHits.length + usageHits.length > maxResults) truncated = true;
-  return { hits, truncated, ci };
+  return { hits, truncated };
+}
+
+// --- fully-qualified names ----------------------------------------------------
+// A Lean declaration's real name is assembled by the elaborator: `namespace
+// IntermediateField` + `protected theorem inv_mem` = `IntermediateField.inv_mem`. That
+// string never appears in the source, so a text search for the name the agent must
+// WRITE finds nothing, while the declaration plainly exists (0730b: 233 dotted-name
+// queries came back empty; the declaration existed for 21 of them). Worse, the name
+// often does appear at *usage* sites in other files, so the search half-works and
+// returns lemmas that merely mention it — the symptom recorded in the 0729 smoke and
+// treated then as a ranking problem. This reconstructs the prefix the way Lean does.
+const QUALIFIED = /^[A-Za-z_][\w']*(?:\.[A-Za-z_][\w']*)+$/;
+const DECL_KW = "theorem|lemma|def|abbrev|instance|structure|class|inductive|axiom|opaque";
+// Strict, JS-side: grep only generates candidates, this decides what is really a head.
+const DECL_NAME_RE = new RegExp(
+  `^(?:@\\[[^\\]]*\\]\\s*)?(?:protected\\s+|private\\s+|noncomputable\\s+|nonrec\\s+|unsafe\\s+|partial\\s+|scoped\\s+)*(?:${DECL_KW})\\s+([A-Za-z_][\\w'.]*)`,
+);
+
+// The name Lean gives the declaration on `declLine`: enclosing namespaces, in order,
+// prepended to the name as written. `section`s contribute nothing to the name but DO
+// consume a matching `end`, so they must sit on the stack — popping on every `end`
+// silently mis-attributes every declaration after a closed section (live example:
+// `section ULift` inside `namespace FinEnum`, Mathlib/Data/FinEnum.lean).
+function qualifiedNameAt(fileLines, declLine, nameAsWritten) {
+  if (nameAsWritten.startsWith("_root_.")) return nameAsWritten.slice(7); // escapes every namespace
+  const stack = [];
+  for (let i = 0; i < declLine - 1; i++) {
+    const l = fileLines[i];
+    let m;
+    if ((m = l.match(/^namespace\s+([\w'.]+)/))) stack.push({ ns: true, name: m[1] });
+    else if ((m = l.match(/^section\s+([\w'.]+)/))) stack.push({ ns: false, name: m[1] });
+    else if ((m = l.match(/^end\s+([\w'.]+)\s*$/))) {
+      const at = stack.map((s) => s.name).lastIndexOf(m[1]);
+      if (at >= 0) stack.length = at;
+    } else if (/^end\s*$/.test(l)) {
+      for (let k = stack.length - 1; k >= 0; k--) if (!stack[k].ns) { stack.length = k; break; }
+    }
+  }
+  return [...stack.filter((s) => s.ns).map((s) => s.name), nameAsWritten].join(".");
+}
+
+// Declarations whose assembled name is EXACTLY the query. Exact only, by design: a
+// declaration that merely shares the final segment (`Fin.val_lt_val` vs the real
+// `Units.val_lt_val`) is a different lemma, and offering it as a lead reads as
+// confirmation — the run shows the agent already writes names that do not exist 21%
+// of the time in that situation, so a wrong lead makes it worse, not better.
+async function qualifiedLookup(pattern, maxResults, signal) {
+  const base = pattern.split(".").pop();
+  // Lax ERE: grep finds lines where a declaration keyword is followed by the base name
+  // (with or without an explicit prefix). DECL_NAME_RE below throws out the rest.
+  const ere = `(${DECL_KW})[[:space:]]+([A-Za-z_][A-Za-z0-9_'.]*\\.)?${base}`;
+  let r;
+  try { r = await runGrep(ere, { regex: true, ci: false, cap: ANCHOR_LINE_CAP }, signal); } catch { return []; }
+  const fileCache = new Map();
+  const hits = [];
+  for (const raw of r.lines) {
+    const m = raw.match(/^(.*?):(\d+):(.*)$/);
+    if (!m) continue;
+    const [, file, lineStr, lineText] = m;
+    const nm = lineText.match(DECL_NAME_RE);
+    if (!nm) continue;
+    if (!fileCache.has(file)) {
+      try { fileCache.set(file, readFileSync(file, "utf8").split("\n")); } catch { fileCache.set(file, null); }
+    }
+    const fileLines = fileCache.get(file);
+    if (!fileLines) continue;
+    if (qualifiedNameAt(fileLines, Number(lineStr), nm[1]) !== pattern) continue;
+    const { headLine, text } = expandDecl(fileLines, Number(lineStr));
+    hits.push({ path: relative(PKG_ROOT, file), line: headLine, text });
+    if (hits.length >= maxResults) break;
+  }
+  return hits;
+}
+
+const META = /[.*+?|()[\]{}^$\\]/;
+const META_RUN = /[.*+?|()[\]{}^$\\]+/g;
+const isValidRegex = (p) => { try { new RegExp(p); return true; } catch { return false; } };
+// Whitespace-insensitive view of a declaration: Mathlib wraps signatures across lines
+// and indents continuations, so `A.*B` can only ever match once the block is flat.
+const flatten = (t) => t.replace(/\s+/g, " ").trim();
+
+// The literal chunks of a pattern, longest first. These are what grep can search for
+// verbatim to find candidate declarations when the pattern itself spans line breaks.
+function anchorsOf(pattern) {
+  return (META.test(pattern) ? pattern.split(META_RUN) : pattern.split(/\s+/))
+    .map((s) => s.trim())
+    .filter((s) => s.length >= 3)
+    .sort((a, b) => b.length - a.length);
+}
+
+function matcherFor(pattern, ci, regex) {
+  if (regex) {
+    try { const re = new RegExp(pattern, ci ? "i" : ""); return (t) => re.test(t); } catch { return () => true; }
+  }
+  const needle = ci ? pattern.toLowerCase() : pattern;
+  return (t) => (ci ? t.toLowerCase() : t).includes(needle);
+}
+
+// Main entry. Returns { hits: [{path, line, text}], truncated, mode }.
+//
+// The agent does NOT choose the matching mode — it proved unable to (0730b: 3226 of
+// 8309 calls passed a pattern full of regex metacharacters with regex=false, so grep
+// matched `GL.*Sylow` as 9 literal characters; 99% of those returned nothing, 38% of
+// every call in the run). Mode is a property of the tool, like result depth: try the
+// interpretations in order of how literally they take the query and stop at the first
+// that finds anything.
+//
+//   1 literal                     grep -F                 (`(a * b) ^ n` stays literal)
+//   2 literal, case-insensitive   grep -F -i              (wrong-case guess)
+//   3 regex                       grep -E                 (`GL.*Sylow`, one line)
+//   4 regex, case-insensitive     grep -E -i
+//   5 across line breaks          anchor grep + whole-declaration match
+//
+// Rung 5 is what a line-based grep structurally cannot do: Mathlib signatures wrap, so
+// `card_GL.*Fin.*ZMod` never matches a single line even as a correct regex (0730b: 73%
+// of the calls that DID set regex=true still returned nothing). It greps the longest
+// literal fragment to get candidate declarations, then tests the whole query against
+// each expanded declaration with its whitespace flattened.
+export async function grepMathlib(pattern, { maxResults = 10 } = {}, signal) {
+  if (!pattern || !pattern.trim()) throw new Error("empty pattern");
+  if (!existsSync(MATHLIB_SRC)) throw new Error(`Mathlib checkout not found at ${MATHLIB_SRC}`);
+  const asRegex = META.test(pattern) && isValidRegex(pattern);
+
+  // A dotted identifier is a question about a NAME, so answer it as one, before any
+  // text rung. Running this last would only rescue the queries that come back empty;
+  // running it first also fixes the more common half, where the qualified string does
+  // occur at usage sites in other files and the text rungs answer a "does X exist?"
+  // question with lemmas that merely mention X and never the declaration itself
+  // (`Nat.card_eq_zero`: 4 hits before this, all usage sites, no declaration).
+  if (QUALIFIED.test(pattern)) {
+    const exact = await qualifiedLookup(pattern, maxResults, signal);
+    if (exact.length) return { hits: exact, truncated: false, mode: "qualified-name" };
+  }
+
+  const rungs = [
+    { mode: "literal", regex: false, ci: false },
+    { mode: "literal-ci", regex: false, ci: true },
+    ...(asRegex ? [{ mode: "regex", regex: true, ci: false }, { mode: "regex-ci", regex: true, ci: true }] : []),
+  ];
+  // A pattern grep rejects (valid JS regex, invalid POSIX ERE — `\d`, `\w`, ...) must
+  // not sink the whole call: keep the message and only surface it if nothing else hits,
+  // where it is the actionable answer.
+  let regexErr = null;
+  for (const rung of rungs) {
+    let r;
+    try {
+      r = await runGrep(pattern, rung, signal);
+    } catch (e) {
+      if (!rung.regex) throw e;
+      regexErr ??= e;
+      continue;
+    }
+    if (r.lines.length === 0) continue;
+    const got = collectHits(r.lines, {
+      inText: matcherFor(pattern, rung.ci, rung.regex),
+      maxResults,
+      truncatedRaw: r.truncatedRaw,
+    });
+    if (got.hits.length) return { ...got, mode: rung.mode };
+  }
+
+  // Rung 5: only worth trying when the query is built from several fragments — a
+  // single-fragment query would already have been found above.
+  const anchors = anchorsOf(pattern);
+  if (anchors.length >= 2) {
+    const match = matcherFor(pattern, true, asRegex); // case-insensitive: the rungs above already tried exact case
+    for (const anchor of anchors.slice(0, 2)) {
+      let r;
+      try {
+        r = await runGrep(anchor, { regex: false, ci: true, cap: ANCHOR_LINE_CAP }, signal);
+      } catch { continue; }
+      if (r.lines.length === 0) continue;
+      const got = collectHits(r.lines, {
+        inText: (text) => match(flatten(text)),
+        maxResults,
+        truncatedRaw: r.truncatedRaw,
+        declOnly: true,
+      });
+      if (got.hits.length) return { ...got, mode: "cross-line" };
+    }
+  }
+
+  if (regexErr) throw regexErr;
+  return { hits: [], truncated: false, mode: null };
 }

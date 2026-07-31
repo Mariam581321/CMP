@@ -10,7 +10,6 @@
 //        --problems-dir <dir> (problems/; e.g. problems-nl/ for statements with
 //        the informal NL docstring kept)
 //        --check-timeout <s> (120, REPL budget per agent-facing lean_check)
-//        --peak-ok (allow launching during DeepSeek peak-hour pricing)
 
 import { spawn, execSync } from "node:child_process";
 import { parseArgs } from "node:util";
@@ -40,7 +39,6 @@ try {
       "max-tokens": { type: "string", default: "384000" },
       "check-timeout": { type: "string", default: "120" },
       "run-id": { type: "string" },
-      "peak-ok": { type: "boolean", default: false },
     },
     strict: true,
   }).values;
@@ -73,21 +71,14 @@ const MAX_TOKENS = parseInt(A["max-tokens"]);
 const CHECK_TIMEOUT_S = parseInt(A["check-timeout"]);
 const RUN_ID = A["run-id"] ?? `${COMBO.join("+") || "baseline"}-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "")}`;
 
-// DeepSeek bills all items at 2x during peak hours: 01:00–04:00 and 06:00–10:00 UTC
-// (peak-valley pricing, since mid-July 2026). The comparison metric cost_std is
-// peak-invariant by construction, so peak only wastes real money — refuse to launch
-// inside a window unless --peak-ok is passed. (billed cost_usd is informational.)
+// No peak-hour guard. DeepSeek "will soon adopt" peak-valley pricing (2x during
+// 01:00–04:00 and 06:00–10:00 UTC), but billing checked 2026-07-31 was flat, so the
+// windows currently cost nothing and blocking launches inside them only got in the way
+// of testing. The comparison never depended on it: cost_std is peak-invariant by
+// construction, so peak pricing can waste real money but cannot move an arm result.
+// If it does activate, billed_usd (below) shows it and run.json's started_at plus each
+// attempt's wall_s are enough to work out the overlap after the fact.
 const IS_DEEPSEEK = MODEL.includes("deepseek");
-const inPeak = (date) => {
-  const h = date.getUTCHours();
-  return (h >= 1 && h < 4) || (h >= 6 && h < 10);
-};
-if (IS_DEEPSEEK && inPeak(new Date()) && !A["peak-ok"]) {
-  const endsAt = new Date().getUTCHours() < 4 ? "04:00" : "10:00";
-  console.error(`DeepSeek peak-hour pricing is in effect (2x on all billing items; peak = 01:00-04:00 and 06:00-10:00 UTC).`);
-  console.error(`This window ends at ${endsAt} UTC. Re-run then, or pass --peak-ok to pay 2x anyway (cost_std is unaffected).`);
-  process.exit(1);
-}
 
 // ---------- setup ----------
 const dotenv = join(ROOT, ".env");
@@ -179,8 +170,36 @@ try { gitSha = execSync("git rev-parse --short HEAD", { cwd: ROOT }).toString().
 // harness_git_sha alone under-identifies the harness (one `npm update` wide hole).
 let piVersion = "unknown";
 try { piVersion = execSync("pi --version", { env: process.env }).toString().trim(); } catch {}
+// cost_usd is pi's own arithmetic over a baked-in price table, and it only sees requests
+// that returned a completed message — reconciled against DeepSeek's billing it runs a few
+// percent low. DeepSeek exposes no per-request cost, and its dashboard aggregates by UTC
+// day, which cannot separate two runs that share a day or one run that straddles midnight.
+// The account balance is the only per-run source of truth: sample it either side and the
+// delta is what was actually billed. Sampling has to happen live — a run whose boundaries
+// went unrecorded can never be priced afterwards.
+// Caveats, all recorded rather than corrected for: the balance is account-wide, so
+// concurrent runs on the same key make every delta meaningless; a mid-run top-up shows up
+// as a negative delta (flagged, not trusted); and the balance carries 2 decimals, so the
+// floor on resolution is $0.01 — exact enough for a grid cell, coarse for a smoke test.
+const BALANCE_SETTLE_MS = 20_000;
+async function deepseekBalance() {
+  if (!IS_DEEPSEEK || !process.env.DEEPSEEK_API_KEY) return null;
+  try {
+    const res = await fetch("https://api.deepseek.com/user/balance", {
+      headers: { Authorization: `Bearer ${process.env.DEEPSEEK_API_KEY}` },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) return null;
+    const usd = (await res.json())?.balance_infos?.find((b) => b.currency === "USD");
+    const v = Number(usd?.total_balance);
+    return Number.isFinite(v) ? v : null;
+  } catch {
+    return null; // never let billing telemetry take down a run
+  }
+}
+const balanceBefore = await deepseekBalance();
 const RUN_STARTED = Date.now();
-writeFileSync(join(runDir, "run.json"), JSON.stringify({ run_id: RUN_ID, combo: COMBO, model: MODEL, thinking: THINKING, max_tokens: MAX_TOKENS || null, budget_std: BUDGET_STD || null, timeout_s: TIMEOUT_S, check_timeout_s: CHECK_TIMEOUT_S, concurrency: CONCURRENCY, problems, problems_dir: PROBLEMS_DIR, git_sha: gitSha, pi_version: piVersion, peak_pricing_at_launch: IS_DEEPSEEK && inPeak(new Date(RUN_STARTED)), started_at: new Date(RUN_STARTED).toISOString() }, null, 2));
+writeFileSync(join(runDir, "run.json"), JSON.stringify({ run_id: RUN_ID, combo: COMBO, model: MODEL, thinking: THINKING, max_tokens: MAX_TOKENS || null, budget_std: BUDGET_STD || null, timeout_s: TIMEOUT_S, check_timeout_s: CHECK_TIMEOUT_S, concurrency: CONCURRENCY, problems, problems_dir: PROBLEMS_DIR, git_sha: gitSha, pi_version: piVersion, balance_before: balanceBefore, started_at: new Date(RUN_STARTED).toISOString() }, null, 2));
 
 // Benchmark-neutral by design: no "competition" framing, since the problem source
 // changes between blocks (Putnam -> FATE -> whatever is next) and the prompt must not
@@ -392,14 +411,33 @@ const costStdTotal = records.reduce((s, r) => s + (r.cost_std ?? 0), 0);
 const reasonOf = (r) => (r.end !== "completed" ? r.end : r.grade?.reason ?? "unknown");
 const reasons = {};
 for (const r of records) if (!r.solved) reasons[reasonOf(r)] = (reasons[reasonOf(r)] ?? 0) + 1;
-console.log(bold(`\n${COMBO.join("+") || "baseline"}: ${solved.length}/${records.length} solved  (${money(costStdTotal)} @std, ${money(cost)} billed)`));
+// Let the last requests settle on DeepSeek's side before reading the closing balance,
+// or the tail of the run bills after the sample and vanishes from billed_usd.
+let balanceAfter = null, billedUsd = null, billedNote = null;
+if (balanceBefore != null) {
+  await new Promise((r) => setTimeout(r, BALANCE_SETTLE_MS));
+  balanceAfter = await deepseekBalance();
+  if (balanceAfter == null) billedNote = "closing balance unavailable";
+  else {
+    billedUsd = +(balanceBefore - balanceAfter).toFixed(4);
+    // A negative delta means the balance went UP mid-run: a top-up, not a refund. The
+    // number is meaningless then, so surface it instead of reporting a nonsense cost.
+    if (billedUsd < 0) billedNote = "balance rose mid-run (top-up?) — billed_usd not meaningful";
+  }
+} else billedNote = IS_DEEPSEEK ? "opening balance unavailable" : "not a deepseek run";
+
+const billedStr = billedUsd != null && billedUsd >= 0 ? `, ${money(billedUsd)} billed` : "";
+console.log(bold(`\n${COMBO.join("+") || "baseline"}: ${solved.length}/${records.length} solved  (${money(costStdTotal)} @std, ${money(cost)} est${billedStr})`));
 if (solved.length) console.log(`  ${green("solved:")} ${solved.map((r) => r.problem).join(", ")}`);
 for (const [reason, n] of Object.entries(reasons)) console.log(`  ${dim(`${reason}: ${n}`)}`);
+if (billedNote) console.log(dim(`  billed_usd: ${billedNote}`));
 console.log(dim(`  full records: results/${RUN_ID}/results.jsonl\n`));
 
 const summary = {
   run_id: RUN_ID, combo: COMBO, model: MODEL, thinking: THINKING, git_sha: gitSha,
   problems: records.length, solved: solved.length, cost_usd: +cost.toFixed(4), cost_std: +costStdTotal.toFixed(4),
+  // billed_usd is DeepSeek's own number (balance delta); cost_usd/cost_std are ours.
+  balance_before: balanceBefore, balance_after: balanceAfter, billed_usd: billedUsd, billed_note: billedNote,
   fail_reasons: reasons, finished_at: new Date().toISOString(),
 };
 writeFileSync(join(runDir, "summary.json"), JSON.stringify(summary, null, 2));

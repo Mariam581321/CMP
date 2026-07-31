@@ -54,6 +54,19 @@ export async function withConnRetry(fn, deadlineMs = 5 * 60_000) {
   }
 }
 
+// --- tool failures ------------------------------------------------------------
+// pi decides a tool call's isError from a THROWN error only: executePreparedToolCall
+// (pi/packages/agent/src/agent-loop.ts) hardcodes isError:false on the success path
+// and never reads the isError field of a returned result. An extension tool that
+// returns {isError:true} therefore lands in events.jsonl unflagged — 0730b recorded
+// 273 of 312 failed edits as isError=false, and every grep_mathlib/lean_check failure
+// too. So tools THROW to signal failure; pi turns the message into the result text.
+// This marker means "already classified": an outer catch that exists to label
+// transient/unknown failures rethrows it instead of relabelling it.
+// No effect on what the model sees — the openai-completions path DeepSeek runs on
+// serializes tool results as {role:"tool", content} and never sends isError.
+export class ToolFailure extends Error {}
+
 // --- CLI --------------------------------------------------------------------
 export function arg(name, dflt) {
   const i = process.argv.indexOf(`--${name}`);

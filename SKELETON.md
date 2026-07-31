@@ -230,19 +230,27 @@ results/                    per-run dirs + results.jsonl (gitignored)
 --check-timeout <s>  (120) REPL budget per check — the ONE budget shared by agent
                      checks, supervisor, and grader (it defines "compiles")
 --run-id <s>         default combo+timestamp
---peak-ok            allow launching during DeepSeek peak hours (see below)
 ```
 
 Unknown flags are hard errors (`util.parseArgs` strict) — a typo'd flag must never
 silently run a mispriced or misconfigured experiment.
 
-DeepSeek peak-valley pricing (since mid-July 2026): 2x on all billing items during
-01:00–04:00 and 06:00–10:00 UTC (03:00–06:00 and 08:00–12:00 Poland summer time —
-launching after 12:00 noon local is always off-peak). `cost_std` (the `@std` column,
-the comparison metric) is peak-invariant by construction, so peak pricing only wastes
-real money: run.js refuses to start a deepseek run inside a peak window without
-`--peak-ok` (`run.json` records `peak_pricing_at_launch`; billed `cost_usd` is
-informational either way).
+DeepSeek peak-valley pricing — **announced but not in effect** (checked 2026-07-31).
+The docs say the API "will soon adopt" 2x on all billing items during 01:00–04:00 and
+06:00–10:00 UTC (03:00–06:00 and 08:00–12:00 Poland summer time), with the effective
+date "subject to the official announcement". Verified against DeepSeek's own billing
+rather than the docs: 07-26 billed $10.41 where the flat table predicts $9.73, and
+07-27+07-28 billed $48.38 against $44.50 — both a few percent over flat pricing, where
+2x on the peak-window share would have required ~$54–57. The windows above are
+therefore currently free, so **the harness does not guard them** — there is no
+`--peak-ok` flag and no launch-time refusal. The guard was removed once it turned out to
+be blocking test runs against a price that isn't being charged, and it had never been
+much of a guard anyway: it checked *launch* time only, so a long run started off-peak
+walked into the next window regardless, which is what `lean-search-think-fateh81-0727`
+did (17.7h, crossing both windows). If DeepSeek does activate it, `billed_usd` shows it
+directly, and `run.json`'s `started_at` with each attempt's `wall_s` is enough to
+reconstruct the overlap. None of it reaches the results either way: `cost_std` (the
+`@std` column, the comparison metric) is peak-invariant by construction.
 
 **Prompt caching is what makes agent runs affordable.** Every turn resends the whole
 transcript, so over a T-turn attempt cumulative input grows ~quadratically in T (Σ_t
@@ -261,7 +269,35 @@ fixed off-peak v4-flash table (`STD_PRICES` in `runner/common.js` — the only t
 update when DeepSeek reprices or the default model changes). Miss-only input ignores
 the cache-read quarter of real spend; total-input treats a cached token as 50x its
 economic weight; the weighted sum is peak-invariant, so runs are comparable whenever
-they ran. `cost_usd` stays what was actually billed.
+they ran.
+
+`cost_usd` is **not** what was actually billed — it is pi's own computation from a
+baked-in price table (`packages/ai/src/providers/data/deepseek.json`, generated from
+models.dev), and it only sees requests that returned a completed message. Reconciled
+against DeepSeek's billing page it runs ~7% low: on 07-26 the token volume agrees to
+0.5% (2.614B recorded vs 2.628B billed) but the money does not ($9.73 vs $10.41), and
+the residual solves to a few million more cache-*miss* input tokens than the harness
+recorded — the shape of a small number of failed requests that were billed but never
+produced a message to account. Treat `cost_usd` and `cost_std` as lower bounds when
+sizing a budget; they are exact for arm comparison (both arms are understated alike)
+and approximate for money. The DeepSeek usage dashboard reports in **UTC** days —
+confirmed by the 07-26 single-day query matching the UTC bucketing, not UTC+8.
+
+**`billed_usd` — what DeepSeek actually charged.** run.js reads the account balance
+(`GET /user/balance`) at launch and again after the last attempt, and writes
+`balance_before`/`balance_after`/`billed_usd` into `summary.json` (`balance_before` also
+lands in `run.json`, so a killed run still has its opening sample). The delta is
+DeepSeek's own number, not a reconstruction — which is the only way to price a single
+run, since the API returns no per-request cost and the dashboard aggregates by UTC day:
+two runs sharing a day, or one run crossing midnight, cannot be separated after the
+fact. This has to be sampled live; an unrecorded boundary is unrecoverable later.
+Three conditions, recorded rather than corrected for: the balance is **account-wide**,
+so overlapping runs on one key make every delta meaningless; a mid-run top-up reads as
+a negative delta and is flagged in `billed_note` instead of reported as a cost; and the
+balance carries two decimals, so resolution bottoms out at $0.01 — exact for a grid
+cell, coarse for a smoke test. Any failure to reach the endpoint records `null` with a
+`billed_note` and never interrupts the run. `cost_std` remains the comparison metric;
+`billed_usd` answers "what did this cost", which `cost_std` deliberately does not.
 
 ## Adding an extension arm
 
@@ -360,8 +396,9 @@ external-uptime dependency.
 `grep_mathlib` (symbolic, PLAN.md block A) greps the local Mathlib checkout at
 `lean-env/.lake/packages/mathlib` — the exact source the REPL compiles against, so hits
 can't be version-skewed (LeanSearch indexes a different Mathlib pin) and there's no
-external dependency. Fixed-string by default (no escaping surprises), `regex=true` for
-extended regex, automatic case-insensitive retry when exact case finds nothing. Raw hits
+external dependency. It takes one pattern and no mode parameter: literal, regex,
+cross-line and fully-qualified-name readings are tried in a fixed order and the first that
+hits wins (**`SEARCH.md` is the exact protocol** — cite that, not this paragraph). Raw hits
 are expanded to whole declarations (scan up to the column-0 head, down to `:=`, capped)
 and deduped, so the agent sees full signatures, not clipped lines. Both arms carry their
 entire prompt delta in the tool description — no `.prompt.md` — so the semantic-vs-grep

@@ -11,7 +11,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
 import { join, basename } from "node:path";
 import { checkedCompile } from "../runner/stmt.js";
-import { cmpConfig } from "../runner/common.js";
+import { cmpConfig, ToolFailure } from "../runner/common.js";
 
 export default function (pi: ExtensionAPI) {
   // Hash of problem.lean at the last check that returned a result. Lets the tool
@@ -29,13 +29,16 @@ export default function (pi: ExtensionAPI) {
     promptSnippet: "lean_check - compile problem.lean (the only file ever compiled) and get Lean compiler errors/warnings",
     parameters: Type.Object({}),
     async execute(_toolCallId, _params, signal, _onUpdate, ctx) {
+      // Failures THROW; pi ignores the isError field of a returned result (see
+      // ToolFailure in runner/common.js). A compile that FAILS is not a tool
+      // failure — it is this tool's normal output and still returns normally.
       const src = join(ctx.cwd, "problem.lean");
       if (!existsSync(src)) {
-        return { content: [{ type: "text", text: "error: problem.lean not found in working directory" }], isError: true };
+        throw new ToolFailure("error: problem.lean not found in working directory");
       }
       const origPath = cmpConfig().original_file;
       if (!origPath || !existsSync(origPath)) {
-        return { content: [{ type: "text", text: "lean_check unavailable: original problem file not configured" }], isError: true };
+        throw new ToolFailure("lean_check unavailable: original problem file not configured");
       }
       try {
         const problemName = basename(origPath, ".lean");
@@ -76,7 +79,7 @@ export default function (pi: ExtensionAPI) {
                 `your proof relies on tactics too expensive to check (heavy \`decide\`, huge \`interval_cases\`/\`simp\` searches, ...). ` +
                 `Retrying the unchanged file WILL fail the same way; simplify the expensive step instead.`
               : `lean_check unavailable (${r.error}) — transient, try again`;
-          return { content: [{ type: "text", text }], isError: true };
+          throw new ToolFailure(text);
         }
 
         // Policy rejection (banned construct); the file was not compiled.
@@ -110,8 +113,10 @@ export default function (pi: ExtensionAPI) {
       } catch (e: any) {
         // Thrown = the request never got a server response (connection refused mid-
         // restart, client-side socket error) — genuinely transient, unlike the typed
-        // error responses handled above.
-        return { content: [{ type: "text", text: `lean_check unavailable (${String(e?.message ?? e)}) — transient, try again` }], isError: true };
+        // error responses handled above. A ToolFailure is already classified (the
+        // typed-error branch above): rethrow it rather than relabel it "transient".
+        if (e instanceof ToolFailure) throw e;
+        throw new ToolFailure(`lean_check unavailable (${String(e?.message ?? e)}) — transient, try again`);
       }
     },
   });

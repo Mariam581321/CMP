@@ -9,7 +9,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { checkSnippet } from "../runner/snippet.js";
-import { cmpConfig } from "../runner/common.js";
+import { cmpConfig, ToolFailure } from "../runner/common.js";
 
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
@@ -60,7 +60,7 @@ export default function (pi: ExtensionAPI) {
                 `it relies on tactics too expensive to check (heavy \`decide\`, huge \`interval_cases\`/\`simp\` searches, ...). ` +
                 `Retrying the unchanged snippet WILL fail the same way; simplify the expensive step instead.`
               : `check_snippet unavailable (${r.error}) — transient, try again`;
-          return { content: [{ type: "text", text }], isError: true };
+          throw new ToolFailure(text);
         }
 
         // Policy rejection (banned construct); the snippet was not compiled.
@@ -72,7 +72,9 @@ export default function (pi: ExtensionAPI) {
       } catch (e: any) {
         // Thrown = no server response at all (connection refused mid-restart) —
         // genuinely transient, unlike the typed error responses handled above.
-        return { content: [{ type: "text", text: `check_snippet unavailable (${String(e?.message ?? e)}) — transient, try again` }], isError: true };
+        // A ToolFailure is already classified: rethrow rather than relabel.
+        if (e instanceof ToolFailure) throw e;
+        throw new ToolFailure(`check_snippet unavailable (${String(e?.message ?? e)}) — transient, try again`);
       }
     },
   });
