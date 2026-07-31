@@ -178,11 +178,17 @@ per-run artifacts under `results/`.
 ## Next steps
 
 - [x] Remaining grader fixes; **FROZEN 2026-07-29 at `2f89a7c`, re-cut 2026-07-30 at
-      `d66e12e` and again at `900c364`, re-cut 2026-07-31 at `b1dfcb6` and again at
-      `60e8fa0`** — the grid freeze is `60e8fa0`: harness_git_sha of every grid run must
-      be that commit or a descendant. Edit here if anything has to change mid-grid and
-      re-freeze. The calibration run predates every freeze, which is why it isn't a grid
-      cell.
+      `d66e12e` and again at `900c364`, re-cut 2026-07-31 at `b1dfcb6`, `60e8fa0` and
+      again at `bd3251b`** — the grid freeze is `bd3251b`: harness_git_sha of every grid
+      run must be that commit or a descendant. Edit here if anything has to change
+      mid-grid and re-freeze. The calibration run predates every freeze, which is why it
+      isn't a grid cell.
+      Why the fifth re-cut: the check budget moved from wall-clock to CPU-seconds. A
+      wall-clock bound measures the file's cost plus the machine's load against a hard
+      threshold, so borderline files flip — 52% of one run's "too expensive" verdicts
+      compiled fine when replayed idle, each one steering an agent off a proof with
+      ordinary fixable errors. This changes the metric itself ("compiles" now means
+      "within 120 CPU-seconds"), so no pre-`bd3251b` run is comparable to a grid cell.
       Why the third re-cut: three tool-layer defects, all found by autopsying the
       0730b grep cell. (1) pi decides a tool call's `isError` from a *thrown* error
       only, so the six extension tools — which returned `{isError:true}` — logged their
