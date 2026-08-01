@@ -24,3 +24,5 @@ problems-fc/
 COSTS.md
 pi-agent/auth.json
 pi-agent/sessions/
+problems-fatex/*
+!problems-fatex/pilot10-0802.txt

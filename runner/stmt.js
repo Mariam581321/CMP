@@ -27,13 +27,30 @@ const STMT_CACHE = join(ROOT, "problems", "stmt-types.json");
 // passed per request — is gone: CPU is a machine fuse the server owns.
 export const CLIENT_WAIT_MS = 30 * 60_000; // server queue is serialized; be patient
 
-// Names of the declarations the benchmark expects (theorem + optional _solution abbrev).
+// Names of the declarations the benchmark expects (theorem + setup defs/abbrevs),
+// FULLY QUALIFIED: FATE-X wraps every file in `namespace ProblemN`, so the environment
+// name the probe must look up is `ProblemN.<head>`, not the bare head (all 100 FATE-X
+// probes came back `missing` before this tracked scopes, 2026-08-02). The tracker is a
+// plain stack — every `end` closes exactly one scope-opening command in well-formed
+// Lean, and these are sanitized, machine-generated files (no comments, no `mutual`, no
+// modifier forms; the corpus has no `private`/`protected`/`_root_` heads — grep.js
+// rung 0 shows what tracking costs when those assumptions fail, and none of them holds
+// a benchmark file). Sections push an empty prefix; dotted namespaces and dotted decl
+// heads concatenate. Unchanged for namespace-free corpora (PutnamBench, FATE-M/H): no
+// scopes ever open, so the emitted names are the bare heads exactly as before.
 // Lean names are not \w: subscripts (eval₂_…), primes (M'), and pure-unicode idents
 // (τ, 𝔽) are all legal, so match everything up to a delimiter instead of an ASCII set.
 export function benchmarkDecls(originalSource) {
   const decls = [];
-  for (const m of originalSource.matchAll(/^\s*(?:noncomputable\s+)?(?:abbrev|def|theorem)\s+([^\s:({\[⦃]+)/gm)) {
-    decls.push(m[1]);
+  const scopes = []; // each entry: [] for a section, the dot-split components for a namespace
+  for (const line of originalSource.split("\n")) {
+    let m;
+    if ((m = /^\s*namespace\s+(\S+)\s*$/.exec(line))) { scopes.push(m[1].split(".")); continue; }
+    if (/^\s*section(\s+\S+)?\s*$/.test(line)) { scopes.push([]); continue; }
+    if (/^\s*end(\s+\S+)?\s*$/.test(line)) { scopes.pop(); continue; }
+    if ((m = /^\s*(?:noncomputable\s+)?(?:abbrev|def|theorem)\s+([^\s:({\[⦃]+)/.exec(line))) {
+      decls.push([...scopes.flat(), m[1]].join("."));
+    }
   }
   return decls;
 }
