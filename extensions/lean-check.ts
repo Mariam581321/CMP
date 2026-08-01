@@ -49,7 +49,7 @@ export default function (pi: ExtensionAPI) {
         // the model instead costs a full turn per retry — with the whole growing
         // context re-billed as input — and a dead server turns that into an hours-
         // long paid spiral (2026-07-26: ~70 min x 10 agents of ECONNREFUSED loops).
-        // Typed server responses (check_timeout, crash) are NOT retried; only
+        // Typed server responses (unavailable, crash) are NOT retried; only
         // throws where no server response arrived at all.
         const deadline = Date.now() + 5 * 60_000;
         let r: any;
@@ -69,19 +69,17 @@ export default function (pi: ExtensionAPI) {
         }
 
         if (r.error) {
-          // A check_timeout reaching this point is always a real, memoized verdict about
-          // the file: the server swallows and requeues the kills that were about the
-          // machine (runCheck), so no agent ever burns a turn on our REPL's bad day.
-          // What is asserted here is the RULE plus the cache, both of which the harness
-          // enforces — never a prediction that Lean will behave the same way twice.
-          // The old "deterministic ... WILL fail the same way" wording was false: 52% of
-          // one run's timeouts compiled fine on an idle server, and each one steered an
-          // agent off a proof that had ordinary fixable errors.
+          // Since 2026-08-01 an error here is never a verdict. Verdicts arrive as Lean's
+          // own messages — including the deterministic heartbeat timeout, which is an
+          // ordinary compile error and comes back through the normal path below. The
+          // server swallows and requeues every resource kill (runCheck), so what reaches
+          // this branch is either a crash or `unavailable`: this machine could not run
+          // the check, and nothing was recorded about the file. `cpu` is the one worth
+          // wording separately — it means the file is unaffordable here, which the agent
+          // can act on — and the server's own text already says so.
           const text =
-            r.kind === "check_timeout"
-              ? `lean_check gave up: ${r.error}. This verdict is cached — resubmitting this exact file returns the same answer ` +
-                `without recompiling. Some step costs more than a single check is allowed (heavy \`decide\`, huge ` +
-                `\`interval_cases\`/\`simp\` searches, ...); make that step cheaper.`
+            r.kind === "unavailable"
+              ? `lean_check could not compile this file: ${r.pretty}`
               : `lean_check unavailable (${r.error}) — transient, try again`;
           throw new ToolFailure(text);
         }

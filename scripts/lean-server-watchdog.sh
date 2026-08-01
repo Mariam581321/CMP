@@ -5,10 +5,11 @@
 # Polls /health; only starts a server if none is responding, so it can be left
 # running alongside an existing server without ever creating a second one.
 #
-# Memory fuses (rss cap 9000MB/worker, avail floor 1200MB) are ON by default in
-# lean-server.js. To enable the 2-worker REPL pool (takes effect on the next server
-# start; close VS Code first on 2-worker nights — the pool is tight on 12 GB):
-#   CMP_REPL_WORKERS=2 ~/CMP/scripts/lean-server-watchdog.sh
+# Memory fuses (rss cap 9000MB/worker, avail floor 4000MB) are ON by default in
+# lean-server.js. The REPL pool defaults to 8 workers, sized for the 64 GB Ryzen
+# 3600 server (see CMP_REPL_WORKERS in lean-server.js for the arithmetic; takes
+# effect on the next server start). To run smaller, e.g. on a laptop:
+#   CMP_REPL_WORKERS=1 ~/CMP/scripts/lean-server-watchdog.sh
 cd "$(dirname "$0")/.." || exit 1
 export PATH="$HOME/.local/node/bin:$HOME/.elan/bin:$PATH"
 echo "$(date -Is) watchdog up — polling /health every 10s; silence means the server is healthy"

@@ -6,6 +6,25 @@ import { request } from "node:http";
 export const LEAN_PORT = process.env.CMP_LEAN_PORT ?? "8787";
 export const LEAN_URL = `http://127.0.0.1:${LEAN_PORT}`;
 
+// THE check verdict, since 2026-08-01: a per-declaration elaboration cap, enforced by
+// Lean itself (runner/lean-server.js injects `set_option maxHeartbeats` and clamps any
+// the file sets for itself). Heartbeats count elaboration steps — a pure function of the
+// file, identical on any machine, under any load, at any REPL age — so over-cap is an
+// ordinary, byte-reproducible compile error ("(deterministic) timeout"), the same for
+// agent, supervisor, grader and any future regrade. It replaces the 120 CPU-second
+// budget, which was a MEASURED quantity and therefore had a noise band around its
+// threshold: fateh_32 (0801) was measured four times on the same bytes and flipped
+// twice, recording compile_error on a proof the agent had watched compile.
+//
+// 400 000 (2x Lean's default) is not a new number: it has been injected on every check
+// since eb36538 (2026-07-12), i.e. in every run ever recorded, so keeping it leaves the
+// elaboration side of every past verdict exactly where it was. What changes is that
+// aggregate CPU no longer convicts — a file whose declarations each elaborate under the
+// cap now compiles however long the whole file takes (CPU is a machine fuse; see
+// CPU_FUSE_MS). This is one-directional: it can only turn old fails into passes.
+// Any change to this number changes what "compiles" means → freeze re-cut (FREEZE.md).
+export const MAX_HEARTBEATS = 400_000;
+
 // deepseek-v4-flash standard (off-peak) rates in $/1M tokens — the only place prices
 // live; update ONLY when DeepSeek reprices or the default model changes.
 // cost_std = tokens re-priced at this fixed table. Unlike billed cost_usd it is
@@ -76,7 +95,8 @@ export function arg(name, dflt) {
 // --- extension config --------------------------------------------------------
 // run.js passes per-attempt config to the pi subprocess's extensions as ONE JSON
 // env var (CMP_CONFIG): original_file, problem, budget_std, max_nudges, max_tokens,
-// check_cpu_ms. Empty object outside a run (e.g. grader in the runner process).
+// tools. Empty object outside a run (e.g. grader in the runner process). Nothing about
+// the check metric travels here any more — it is the server's, identically for everyone.
 export function cmpConfig() {
   try { return JSON.parse(process.env.CMP_CONFIG ?? "{}"); } catch { return {}; }
 }

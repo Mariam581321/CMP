@@ -36,7 +36,7 @@ export default function (pi: ExtensionAPI) {
         const client = cmpConfig().problem ?? "anon";
         // Connection-level failures retried here where waiting costs zero tokens —
         // same production-validated loop as lean_check (see the rationale there).
-        // Typed server responses (check_timeout, crash) are NOT retried.
+        // Typed server responses (unavailable, crash) are NOT retried.
         const deadline = Date.now() + 5 * 60_000;
         let r: any;
         for (;;) {
@@ -51,13 +51,13 @@ export default function (pi: ExtensionAPI) {
         }
 
         if (r.error) {
-          // Mirror lean_check's wording: a check_timeout here is always a real, cached
-          // verdict — the server requeues machine-fault kills instead of reporting them.
+          // Mirror lean_check: nothing here is a verdict. Compile verdicts — the
+          // deterministic heartbeat timeout included — come back as Lean messages on the
+          // normal path; the server requeues resource kills instead of reporting them,
+          // so this is a crash or "this machine could not run the check".
           const text =
-            r.kind === "check_timeout"
-              ? `check_snippet gave up: ${r.error}. This verdict is cached — resubmitting this exact snippet returns the same answer ` +
-                `without recompiling. Some step costs more than a single check is allowed (heavy \`decide\`, huge ` +
-                `\`interval_cases\`/\`simp\` searches, ...); make that step cheaper.`
+            r.kind === "unavailable"
+              ? `check_snippet could not compile this snippet: ${r.pretty}`
               : `check_snippet unavailable (${r.error}) — transient, try again`;
           throw new ToolFailure(text);
         }

@@ -86,13 +86,13 @@ verdicts don't require a compiling proof.
    `unsafeCast`. (`unsafe theorem` is illegal in Lean, so only the `_solution` def slot
    is exposed; `#print axioms` happens to flag today's `unsafeCast` pattern via
    `lcProof`, so this is deliberate redundancy, not the only line of defense.)
-3. `compile_error` — any error-severity message. If the file is so broken the parser
-   never reaches the probe (unterminated comment/bracket), it grades here with
-   "statement unknown" in the detail — the one case where statement preservation is
-   genuinely undeterminable. A grading compile that hits the shared 120 s budget also
-   grades here (determinate fail under the one-budget metric, not a `grader_error`;
-   the grader additionally retries connection-level server failures for 5 min, since
-   its verdict is permanent).
+3. `compile_error` — any error-severity message, the deterministic heartbeat timeout
+   included (an ordinary Lean error since 2026-08-01, byte-reproducible anywhere). If
+   the file is so broken the parser never reaches the probe (unterminated
+   comment/bracket), it grades here with "statement unknown" in the detail — the one
+   case where statement preservation is genuinely undeterminable. A resource-fuse
+   `unavailable` is a `grader_error` instead, never a fail (the grader additionally
+   retries connection-level server failures for 5 min, since its verdict is permanent).
 4. `uses_sorry` / `bad_axioms` — `#print axioms` per benchmark declaration must stay
    within `{propext, Classical.choice, Quot.sound}`; catches `sorry` (sorryAx), smuggled
    axioms (recorded in the env no matter how obfuscated their construction), and
@@ -126,45 +126,51 @@ re-verification of an unchanged file is ~free; memo hits skip the queue entirely
 **Scheduling (one REPL, many agents).** Requests carry a `client` id (problem name;
 the grader is just another client) and are served round-robin across clients, so an
 attempt with many queued checks waits behind itself, not in front of everyone else
-(one check-spamming attempt once starved a whole run). ONE compile budget (default
-**120 CPU-seconds**, `--check-cpu`) defines "compiles" for agent checks, supervisor, and
-grader alike (2026-07-27: a solve must be observable inside the agent's own loop; a
-480 s probe of the 0726 timeout files found no solves in the 120–480 s band) —
-honest proof steps check in seconds, and the bound caps head-of-line blocking. The
-grader's final verdict bypasses the memo (`force`) so it always comes from a real
-compile.
+(one check-spamming attempt once starved a whole run). ONE definition of "compiles" for
+agent checks, supervisor, and grader alike (2026-07-27: a solve must be observable inside
+the agent's own loop) — honest proof steps check in seconds. The grader's final verdict
+bypasses the memo (`force`) so it always comes from a real compile.
 
-**Why CPU-seconds and not wall clock (2026-07-31).** Wall clock measures the file's cost
-plus whatever else the box was doing, against a hard threshold, so borderline files flip
-with load. Replaying 0730b's 31 "too expensive" files on an idle server: **16 (52%)
-compiled fine**, returning ordinary type errors the agent could have fixed — all 16 from
-the one problem whose proofs sat near the line, while files well over it (fateh_85, _30,
-_36) timed out again. CPU-seconds separates those populations by construction: a
-genuinely expensive check is CPU-bound and burns its budget under any load, while a
-starved check is starved precisely because it is *not* getting CPU. Each kill is tagged
-with the bound that fired (`bound: cpu | wall | rss | mem`) and every check records its
-own `wall_ms`/`cpu_ms` (absent on memo hits, so replays are distinguishable from
-measurements).
+**The verdict is deterministic: `maxHeartbeats`, not a measured budget (2026-08-01).**
+"Compiles" means every declaration elaborates within **400 000 heartbeats**
+(`MAX_HEARTBEATS` in `runner/common.js` — the cap the server has injected on every check
+since 2026-07-12, so past verdicts' elaboration side is unchanged). Heartbeats count
+elaboration steps — a pure function of the file, identical on any machine, under any
+load, at any REPL age — so over-cap is an ordinary, byte-reproducible compile error
+("(deterministic) timeout"), the same for agent, supervisor, grader and any regrade. The
+server clamps any `set_option maxHeartbeats` in a submitted file to the cap (all numeral
+forms; lowering is allowed), and tags the error with a harness note saying raising it
+cannot help. The history that led here: the bound was wall clock until 2026-07-31 (52% of
+one run's "too expensive" verdicts compiled fine replayed idle), then 120 CPU-seconds,
+which narrowed the noise band but could not zero it — fateh_32 (0801, ~49 KB proof on the
+line) was measured four times on the same bytes and flipped twice, recording
+`compile_error` on a proof the agent watched compile. Count, don't measure.
 
-**Only `bound: cpu` is a statement about the file.** A wall-fuse or memory-fuse kill is
-an event on this machine — the `MIN_AVAIL` fuse does not even choose its victim by what
-the victim is doing — so it is **never reported to the client at all**: the server
-requeues the check and answers only once it has a real verdict. Telling an agent "the
-machine faltered, try again" would teach it about our REPL and spend a whole turn, the
-growing context re-billed as input, on something it cannot act on — the same reasoning
-that already keeps connection retries inside the tools. The requeued check always runs on
-a *different* REPL process (the kill marks its worker unready before the retry can be
-dispatched: with one worker it waits out the reimport, with several it goes to a
-sibling), so the second measurement is taken under different machine state — that, not
-pristineness, is what makes it informative. A check that really is the balloon would
-otherwise re-kill a worker forever, so a *second* resource kill is accepted as the file's
-own cost — **except `mem`**, which is never charged: the `MIN_AVAIL` fuse selects its
-victim by worker size, so its casualty is whichever check was in flight, and it carries
-no evidence at all about the file (`wall` and `rss` at least implicate the check that was
-running). A retry deadline, not a kill count, bounds the memory case; past it the client
-gets `unavailable` — not a verdict, never memoized. The grader stays stricter than the
-agent-facing side: a non-CPU kill is recorded `grader_error`, visible and re-gradeable,
-never a silent fail.
+**No resource bound is ever a verdict.** CPU (600 s, `CMP_CPU_FUSE_MS`), wall (900 s),
+RSS and MemAvailable are machine fuses. A fuse kill is **never reported to the client at
+all**: the server requeues the check and answers only once Lean itself has answered.
+Telling an agent "the machine faltered, try again" would teach it about our REPL and
+spend a whole turn, the growing context re-billed as input, on something it cannot act on
+— the same reasoning that already keeps connection retries inside the tools. The requeued
+check always runs on a *different* REPL process (the kill marks its worker unready before
+the retry can be dispatched: with one worker it waits out the reimport, with several it
+goes to a sibling). Two non-`mem` kills, or the retry deadline (`mem` is never counted —
+the `MIN_AVAIL` fuse selects its victim by worker size, so its casualty is whichever
+check was in flight), end in `unavailable`: not a verdict, never memoized, nothing
+recorded about the file — the machine could not run this check, and for the `cpu` fuse
+the wording tells the agent the file must get dramatically cheaper. The grader records
+`unavailable` as `grader_error`: visible and re-gradeable, never a silent fail. Each kill
+is tagged with the fuse that fired (`bound: cpu | wall | rss | mem`) and every check
+records its own `wall_ms`/`cpu_ms` (absent on memo hits, so replays are distinguishable
+from measurements).
+
+Heartbeats bound elaboration, not kernel reduction — a `decide`-heavy proof passes
+elaboration under the cap and is then replayed by the kernel with no heartbeat cap. That
+rare class cannot be bounded deterministically, so it is flagged, not verdicted: kernel
+work heavy enough to matter trips the CPU fuse and lands in `unavailable`. (In practice
+elaborator and kernel evaluate at comparable speed, so a cap-passing `decide` has kernel
+cost of the same order — the fuse at 600 s sits far above the ~165 CPU-s worst case
+measured for a single cap-exhausting declaration.)
 
 Error wording is harness design surface (the 406-check spam incident): the tool asserts
 the rule and the cache, both of which the harness enforces, and never predicts that Lean
@@ -181,8 +187,7 @@ file, old runs included); its env-level axiom check remains the sole gate, and n
 other construct is pre-screened.
 
 Speed context: a cold `lake env lean` deserializes all of Mathlib (~6 GB, 12–50 s) to
-check a 20-line file; the REPL avoids the re-import (~1–5 s/check). Also cap
-`maxHeartbeats` per check to bound runaway tactic searches (`decide`, etc.). With fast
+check a 20-line file; the REPL avoids the re-import (~1–5 s/check). With fast
 checks the LLM becomes the bottleneck → agent concurrency 8–16.
 
 *Not doing:* minimal per-problem imports (changes the benchmark — import hints are premise
@@ -260,9 +265,11 @@ results/                    per-run dirs + results.jsonl (gitignored)
 --model <id>         deepseek/deepseek-v4-flash | --thinking <level> (high)
 --max-tokens <n>     per-response output cap, always sent (default 384000 = model max;
                      set low, e.g. 8192, only for capped experiment cells)
---check-cpu <s>      (120) CPU-seconds per check — the ONE budget shared by agent
-                     checks, supervisor, and grader (it defines "compiles")
 --run-id <s>         default combo+timestamp
+
+("compiles" is not a flag: the deterministic maxHeartbeats cap is MAX_HEARTBEATS in
+runner/common.js, recorded in run.json as max_heartbeats from the live server's /health,
+and the runner refuses to launch if the server's cap differs from the checkout's.)
 ```
 
 Unknown flags are hard errors (`util.parseArgs` strict) — a typo'd flag must never

@@ -12,30 +12,19 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { postCheck, classifyLines, cmpConfig } from "./common.js";
+import { postCheck, classifyLines } from "./common.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const STMT_CACHE = join(ROOT, "problems", "stmt-types.json");
 
-// ONE compile budget defines "compiles" — agent checks, supervisor, and grader all
-// use it (2026-07-27). A solve must be observable inside the agent's own feedback
-// loop: with a larger grader budget, a proof the agent's tool rejects as "too
-// expensive" could secretly count as solved, and the verdict for a file would depend
-// on who compiled it first (the memo is keyed by code hash alone). Probe of the
-// 0726 night's 120 s files at 480 s: every one still failed — the band held no solves.
-// The budget is CPU-seconds of the REPL's process group, not wall clock (2026-07-31 —
-// see DEFAULT_CHECK_CPU_MS in lean-server.js for why wall clock was flipping borderline
-// files). It bounds a check's own work, so head-of-line blocking on the shared REPL
-// stays ~2 min of CPU; clients wait longer since queueing is unbounded.
-export const AGENT_CHECK_CPU_MS = cmpConfig().check_cpu_ms ?? 120_000;
-// Only a DEFAULT, and only for adhoc callers (the grade.js CLI, a bare stmt probe).
-// It cannot be the grid's budget: CMP_CONFIG is set on the pi child's env alone, so
-// this module reads the flag inside an attempt but falls back to 120 000 in the runner
-// process — which is exactly where grade() runs. run.js and regrade.js therefore PASS
-// the budget in (a value, not an ambient read), or a non-default --check-cpu would give
-// agents one budget and the grader another and silently record proofs the agent had
-// verified as compile_error.
-export const GRADE_CHECK_CPU_MS = AGENT_CHECK_CPU_MS;
+// ONE definition of "compiles" for agent checks, supervisor and grader (2026-07-27):
+// a solve must be observable inside the agent's own feedback loop, or a proof the
+// agent's tool rejects could secretly count as solved. Since 2026-08-01 that is free
+// rather than enforced — no client passes a bound at all. The verdict is the server's
+// per-declaration `maxHeartbeats` cap (MAX_HEARTBEATS in common.js), a pure function of
+// the file, so agent, supervisor, grader and any later regrade necessarily agree on it
+// whoever compiles first. What used to differ between them — a measured CPU budget
+// passed per request — is gone: CPU is a machine fuse the server owns.
 export const CLIENT_WAIT_MS = 30 * 60_000; // server queue is serialized; be patient
 
 // Names of the declarations the benchmark expects (theorem + optional _solution abbrev).
@@ -150,8 +139,8 @@ export function parseStmtProbe(messages) {
 // force=true bypasses the server memo: the final grading verdict must come from an
 // actual compile, never a cache entry (memo is bounded/evicting, and crashes are
 // unmemoized anyway — this closes the remaining gap).
-export function serverCheck(code, cpuMs = GRADE_CHECK_CPU_MS, client = "grader", force = false) {
-  return postCheck({ code, cpuMs, client, force }, CLIENT_WAIT_MS);
+export function serverCheck(code, client = "grader", force = false) {
+  return postCheck({ code, client, force }, CLIENT_WAIT_MS);
 }
 
 // --- original-side types (cached) -------------------------------------------
@@ -167,7 +156,7 @@ const memoOrig = new Map();
 // sha key alone would keep serving it and silently skip the value check — treat it
 // as a miss and recompute.
 const hasValues = (entry) => Object.values(entry?.decls ?? {}).every((d) => d.value !== undefined);
-export async function originalStmtTypes(problemName, originalSource, decls, cpuMs = GRADE_CHECK_CPU_MS) {
+export async function originalStmtTypes(problemName, originalSource, decls) {
   const sha = createHash("sha256").update(originalSource).digest("hex");
   const hit = memoOrig.get(problemName);
   if (hit?.sha === sha) return hit.decls;
@@ -177,7 +166,7 @@ export async function originalStmtTypes(problemName, originalSource, decls, cpuM
     memoOrig.set(problemName, { sha, decls: disk[problemName].decls });
     return disk[problemName].decls;
   }
-  const r = await serverCheck(`${originalSource}\n${stmtProbe(decls)}\n`, cpuMs);
+  const r = await serverCheck(`${originalSource}\n${stmtProbe(decls)}\n`);
   if (r.error) throw new Error(`lean server: ${r.error}`);
   if (!r.ok) throw new Error(`original does not compile: ${(r.pretty ?? "").slice(0, 500)}`);
   const probe = parseStmtProbe(r.messages);
@@ -283,10 +272,7 @@ export async function checkedCompile(code, { original, problemName, client }) {
       sorries: [],
     };
   }
-  const r = await postCheck(
-    { code: `${code}\n${stmtProbe(benchmarkDecls(original))}\n`, cpuMs: AGENT_CHECK_CPU_MS, client },
-    CLIENT_WAIT_MS,
-  );
+  const r = await postCheck({ code: `${code}\n${stmtProbe(benchmarkDecls(original))}\n`, client }, CLIENT_WAIT_MS);
   if (r.error) return r; // { ok:false, error, kind, pretty, ... } — caller words it for the agent
   const probe = parseStmtProbe(r.messages);
   const stmt = await verifyStatement(problemName, original, r.messages);

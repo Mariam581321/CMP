@@ -23,12 +23,13 @@ if (!dirs.length) {
 for (const runDir of dirs) {
   const runMeta = JSON.parse(readFileSync(join(runDir, "run.json"), "utf8"));
   const problemsDir = runMeta.problems_dir ?? join(ROOT, "problems");
-  // Grade at the run's own budget, so a regrade reproduces that run's metric instead of
-  // whatever the default happens to be today. Runs before 2026-07-31 recorded
-  // check_timeout_s, a WALL-clock bound — reusing the number as CPU-seconds is the
-  // intended reading (the same file gets at least as much room under the new metric),
-  // not an equivalence between the two quantities.
-  const checkCpuMs = (runMeta.check_cpu_s ?? runMeta.check_timeout_s ?? 120) * 1000;
+  // No budget is passed any more: the verdict is the server's heartbeat cap, so a regrade
+  // reproduces a run's metric exactly when the server enforces the cap that run recorded
+  // (run.json `max_heartbeats`, recorded from the live server). Runs older than
+  // 2026-08-01 recorded a CPU or wall budget instead; those runs are pre-freeze anyway,
+  // and a regrade of one shows how TODAY's grader judges the same files — which is what
+  // this tool is for. The one systematic difference is one-directional: a file that only
+  // ever failed by aggregate cost now compiles.
   const probs = readdirSync(runDir).filter((f) => statSync(join(runDir, f)).isDirectory());
   console.log(bold(`\n${runMeta.run_id} (${probs.length} attempts)`));
 
@@ -38,7 +39,7 @@ for (const runDir of dirs) {
     const solPath = join(runDir, name, "work", "problem.lean");
     if (!existsSync(attemptPath) || !existsSync(solPath)) { skipped++; continue; }
     const old = JSON.parse(readFileSync(attemptPath, "utf8"));
-    const now = await grade(name, solPath, join(problemsDir, `${name}.lean`), checkCpuMs);
+    const now = await grade(name, solPath, join(problemsDir, `${name}.lean`));
     // v2 records carry the grader's verdict separately (grade.*) — compare it to the
     // fresh grade directly. Legacy records merged run outcome into fail_reason, so
     // timeout/budget/provider must be carried over to stay comparable.

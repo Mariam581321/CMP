@@ -9,7 +9,11 @@
 //        --concurrency <n> (12) --model <id> --thinking <level> (high) --run-id <s>
 //        --problems-dir <dir> (problems/; e.g. problems-nl/ for statements with
 //        the informal NL docstring kept)
-//        --check-cpu <s> (120, CPU-second budget per check — the ONE compile budget)
+//
+// What "compiles" means is not a flag: it is the lean server's per-declaration
+// maxHeartbeats cap (MAX_HEARTBEATS in common.js), recorded in run.json as
+// `max_heartbeats` from the LIVE server, which this runner refuses to launch against if
+// it disagrees with the checkout.
 
 import { spawn, execSync } from "node:child_process";
 import { parseArgs } from "node:util";
@@ -17,7 +21,7 @@ import { mkdirSync, readFileSync, writeFileSync, appendFileSync, copyFileSync, c
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { grade } from "./grade.js";
-import { costStd, LEAN_PORT, LEAN_URL, green, red, yellow, dim, bold, cyan, money, secs } from "./common.js";
+import { costStd, LEAN_PORT, LEAN_URL, MAX_HEARTBEATS, green, red, yellow, dim, bold, cyan, money, secs } from "./common.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -45,7 +49,6 @@ try {
       // produce an off-protocol run that looks perfectly normal in the output.
       thinking: { type: "string", default: "high" },
       "max-tokens": { type: "string", default: "384000" },
-      "check-cpu": { type: "string", default: "120" },
       "run-id": { type: "string" },
     },
     strict: true,
@@ -80,7 +83,6 @@ for (const [flag, v, min] of [
   ["timeout", TIMEOUT_S, 1],
   ["concurrency", CONCURRENCY, 1],
   ["max-tokens", parseInt(A["max-tokens"]), 0],
-  ["check-cpu", parseInt(A["check-cpu"]), 1],
 ]) {
   if (!Number.isFinite(v) || v < min) {
     console.error(`--${flag} ${A[flag]}: not a number ≥ ${min}`);
@@ -92,7 +94,6 @@ for (const [flag, v, min] of [
 // factor. Default = deepseek-v4-flash's max output. Capped experiment cells pass e.g.
 // --max-tokens 8192; 0 falls back to the provider default (don't use in real runs).
 const MAX_TOKENS = parseInt(A["max-tokens"]);
-const CHECK_CPU_S = parseInt(A["check-cpu"]);
 const RUN_ID = A["run-id"] ?? `${COMBO.join("+") || "baseline"}-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "")}`;
 
 // No peak-hour guard. DeepSeek "will soon adopt" peak-valley pricing (2x during
@@ -178,6 +179,23 @@ async function ensureLeanServer(logPath) {
     if (child.exitCode != null) throw new Error(`lean server died; see ${logPath}`);
   }
   throw new Error(`lean server did not become ready in ${Math.round(waitMs / 60000)} min; see ${logPath}`);
+}
+
+// What "compiles" means for this run is whatever the SERVER enforces, and the watchdog
+// keeps one server alive across runs — and across checkouts. So the cap on disk is not
+// evidence about today's checks: ask the process that will decide them, and refuse to
+// launch on a mismatch rather than record a run.json whose `max_heartbeats` is fiction.
+async function verifyCheckVerdict() {
+  const h = await fetch(`${LEAN_URL}/health`, { signal: AbortSignal.timeout(5000) })
+    .then((r) => r.json()).catch(() => null);
+  if (!h) throw new Error("lean server health unreadable — cannot confirm the check verdict this run would use");
+  if (h.max_heartbeats !== MAX_HEARTBEATS)
+    throw new Error(
+      `check verdict mismatch: the running lean server enforces maxHeartbeats ` +
+        `${h.max_heartbeats ?? "(none — it predates the heartbeat verdict)"}, this checkout defines ${MAX_HEARTBEATS}. ` +
+        `Restart the server (scripts/lean-server-watchdog.sh) before launching.`,
+    );
+  return h;
 }
 
 for (const ext of COMBO)
@@ -277,7 +295,7 @@ async function deepseekBalance() {
 }
 const balanceBefore = await deepseekBalance();
 const RUN_STARTED = Date.now();
-writeFileSync(join(runDir, "run.json"), JSON.stringify({ run_id: RUN_ID, combo: COMBO, model: MODEL, thinking: THINKING, max_tokens: MAX_TOKENS || null, budget_std: BUDGET_STD || null, timeout_s: TIMEOUT_S, check_cpu_s: CHECK_CPU_S, concurrency: CONCURRENCY, problems, problems_dir: PROBLEMS_DIR, git_sha: gitSha, pi_version: piVersion, balance_before: balanceBefore, started_at: new Date(RUN_STARTED).toISOString() }, null, 2));
+writeFileSync(join(runDir, "run.json"), JSON.stringify({ run_id: RUN_ID, combo: COMBO, model: MODEL, thinking: THINKING, max_tokens: MAX_TOKENS || null, budget_std: BUDGET_STD || null, timeout_s: TIMEOUT_S, max_heartbeats: MAX_HEARTBEATS, concurrency: CONCURRENCY, problems, problems_dir: PROBLEMS_DIR, git_sha: gitSha, pi_version: piVersion, balance_before: balanceBefore, started_at: new Date(RUN_STARTED).toISOString() }, null, 2));
 
 // Benchmark-neutral by design: no "competition" framing, since the problem source
 // changes between blocks (Putnam -> FATE -> whatever is next) and the prompt must not
@@ -315,6 +333,8 @@ console.log(dim(`  budget:      ${BUDGET_STD > 0 ? `$${BUDGET_STD.toFixed(2)} @s
 console.log(dim(`  results:     results/${RUN_ID}/\n`));
 
 const leanServer = await ensureLeanServer(join(runDir, "lean-server.log"));
+const serverHealth = await verifyCheckVerdict();
+console.log(dim(`  check:       maxHeartbeats ${MAX_HEARTBEATS}/decl (the verdict)   cpu fuse: ${serverHealth.cpu_fuse_s}s (machine protection, never a verdict)`));
 leanServer?.unref(); // don't let the child keep the event loop alive after the summary is written
 const stopServer = () => { try { leanServer?.kill("SIGTERM"); } catch {} };
 process.on("exit", stopServer);
@@ -385,7 +405,6 @@ async function attempt(name, idx) {
           budget_std: BUDGET_STD,
           max_nudges: MAX_NUDGES,
           max_tokens: MAX_TOKENS > 0 ? MAX_TOKENS : null,
-          check_cpu_ms: CHECK_CPU_S * 1000,
           tools: toolList,
         }),
       },
@@ -450,10 +469,10 @@ async function attempt(name, idx) {
   // Verdict (grade) and outcome (end) are orthogonal and both recorded truthfully:
   // the grader's judgment of the final file is never overwritten by how the attempt
   // ended, so "how close were the timeouts?" is a query, not a re-grading session.
-  // Budget passed, not inherited: grade() runs here in the runner, which has no
-  // CMP_CONFIG, so an ambient read would hold the grader at 120 s while the agent ran
-  // on --check-cpu. One budget for agent, supervisor and grader is the metric.
-  const g = await grade(name, join(work, "problem.lean"), join(PROBLEMS_DIR, `${name}.lean`), CHECK_CPU_S * 1000);
+  // Nothing about the metric is passed in: the grader compiles against the same server
+  // and the same heartbeat cap as the agent's own lean_check, so the agent-observed
+  // verdict and the recorded one cannot differ (2026-08-01).
+  const g = await grade(name, join(work, "problem.lean"), join(PROBLEMS_DIR, `${name}.lean`));
   // A death the runner did not order — OOM kill, pi crash, provider-retry exhaustion —
   // is not "completed": it used to be recorded as one and silently counted as an
   // ordinary arm failure (one such record already exists in the 0727 data). The file

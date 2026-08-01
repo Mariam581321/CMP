@@ -18,7 +18,7 @@ const code = `open Lean in
   h.flush
   IO.println s!"wrote {n} names"`;
 
-const r = await postCheck({ code, cpuMs: 300_000, client: "env-dump" }, 600_000);
+const r = await postCheck({ code, client: "env-dump" }, 600_000);
 if (r.error || !r.ok) {
   console.error("dump failed:", JSON.stringify(r).slice(0, 500));
   process.exit(1);

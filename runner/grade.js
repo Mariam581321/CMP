@@ -23,7 +23,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { classifyLines, withConnRetry } from "./common.js";
-import { benchmarkDecls, stmtProbe, parseStmtProbe, originalStmtTypes, serverCheck, renderWithoutProbe, GRADE_CHECK_CPU_MS } from "./stmt.js";
+import { benchmarkDecls, stmtProbe, parseStmtProbe, originalStmtTypes, serverCheck, renderWithoutProbe } from "./stmt.js";
 
 export { serverCheck } from "./stmt.js";
 
@@ -51,13 +51,14 @@ export function suspiciousKeywords(source) {
 }
 
 /**
- * `cpuMs` is the run's check budget, passed in rather than read from the environment:
- * the grader runs in the RUNNER process, which has no CMP_CONFIG, so an ambient read
- * would pin it to the 120 000 default while the agent used --check-cpu. Same number on
- * both sides is what makes "compiles" one budget (see GRADE_CHECK_CPU_MS in stmt.js).
+ * Takes no budget: since 2026-08-01 the check verdict is the server's per-declaration
+ * heartbeat cap, identical for every client, so there is no longer a number the grader
+ * could hold differently from the agent (it used to receive the run's `--check-cpu`
+ * explicitly, because an ambient read in the runner process would have pinned it to the
+ * default while the agent ran on the flag).
  * @returns {Promise<{solved: boolean, reason?: string, detail?: string, axioms?: object, suspicious_keywords?: string[]}>}
  */
-export async function grade(problemName, solutionPath, originalPath, cpuMs = GRADE_CHECK_CPU_MS) {
+export async function grade(problemName, solutionPath, originalPath) {
   if (!existsSync(solutionPath)) return { solved: false, reason: "no_file", detail: "problem.lean missing" };
   const original = readFileSync(originalPath, "utf8");
   const solution = readFileSync(solutionPath, "utf8");
@@ -71,7 +72,7 @@ export async function grade(problemName, solutionPath, originalPath, cpuMs = GRA
 
   let orig;
   try {
-    orig = await withConnRetry(() => originalStmtTypes(problemName, original, decls, cpuMs));
+    orig = await withConnRetry(() => originalStmtTypes(problemName, original, decls));
   } catch (e) {
     return fail("grader_error", `original stmt types: ${e.message}`);
   }
@@ -83,20 +84,16 @@ export async function grade(problemName, solutionPath, originalPath, cpuMs = GRA
     // an agent-side timeout memoized under the same code hash must not stand in for
     // the grader's own run. Connection failures are retried for 5 min (withConnRetry):
     // this verdict is permanent, so a REPL mid-restart must be waited out, not recorded.
-    r = await withConnRetry(() => serverCheck(`${solution}\n${probes}`, cpuMs, "grader", true));
+    r = await withConnRetry(() => serverCheck(`${solution}\n${probes}`, "grader", true));
   } catch (e) {
     return fail("grader_error", `lean server unreachable: ${e.message}`);
   }
-  // Exhausting the CPU budget is a determinate verdict under the one-budget metric
-  // ("compiles" = compiles within the shared CPU budget), not a grader malfunction:
-  // the file costs more than the budget allows, which fails the same way a compile
-  // error does. Every OTHER kill (wall fuse, rss/mem fuse) started as an event on this
-  // machine; the server already retried it on a second REPL instance, so reaching here
-  // means it reproduced. Still not recorded as the file's fail: this
-  // verdict is permanent, and grader_error is visible and re-gradeable where a wrong
-  // compile_error would be silent. Deliberately stricter than the agent-facing side.
-  if (r.error && r.kind === "check_timeout" && r.bound === "cpu")
-    return fail("compile_error", `statement unknown (grading check exhausted the shared CPU budget — file too expensive to compile)\n${r.error}`);
+  // No resource outcome is a fail any more (2026-08-01). A file too expensive to compile
+  // on this machine comes back `unavailable` after the server has retried it on a second
+  // REPL instance, and lands here as `grader_error`: visible, re-gradeable, and honest —
+  // the run learned nothing about the proof. Recording it as `compile_error` (what the
+  // CPU budget did until fateh_32) would be a permanent verdict resting on a measurement
+  // that the same bytes can fail one minute and pass the next.
   if (r.error) return fail("grader_error", `${r.error}${r.bound ? ` [bound: ${r.bound}]` : ""}`);
   // Probe/axiom internals stay out of recorded details — only real compiler output.
   const pretty = renderWithoutProbe(r.messages, r.sorries);

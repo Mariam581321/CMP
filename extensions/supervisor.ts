@@ -110,7 +110,7 @@ export default function (pi: ExtensionAPI) {
       try {
         check = origPath && existsSync(origPath)
           ? await checkedCompile(content, { original: readFileSync(origPath, "utf8"), problemName: problem, client: problem })
-          : await serverCheck(content, undefined, problem); // adhoc run without CMP_CONFIG
+          : await serverCheck(content, problem); // adhoc run without CMP_CONFIG
         break;
       } catch (e: any) {
         const connErr = /ECONNREFUSED|ECONNRESET|EPIPE|socket hang up/i.test(`${e?.code ?? ""} ${e?.message ?? ""}`);
