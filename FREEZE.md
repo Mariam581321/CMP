@@ -1,6 +1,6 @@
 # Harness freeze log
 
-**Current grid freeze: `3084411`** (2026-07-31). The `harness_git_sha` of every grid run
+**Current grid freeze: `f4e3395`** (2026-08-02). The `harness_git_sha` of every grid run
 must be that commit or a descendant.
 
 **Every re-cut below predates the first grid cell.** The grid has not started; no run has
@@ -182,6 +182,37 @@ a boot-time import fuse kill exits the whole server; a requeued check's final at
 can outlast the client's 30 min socket under extreme memory pressure; the memo key
 omits `check_cpu_ms` (fine while every run uses the default 120 s — do not vary it
 against a warm server).
+
+## `f4e3395` — 2026-08-02, ninth re-cut: the check verdict is deterministic (`maxHeartbeats`)
+
+**This changes the metric itself** — "compiles" now means "every declaration elaborates
+within `maxHeartbeats 400000`", decided by Lean, not by any measured quantity — so no
+pre-`f4e3395` run is comparable to a grid cell. The incident that forced it: fateh_32
+(0801) sat on the 120 CPU-second line and flipped verdicts across four measurements of
+the same bytes, ending as a recorded `compile_error` on a proof the agent had watched
+compile. A measured threshold has a noise band; CPU-seconds narrowed it vs wall clock
+(fifth re-cut) but could not zero it. Heartbeats are a pure function of the file.
+
+The cap is not a new number — it has been injected on every check since `eb36538`
+(2026-07-12), so the elaboration side of every past verdict is unchanged; what is gone is
+the aggregate-CPU conviction, which is one-directional (old fails can only become
+passes). Submitted files cannot raise the cap (server-side clamp, all numeral forms). All
+resource bounds (CPU 600 s / wall 900 s / rss / mem) are now machine fuses that end, at
+worst, in `unavailable` — never memoized, never a verdict, `grader_error` on the grading
+path. `--check-cpu`/`check_cpu_ms` are gone; run.json records `max_heartbeats` from the
+live server and run.js refuses to launch on a mismatch. Detail: `SKELETON.md`, "The
+verdict is deterministic"; verification battery summarized in the implementing commit
+(`bf5eca8`).
+
+Also in this re-cut, no metric weight: `benchmarkDecls` emits namespace-qualified names
+(required for FATE-X's `namespace ProblemN` wrappers; byte-identical for every existing
+corpus), and the server defaults are sized for the 64 GB Ryzen server (8 workers,
+avail floor 4000 MB).
+
+`lean-search-fateh100-0801` sits on the old side of this line. Its budget-borderline
+attempts (recorded budget-fail in grade detail, final agent-side check passed in
+events.jsonl) are to be bucketed and reported both ways; whether the run is re-run is a
+methodology decision recorded here when made.
 
 ## `3084411` — 2026-07-31, eighth re-cut: loogle unknown-identifier is a result
 
