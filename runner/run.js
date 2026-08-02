@@ -399,6 +399,12 @@ async function attempt(name, idx) {
       cwd: work,
       env: {
         ...process.env,
+        // pi is a node process; a FATE-X-length session (200+ turns, 60+ checks) blows
+        // V8's default old-space cap and dies mid-attempt with a GC abort — 4 of the
+        // first 27 rest90-0802 attempts went down that way, each recorded agent_died.
+        // 8 GB headroom per child; the box (64 GB) can hold concurrency x that, and the
+        // wall/budget caps bound any single runaway long before it matters.
+        NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --max-old-space-size=8192`.trim(),
         CMP_CONFIG: JSON.stringify({
           original_file: join(PROBLEMS_DIR, `${name}.lean`),
           problem: name,
