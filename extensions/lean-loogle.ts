@@ -150,7 +150,7 @@ export default function (pi: ExtensionAPI) {
           content: [{ type: "text", text: [...lines, ...more].join("\n") }],
           // Log-only (pi sends the model `content`, never `details`): modules stay out
           // of the model-visible surface — a path signal induces reads this environment
-          // cannot serve (see FREEZE.md, 24ed9ae) — and the full hit list plus
+          // cannot serve (see commit 24ed9ae) — and the full hit list plus
           // heartbeats is kept for skew and cost analysis.
           details: {
             count: hits.length,

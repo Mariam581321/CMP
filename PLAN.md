@@ -190,9 +190,9 @@ per-run artifacts under `results/`.
 
 - [x] Remaining grader fixes; **grid freeze: `3084411`** — the `harness_git_sha` of every
       grid run must be that commit or a descendant. Re-cutting before a grid cell runs means
-      updating the SHA here; re-cutting mid-grid means re-freezing and saying so. Freeze
-      history, what each re-cut invalidates, and the 2026-07-31 model boundary (which does
-      not move the freeze but cuts run comparability the same way): `FREEZE.md`. The
+      updating the SHA here; re-cutting mid-grid means re-freezing and saying so. What each
+      re-cut invalidates is stated in the commit that makes it; the 2026-07-31 model
+      boundary does not move the freeze but cuts run comparability the same way. The
       cost-calibration run predates every freeze, which is why it isn't a grid cell.
       Settled here so they are not relitigated: `max_nudges` stays 3 (across 12 runs
       and three benchmarks, 0 of 50 attempts that ever reached three consecutive

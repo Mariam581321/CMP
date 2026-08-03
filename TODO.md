@@ -111,5 +111,5 @@ but cannot zero it. Raising 120 only moves the line.
 **Consequences:** this changes check semantics → freeze re-cut. lean-search-fateh100-0801
 sits on the old side; for its analysis, bucket attempts as "budget-borderline" (recorded
 budget-fail in grade detail but final agent-side check passed in events.jsonl) and report
-both ways. Whether the run is re-run or the boundary is just recorded in FREEZE.md is a
-methodology decision, not code.
+both ways. Whether the run is re-run or the boundary is just recorded in the commit log is
+a methodology decision, not code.
