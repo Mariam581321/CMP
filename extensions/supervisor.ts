@@ -33,6 +33,14 @@ export default function (pi: ExtensionAPI) {
   const work = process.cwd(); // run.js spawns pi with cwd = the attempt's work dir
 
   const tokens = { in: 0, out: 0, cache_read: 0 };
+  // Worker spend (block C). This extension's own counter sees only the parent's
+  // message_end events, but the budget the runner enforces binds parent + workers
+  // together — so the soft stop must read the ledger lean-spawn keeps on disk, or it
+  // would keep nudging into a cap the attempt has already spent through its workers.
+  const workersLedger = join(cfg.workers_dir ?? join(work, "..", "workers"), "ledger.json");
+  const workerSpend = (): number => {
+    try { return costStd(JSON.parse(readFileSync(workersLedger, "utf8")).tokens); } catch { return 0; }
+  };
   // Progress = calls to REAL non-read tools (the runner passes the session's toolset
   // in cfg.tools). Reads don't count — a nudged model can loop on re-reading the file
   // forever (observed) — and neither do calls to hallucinated tool names (also
@@ -85,7 +93,7 @@ export default function (pi: ExtensionAPI) {
     // only a drop mid-stream (which the SDK cannot retry) lands in this path, and the
     // nudge is what keeps the session alive when pi's own retries are spent.
     if (existsSync(join(work, "..", "STOP"))) return;
-    if (budget > 0 && costStd(tokens) >= budget) return;
+    if (budget > 0 && costStd(tokens) + workerSpend() >= budget) return;
 
     let content: string;
     try {

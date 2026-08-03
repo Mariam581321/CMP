@@ -292,6 +292,12 @@ extensions/lean-grep.ts     symbolic search (grep over the pinned local Mathlib 
 runner/grep.js              grep_mathlib core: grep + expand hits to whole declarations
 extensions/lean-snippet.ts  scratch verification (PLAN.md block B): check_snippet
 runner/snippet.js           check_snippet core: stateless snippet compile, snippet: labels
+                            (+ facts-arm bank prefix, positions shifted back)
+extensions/lean-spawn.ts    block C: spawn_subagents (blocking batch of parallel workers)
+runner/spawn.js             worker core: child pi launch, session tail, report extraction
+extensions/lean-facts.ts    block C: add_fact into the shared bank (+ lean-facts.prompt.md)
+runner/facts.js             add_fact core: compile gate, on-disk lock, candidate re-labeling
+extensions/delegate.ts      no-op carrier for delegate.prompt.md (spawn+plan steering)
 extensions/lean-plan.ts     plan_check (+ lean-plan.prompt.md)
 extensions/file-sandbox.ts  always-on: confine file tools to the attempt's work dir
 extensions/cmp-edit.ts      always-on: shadows pi's edit tool (core in runner/edit.js) —
@@ -414,7 +420,10 @@ cell, coarse for a smoke test. Any failure to reach the endpoint records `null` 
 **Accounting note for worker-style arms:** any extension that spawns a pi subprocess must
 surface that subprocess's tokens/cost into the parent attempt's record, and the
 per-problem budget must be shared — otherwise parallel arms get free compute and the
-comparison is broken.
+comparison is broken. (Implemented for `lean-spawn`: the runner tails every
+`workers/*/session/` beside the parent's session, buckets parent and worker usage
+separately, enforces the budget on the sum, and rolls both into the record — see the
+spawn arm section below.)
 
 ## Tool-level arm designs
 
@@ -460,19 +469,61 @@ flag/reroute, consider revising before filling bodies. Soft gate, same philosoph
 *building* one — plans drift toward what the library supports, which should also be
 easier to formalize. Vetting-call tokens roll into the parent attempt's record.
 
-**`facts`** (`extensions/lean-facts.ts`): registers `add_fact(lemma_code)` — compiles
-[current bank + new lemma] on the lean server and applies the full trust gate: no errors,
-no `declaration uses sorry`, axioms within the allowed set (reuses the grade.js checks).
-Green → append to `facts.lean`, never rewrite. Red → return the compiler output and write
-nothing; since every lemma already in the bank compiled when it was admitted, any error
-in [bank + new] is attributable to the submitted lemma (offset line numbers so they point
-into the submitted snippet). Compiling against the bank prefix lets facts build on
-earlier facts. Monotonicity is mechanical, not requested: a `tool_call` handler blocks
-`write`/`edit` calls resolving to `facts.lean` (pi's documented path-protection pattern),
-so the bank is readable with the ordinary `read` tool but writable only through the
-compiler. Prompt addendum: the final `problem.lean` must stay self-contained — copy
-needed facts (proofs included, along with any bank lemmas they depend on) above the
-theorem; grading is unchanged.
+**`facts`** (`extensions/lean-facts.ts`, core in `runner/facts.js`) — implemented.
+Registers `add_fact(code)` — compiles [current bank + candidate] on the lean server
+(usual heartbeat verdict) and applies the full trust gate: no errors, no sorry (both the
+sorries list and the `declaration uses 'sorry'` warning), axioms within the grader's
+whitelist (`ALLOWED_AXIOMS`, exported from grade.js, parsed with the same line-number
+gate so nothing the candidate prints can spoof a verdict). Deliberately STRICTER than
+grading on the lexical tripwire: metaprogramming/axiom/opaque/unsafe/private are
+hard-rejected, not logged — grading has a human reading each ⚠, the bank's whole value
+is that its contents are trusted blindly (by workers, and by every fact compiled on top).
+Named declarations only (the name is what gets axiom-checked and referenced), balanced
+namespace/section (an unbalanced candidate would silently re-scope everything appended
+after it). Green → append to `facts.lean`, never rewrite; red → compiler output with
+positions re-labeled into the candidate's own coordinates (any error in [bank + new] is
+attributable to the candidate, since the bank compiled when admitted — bank-region
+positions mean a conflict, e.g. a duplicate name, and say so). Admission is serialized
+across processes by an on-disk lock (parent and workers share one bank), so the
+bank-as-a-whole-compiles invariant survives concurrency. Monotonicity is mechanical,
+not requested: a `tool_call` handler blocks `write`/`edit` calls resolving to
+`facts.lean`, so the bank is readable with the ordinary `read` tool but writable only
+through the compiler. **The bank is in scope for `check_snippet`** ([bank + snippet]
+compiled, snippet positions shifted back, bank region stripped) — the channel is usable
+everywhere EXCEPT `problem.lean`, which lean_check and grading compile standalone
+exactly as before. Prompt addendum (`lean-facts.prompt.md`): copy needed facts (proofs
+included, along with any bank lemmas they depend on, in bank order) above the theorem
+before finishing; grading is unchanged.
+
+**`spawn`** (`extensions/lean-spawn.ts`, core in `runner/spawn.js`) — implemented.
+Registers `spawn_subagents(tasks[])`: a blocking batch — 1–N task briefs, one fresh
+worker per brief, all in parallel, and the call returns every report. That shape is the
+whole agent's-eye API: no ids, no polling, no collect step to forget; parallelism is the
+batch. Each worker is a **child pi subprocess** in `workers/wN/` beside `work/` — the
+same launch shape as the attempt itself (`--mode text`, no stdout, session file as the
+record, max-tokens extension), NOT an in-process SDK session: it cannot take the parent
+down with it, and the sandbox root at `work/` means the parent cannot browse worker
+transcripts — reports are the only channel, which is the manipulation. Workers are
+spawned undetached (parent pi's process group), so the runner's budget/backstop group
+SIGKILL reaps them; a pid file per worker plus a runner-side sweep covers parents that
+die on their own (`agent_died`). The worker's view is deliberately small and free: a
+role prompt, the problem statement, the bank snapshot when facts is on, and the parent's
+task text as the one user message; tools are `check_snippet` + the run's search arms
+(+ `add_fact`) — no `lean_check`, no file tools, no spawn (depth 1 is structural: the
+extension is never loaded into workers), and no supervisor — a worker that stops has
+stopped, its final visible text is the report, and the parent decides what happens next.
+Optional per-task `max_cost_std` is enforced at message granularity (overshoot ≤ 1
+message, like the attempt budget). Workers reuse the parent's REPL client id, so an
+attempt's workers queue behind its own checks instead of multiplying its share of the
+run. Accounting: the runner tails `workers/*/session/` alongside the parent session —
+the budget binds the SUM, the record's `tokens`/`cost_usd`/`cost_std` are parent +
+workers, and a `workers` array carries the per-worker breakdown (`worker.json` each);
+`workers/ledger.json`, kept current by the extension, lets the supervisor's in-process
+soft stop agree with the runner's hard cap. The attempt's STOP file aborts in-flight
+workers mid-call (the supervisor can only see STOP at agent_end, which never comes while
+the blocking call holds the loop). The spawn+plan steering line rides in
+`delegate.prompt.md` on a no-op `delegate.ts` (the notes-pattern), so the spawn arm
+itself stays tool-description-only.
 
 **`notes`** — prompt-only arm, no tool code: the addendum names a free-form draft file
 (`notes.md`) for informal scratch — ideas, failed approaches, case analyses. Never

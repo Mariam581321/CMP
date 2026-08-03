@@ -8,10 +8,15 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { existsSync, readFileSync } from "node:fs";
 import { checkSnippet } from "../runner/snippet.js";
 import { cmpConfig, ToolFailure } from "../runner/common.js";
 
 export default function (pi: ExtensionAPI) {
+  // Facts arm (cfg.facts_file set): the shared bank is in scope for snippets — read
+  // fresh per call, since the bank grows during the attempt (parent and workers add
+  // to it concurrently). Without facts the prefix is undefined and nothing changes.
+  const factsFile: string | null = cmpConfig().facts_file ?? null;
   pi.registerTool({
     name: "check_snippet",
     label: "Check snippet",
@@ -24,6 +29,10 @@ export default function (pi: ExtensionAPI) {
       "The snippet is checked on its own in a fresh environment with Mathlib available — " +
       "it does not see problem.lean or any file, so it must be self-contained " +
       "(include any `open` lines and helper definitions it needs). " +
+      (factsFile
+        ? "Exception: every declaration in the shared fact bank IS in scope for snippets, " +
+          "so snippets may use bank facts by name without restating them. "
+        : "") +
       "Nothing checked here is graded: only problem.lean, compiled with lean_check, counts.",
     promptSnippet: "check_snippet - compile a standalone Lean snippet (scratch work, never graded) and get compiler errors + sorry goals",
     parameters: Type.Object({
@@ -34,6 +43,7 @@ export default function (pi: ExtensionAPI) {
         // Same round-robin client id as lean_check (the problem name), so snippet
         // checks queue behind the attempt's own work, never in front of the run's.
         const client = cmpConfig().problem ?? "anon";
+        const prefix = factsFile && existsSync(factsFile) ? readFileSync(factsFile, "utf8") : undefined;
         // Connection-level failures retried here where waiting costs zero tokens —
         // same production-validated loop as lean_check (see the rationale there).
         // Typed server responses (unavailable, crash) are NOT retried.
@@ -41,7 +51,7 @@ export default function (pi: ExtensionAPI) {
         let r: any;
         for (;;) {
           try {
-            r = (await checkSnippet(params.code, { client })) as any;
+            r = (await checkSnippet(params.code, { client, prefix })) as any;
             break;
           } catch (e: any) {
             const connErr = /ECONNREFUSED|ECONNRESET|EPIPE|socket hang up/i.test(`${e?.code ?? ""} ${e?.message ?? ""}`);

@@ -104,8 +104,11 @@ export function arg(name, dflt) {
 // --- extension config --------------------------------------------------------
 // run.js passes per-attempt config to the pi subprocess's extensions as ONE JSON
 // env var (CMP_CONFIG): original_file, problem, budget_std, max_nudges, max_tokens,
-// tools. Empty object outside a run (e.g. grader in the runner process). Nothing about
-// the check metric travels here any more — it is the server's, identically for everyone.
+// tools, and for block C: combo, model, thinking, workers_dir, facts_file. Workers get
+// their own variant from runner/spawn.js (problem, worker: <idx>, max_tokens, tools,
+// facts_file — `worker` set is what marks a worker process). Empty object outside a
+// run (e.g. grader in the runner process). Nothing about the check metric travels
+// here any more — it is the server's, identically for everyone.
 export function cmpConfig() {
   try { return JSON.parse(process.env.CMP_CONFIG ?? "{}"); } catch { return {}; }
 }

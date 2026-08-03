@@ -28,7 +28,9 @@ import { benchmarkDecls, stmtProbe, parseStmtProbe, originalStmtTypes, serverChe
 export { serverCheck } from "./stmt.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const ALLOWED_AXIOMS = new Set(["propext", "Classical.choice", "Quot.sound"]);
+// Exported: the add_fact gate (runner/facts.js) applies the same axiom whitelist, so
+// "trusted" means the same thing in the bank as it does in grading.
+export const ALLOWED_AXIOMS = new Set(["propext", "Classical.choice", "Quot.sound"]);
 
 // --- lexical tripwire (advisory only) ----------------------------------------
 // Entry points into compile-time execution / kernel-adjacent features. Presence is

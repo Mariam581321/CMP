@@ -68,10 +68,21 @@ const reasonOf = (r) => (r.end ? (r.end !== "completed" ? r.end : r.grade?.reaso
 const CACHE = join(tmpdir(), `cmp-status-v2-${runId}.json`);
 let cache = {};
 try { cache = JSON.parse(readFileSync(CACHE, "utf8")); } catch {}
+// Parent session plus any worker sessions (block C): live spend must converge to the
+// recorded cost_std, which since workers rolls up parent + children. (Live turns/checks
+// merge parent and workers here — a display simplification; the record keeps them apart.)
 const sessionFiles = (p) => {
-  const dir = join(runDir, p, "session");
-  try { return readdirSync(dir).filter((f) => f.endsWith(".jsonl")).sort().map((f) => join(dir, f)); }
-  catch { return []; }
+  const dirs = [join(runDir, p, "session")];
+  try {
+    for (const d of readdirSync(join(runDir, p, "workers")))
+      if (/^w\d+$/.test(d)) dirs.push(join(runDir, p, "workers", d, "session"));
+  } catch {}
+  const out = [];
+  for (const dir of dirs) {
+    try { out.push(...readdirSync(dir).filter((f) => f.endsWith(".jsonl")).sort().map((f) => join(dir, f))); }
+    catch {}
+  }
+  return out;
 };
 function liveStats(p) {
   const files = sessionFiles(p);

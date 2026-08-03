@@ -27,7 +27,13 @@ function renderSnippet(messages, sorries) {
   return { ok, pretty };
 }
 
-export async function checkSnippet(code, { client }) {
+// `prefix` (the facts arm): compile [prefix + snippet] so the shared fact bank is in
+// scope for scratch work — the bank's whole point as a channel. The prefix is trusted
+// (everything in it passed the add_fact gate, so it compiles clean); its region is
+// stripped from what the caller sees and snippet positions are shifted back to the
+// snippet's own coordinates. The server memo keys on the full compiled text, so a
+// snippet re-checked after the bank grew is a fresh compile, as it must be.
+export async function checkSnippet(code, { client, prefix }) {
   // Same pre-reject as lean_check, same two reasons: a doomed native_decide attempt
   // burns minutes of the shared serialized REPL, and a snippet "verified" with it
   // would teach the agent a step that can never count in problem.lean.
@@ -44,7 +50,12 @@ export async function checkSnippet(code, { client }) {
       sorries: [],
     };
   }
-  const r = await postCheck({ code, client }, CLIENT_WAIT_MS);
+  const pre = prefix?.trim() ? prefix.trimEnd() + "\n\n" : "";
+  const preLines = pre ? pre.split("\n").length - 1 : 0;
+  const r = await postCheck({ code: pre + code, client }, CLIENT_WAIT_MS);
   if (r.error) return r; // typed server failure ({error, kind, ...}) — caller words it for the agent
-  return { ...r, ...renderSnippet(r.messages, r.sorries) };
+  const shift = (xs) => (xs ?? []).filter((x) => x.line > preLines).map((x) => ({ ...x, line: x.line - preLines }));
+  const messages = preLines ? shift(r.messages) : r.messages;
+  const sorries = preLines ? shift(r.sorries) : r.sorries;
+  return { ...r, messages, sorries, ...renderSnippet(messages, sorries) };
 }

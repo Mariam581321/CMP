@@ -121,7 +121,8 @@ suffices. Best arm so far carries forward.
 parent statements, get `check_snippet` (+ search) but **not** `lean_check` — only the
 main agent touches the graded file; child usage rolls into the shared per-problem cap.
 
-- **spawn** — a `spawn_subagent` tool; workers report back as summaries. Do
+- **spawn** — a `spawn_subagents` tool (blocking batch: 1–N briefs, parallel workers,
+  every report returned by the one call); workers report back as summaries. Do
   model-owned workers pay at all?
 - **spawn+facts** — plus an append-only bank of compiling lemmas (`add_fact` gate:
   compiles, sorry-free, axiom-clean) as the shared channel. vs spawn isolates the
@@ -217,8 +218,17 @@ per-run artifacts under `results/`.
       if search usage collapses.
 - [ ] Write the fair-comparison rationale (which post-hoc readout: solve-vs-token
       curves, matched dollars, cost-per-solve) *before* full-grid numbers exist.
-- [ ] Sandbox rework for workers; `spawn_subagent` with child-usage roll-up (workers
-      get `check_snippet` + search, not `lean_check`); `facts` bank; plan integration.
+- [x] Block C machinery (2026-08-04, `SKELETON.md` has the arm designs of record):
+      `spawn_subagents` as a blocking batch of parallel child-pi workers with
+      child-usage roll-up (runner tails worker sessions; budget binds the sum; workers
+      get `check_snippet` + search, not `lean_check`); `add_fact` bank behind the
+      compile gate (stricter-than-grading lexical rejects; bank in scope for
+      `check_snippet`, never for `problem.lean`); `delegate.prompt.md` rider for
+      spawn+plan. Sandbox rework dissolved: workers have no file tools at all, and
+      their dirs sit outside the parent's sandbox root, so reports are the only
+      channel. Smoked: 13 scripted gate probes green, one live worker round-trip
+      (report + shared-bank write + accounting), one live parent batch (2 parallel
+      workers, reports in-context, ledger current).
 - [ ] **Block C runs**: spawn, spawn+facts, spawn+plan; contingent spawn+plan+facts;
       delegation analysis → harness-owned pipeline fallback if the model won't
       delegate.

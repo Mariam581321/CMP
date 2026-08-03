@@ -18,11 +18,11 @@
 
 import { spawn, execSync } from "node:child_process";
 import { parseArgs } from "node:util";
-import { mkdirSync, readFileSync, writeFileSync, appendFileSync, copyFileSync, createWriteStream, existsSync, openSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync, appendFileSync, copyFileSync, createWriteStream, existsSync, openSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { grade } from "./grade.js";
-import { tailSession, newStats, applyEntry } from "./session-tail.js";
+import { tailSessions, newStats, applyEntry } from "./session-tail.js";
 import { costStd, LEAN_PORT, LEAN_URL, MAX_HEARTBEATS, green, red, yellow, dim, bold, cyan, money, secs } from "./common.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -372,9 +372,20 @@ async function attempt(name, idx) {
   const probDir = join(runDir, name);
   const work = join(probDir, "work");
   const sessionDir = join(probDir, "session");
+  // Worker dirs (block C) live BESIDE work/, not inside it: the file sandbox roots at
+  // work/, so the parent agent cannot browse worker transcripts — workers report back
+  // as summaries, which is the manipulation the spawn arm is supposed to test.
+  const workersRoot = join(probDir, "workers");
   mkdirSync(work, { recursive: true });
   mkdirSync(sessionDir, { recursive: true });
   copyFileSync(join(PROBLEMS_DIR, `${name}.lean`), join(work, "problem.lean"));
+  // Worker session dirs appear mid-attempt (first spawn call creates them); re-listed
+  // every tail tick.
+  const workerSessionDirs = () => {
+    try {
+      return readdirSync(workersRoot).filter((d) => /^w\d+$/.test(d)).map((d) => join(workersRoot, d, "session"));
+    } catch { return []; }
+  };
 
   const args = [
     // NOT --mode json. That mode serialises every session event to stdout, and
@@ -408,7 +419,8 @@ async function attempt(name, idx) {
   // would take down every in-flight attempt and skip the summary/closing balance.
   stderrLog.on("error", (e) => console.error(`  ${red("stderr.log write error")} ${name}: ${e.message}`));
   const started = Date.now();
-  const stats = newStats();
+  const stats = newStats(); // the parent agent's session
+  const wStats = newStats(); // all workers, aggregated — kept apart so turns/tool_calls/nudges stay parent-only
   let timedOut = false;
   let budgetExceeded = false;
 
@@ -436,6 +448,13 @@ async function attempt(name, idx) {
           max_nudges: MAX_NUDGES,
           max_tokens: MAX_TOKENS > 0 ? MAX_TOKENS : null,
           tools: toolList,
+          // Block C: everything lean-spawn needs to launch workers that mirror this
+          // attempt's config, and where the shared bank lives when the facts arm is on.
+          combo: COMBO,
+          model: MODEL,
+          thinking: THINKING,
+          workers_dir: workersRoot,
+          facts_file: COMBO.includes("lean-facts") ? join(work, "facts.lean") : null,
         }),
       },
       detached: true,
@@ -445,12 +464,15 @@ async function attempt(name, idx) {
     const kill = () => { try { process.kill(-child.pid, "SIGKILL"); } catch {} };
     const killer = setTimeout(() => { timedOut = true; kill(); }, TIMEOUT_S * 1000);
 
-    // Accounting follows the session file, one completed message at a time — the same
+    // Accounting follows the session files, one completed message at a time — the same
     // granularity the budget always enforced at ("overshoot ≤ 1 message"), now with up
-    // to one poll interval of extra latency.
-    const untail = tailSession(sessionDir, (entry) => {
-      applyEntry(stats, entry);
-      if (BUDGET_STD > 0 && !budgetExceeded && costStd(stats.tokens) >= BUDGET_STD) {
+    // to one poll interval of extra latency. Worker sessions (block C) are tailed
+    // alongside the parent's into a separate bucket, and the budget binds their SUM:
+    // child usage rolls into the shared per-problem cap (PLAN), and the group SIGKILL
+    // reaps workers with the parent (they are spawned undetached, in its group).
+    const untail = tailSessions(() => [sessionDir, ...workerSessionDirs()], (entry, _raw, dir) => {
+      applyEntry(dir === sessionDir ? stats : wStats, entry);
+      if (BUDGET_STD > 0 && !budgetExceeded && costStd(stats.tokens) + costStd(wStats.tokens) >= BUDGET_STD) {
         budgetExceeded = true;
         kill();
       }
@@ -479,6 +501,17 @@ async function attempt(name, idx) {
   });
   stderrLog.end();
 
+  // Sweep leftover workers. The group kill covers every runner-ordered death, but a
+  // parent that died on its own (agent_died: SIGABRT, OOM) leaves its workers running
+  // and spending with all enforcement gone. A worker that wrote worker.json exited
+  // normally — only pid files without a record are live suspects.
+  try {
+    for (const d of readdirSync(workersRoot)) {
+      if (!/^w\d+$/.test(d) || existsSync(join(workersRoot, d, "worker.json"))) continue;
+      try { process.kill(parseInt(readFileSync(join(workersRoot, d, "pid"), "utf8")), "SIGKILL"); } catch {}
+    }
+  } catch {}
+
   const wallMs = Date.now() - started;
   // A death the runner did not order — OOM kill, pi crash, provider-retry exhaustion —
   // is not "completed": it used to be recorded as one and silently counted as an
@@ -499,14 +532,37 @@ async function attempt(name, idx) {
   // fatex_25/33/34).
   const g = await grade(name, join(work, "problem.lean"), join(PROBLEMS_DIR, `${name}.lean`), { end });
 
+  // Per-worker records, written by runner/spawn.js at each worker's exit. A dir with
+  // no record is a worker the kill caught mid-flight — its usage is still in wStats
+  // (tailed from the session file), only the per-worker breakdown line is partial.
+  let workers = [];
+  try {
+    workers = readdirSync(workersRoot)
+      .filter((d) => /^w\d+$/.test(d))
+      .sort((a, b) => +a.slice(1) - +b.slice(1))
+      .map((d) => {
+        try { return JSON.parse(readFileSync(join(workersRoot, d, "worker.json"), "utf8")); }
+        catch { return { idx: +d.slice(1), end: "killed_with_attempt" }; }
+      });
+  } catch {}
+
+  // Top-level tokens/cost are the attempt TOTAL (parent + workers): child usage rolls
+  // into the parent's ledger (PLAN), and cost_std here is what the budget enforced on.
+  // turns/tool_calls/nudges stay parent-only; the per-worker breakdown carries its own.
+  const tokensAll = {
+    in: stats.tokens.in + wStats.tokens.in,
+    out: stats.tokens.out + wStats.tokens.out,
+    cache_read: stats.tokens.cache_read + wStats.tokens.cache_read,
+  };
   const record = {
     run_id: RUN_ID, problem: name, combo: COMBO, model: MODEL, thinking: THINKING,
     started_at: new Date(started).toISOString(), wall_s: Math.round(wallMs / 1000),
-    turns: stats.turns, tokens: stats.tokens, cost_usd: +stats.cost.toFixed(5),
-    cost_std: +costStd(stats.tokens).toFixed(5),
+    turns: stats.turns, tokens: tokensAll, cost_usd: +(stats.cost + wStats.cost).toFixed(5),
+    cost_std: +costStd(tokensAll).toFixed(5),
     tool_calls: stats.toolCalls, exit_code: exit.code, exit_signal: exit.signal ?? null,
     // nudges = ALL supervisor messages (userMsgs minus the CLI prompt).
     budget_std: BUDGET_STD || null, nudges: Math.max(0, stats.userMsgs - 1),
+    ...(workers.length ? { workers, workers_cost_std: +costStd(wStats.tokens).toFixed(5) } : {}),
     end,
     grade: {
       solved: g.solved, reason: g.solved ? null : g.reason,
@@ -523,9 +579,10 @@ async function attempt(name, idx) {
     (g.solved ? green("✓ solved ") : end === "timeout" ? yellow("⏱ timeout") : end === "budget_exceeded" ? yellow("$ budget ") : red(`✗ ${g.reason}`)) +
     (g.suspicious_keywords ? yellow(` ⚠ ${g.suspicious_keywords.join(",")}`) : "");
   const checks = stats.toolCalls.lean_check ?? 0;
+  const workersNote = workers.length ? `, ${workers.length}w` : "";
   console.log(
     `  ${dim(`[${String(idx + 1).padStart(2)}/${problems.length}]`)} ${name.padEnd(18)} ${tag}  ${dim(
-      `${stats.turns} turns, ${checks} checks, ${money(stats.cost)}, ${secs(wallMs)}`,
+      `${stats.turns} turns, ${checks} checks${workersNote}, ${money(stats.cost + wStats.cost)}, ${secs(wallMs)}`,
     )}`,
   );
   return record;
