@@ -103,9 +103,17 @@ export default function (pi: ExtensionAPI) {
     // Connection-level failures (server dead, mid-restart) are waited out HERE, like
     // lean_check does in-tool: a nudge composed from "no check result available"
     // keeps the loop hot while nothing can be checked (2026-07-26 outage: >$2 of
-    // retry storm). Waiting costs zero tokens; no deadline — the runner's wall-clock
-    // backstop bounds the attempt, and the STOP file still aborts cleanly.
+    // retry storm). Waiting costs zero tokens, and the STOP file still aborts cleanly.
+    //
+    // Bounded, unlike the original version. This runs inside agent_end, so while it
+    // waits the agent loop is blocked: no message completes, no tool returns, and the
+    // session file stops growing entirely. An unbounded wait was therefore the one way
+    // an attempt could go silent for hours and still be "alive" — invisible to the spend
+    // cap (an unfinished message books nothing) and reaped only by the 48 h wall
+    // backstop. 5 min matches lean-check.ts's in-tool retry deadline; past it, fall
+    // through and nudge from whatever we have.
     const origPath: string | undefined = cfg.original_file;
+    const connDeadline = Date.now() + 5 * 60_000;
     for (;;) {
       try {
         check = origPath && existsSync(origPath)
@@ -116,6 +124,7 @@ export default function (pi: ExtensionAPI) {
         const connErr = /ECONNREFUSED|ECONNRESET|EPIPE|socket hang up/i.test(`${e?.code ?? ""} ${e?.message ?? ""}`);
         if (!connErr) { dbg("serverCheck failed:", e?.message); break; }
         if (existsSync(join(work, "..", "STOP"))) return;
+        if (Date.now() + 10_000 > connDeadline) { dbg("server down past deadline, nudging anyway"); break; }
         dbg("server down, waiting:", e?.message);
         await new Promise((r) => setTimeout(r, 10_000));
       }

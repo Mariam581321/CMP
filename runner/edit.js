@@ -42,10 +42,14 @@ export function closestRegion(content, oldText) {
   const lines = content.split("\n");
   const W = Math.min(Math.max(oldText.split("\n").length, 1), lines.length);
   const target = bigrams(oldText.split("\n").map((l) => l.trim()).join("\n"));
+  // Trim once, not once per window: every line used to be re-trimmed, re-joined and
+  // re-bigrammed for each of the W windows containing it, so a failed edit on a long
+  // file did O(lines x W) string work and allocated a Map per window. Roughly 7% of edit
+  // calls miss, and this runs on every one of them.
+  const trimmed = lines.map((l) => l.trim());
   let best = { score: -1, start: 0 };
   for (let s = 0; s + W <= lines.length; s++) {
-    const win = lines.slice(s, s + W).map((l) => l.trim()).join("\n");
-    const score = diceSimilarity(bigrams(win), target);
+    const score = diceSimilarity(bigrams(trimmed.slice(s, s + W).join("\n")), target);
     if (score > best.score) best = { score, start: s };
   }
   const from = Math.max(0, best.start - 1);

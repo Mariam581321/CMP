@@ -188,6 +188,11 @@ async function startRepl(w) {
   proc.stdin.on("error", (e) => log(`w${w.id} repl stdin error (${e.code ?? e.message}) — close event will handle it`));
   w.repl = proc;
   let buf = "";
+  // UTF-8 across chunk boundaries: `buf += d` on raw Buffers turns any multi-byte char
+  // split by a 64 KB pipe chunk into U+FFFD, and Lean output is unicode-dense (ℕ → ∀ ≤).
+  // The damage is silent — the JSON still parses — and lands in the messages and probe
+  // lines every verdict is read from.
+  proc.stdout.setEncoding("utf8");
   proc.stdout.on("data", (d) => {
     if (w.repl !== proc) return;
     buf += d;
@@ -450,7 +455,17 @@ function render(resp, shifted) {
   return { ok, pretty, messages, sorries };
 }
 
+// `pretty` is capped at 8 KB by render(), but `messages` and `sorries` are not, and a
+// sorry goal in a big context pretty-prints to a lot of text. The watchdog keeps this
+// server alive for days across runs, so MEMO_MAX entries of unbounded size is a slow
+// leak with no ceiling. Skip memoizing the outliers rather than truncating them: a
+// truncated entry would be a DIFFERENT answer served under the same key, and the memo's
+// whole contract is that a hit is byte-identical to the compile it replaces.
+const MEMO_MAX_ENTRY_BYTES = 256 * 1024;
 function memoPut(key, result) {
+  let size;
+  try { size = JSON.stringify(result).length; } catch { return; }
+  if (size > MEMO_MAX_ENTRY_BYTES) return;
   if (memo.size >= MEMO_MAX) memo.delete(memo.keys().next().value); // bounded, oldest-first
   memo.set(key, result);
 }
@@ -459,7 +474,24 @@ async function handleCheck(w, prep) {
   // dispatch only hands jobs to ready workers, but readiness can be lost between
   // assignment and send (concurrent watchdog restart) — wait it out; the job
   // belongs to this worker either way.
-  while (!w.ready) await new Promise((r) => setTimeout(r, 2000));
+  //
+  // Bounded: this runs with w.busy already true, so a worker whose REPL cannot come back
+  // (broken binary, disk full — restartRepl retries forever by design) would otherwise
+  // spin here for the client's whole 30 min socket wait while looking merely busy, and
+  // with every worker in that state the pool wedges silently. Give up well inside the
+  // import bound and report a crash, which runCheck requeues onto a sibling.
+  const readyDeadline = Date.now() + IMPORT_TIMEOUT_MS;
+  while (!w.ready) {
+    if (Date.now() > readyDeadline) {
+      return {
+        ok: false, error: `worker ${w.id} did not become ready within ${Math.round(IMPORT_TIMEOUT_MS / 1000)}s`,
+        kind: "crash", bound: null,
+        pretty: "lean check failed: no REPL became available for this check",
+        messages: [], sorries: [],
+      };
+    }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
   try {
     const resp = await sendToRepl(w, { cmd: prep.text, env: 0 }, { cpuMs: CPU_FUSE_MS, wallMs: WALL_FUSE_MS });
     const result = render(resp, prep.shifted);
@@ -596,6 +628,9 @@ const server = createServer((req, res) => {
   }
   if (req.method === "POST" && req.url === "/check") {
     let data = "";
+    // UTF-8 across chunk boundaries — this body is the agent's Lean SOURCE. Corrupting a
+    // char here does not garble a report, it compiles a file the agent never wrote.
+    req.setEncoding("utf8");
     req.on("data", (d) => (data += d));
     req.on("end", () => {
       let body;
