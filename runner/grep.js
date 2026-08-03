@@ -31,14 +31,26 @@ function runGrep(pattern, { regex, ci, cap = RAW_LINE_CAP }, signal) {
     args.push("--", pattern, MATHLIB_SRC);
     const child = spawn("grep", args, { stdio: ["ignore", "pipe", "pipe"] });
     let out = "", err = "", done = false;
+    // UTF-8 across chunk boundaries: Mathlib source is unicode-dense, and coercing each
+    // Buffer separately turns any char split by a pipe chunk into U+FFFD in what the
+    // agent is shown.
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
     const finish = (fn, v) => { if (!done) { done = true; clearTimeout(t); fn(v); } };
     const t = setTimeout(() => { child.kill("SIGKILL"); finish(reject, new Error(`grep timed out after ${GREP_TIMEOUT_MS / 1000}s`)); }, GREP_TIMEOUT_MS);
     signal?.addEventListener("abort", () => { child.kill("SIGKILL"); finish(reject, new Error("aborted")); });
+    // Count newlines incrementally. Re-splitting the whole accumulated buffer on every
+    // chunk was O(total^2) in the output and allocated a fresh array of every line each
+    // time — on a broad pattern grep floods faster than the cap can stop it.
+    let lineCount = 0;
+    let killed = false;
     child.stdout.on("data", (d) => {
       out += d;
+      for (let i = -1; (i = d.indexOf("\n", i + 1)) !== -1; ) lineCount++;
       // Early kill once we have plenty of raw lines; grep exits with SIGKILL but the
-      // collected prefix is a valid (truncated) result.
-      if (out.split("\n").length > cap) child.kill("SIGKILL");
+      // collected prefix is a valid (truncated) result. Guarded: data keeps arriving
+      // after the kill, and re-killing per chunk is pointless work.
+      if (!killed && lineCount > cap) { killed = true; child.kill("SIGKILL"); }
     });
     child.stderr.on("data", (d) => (err += d));
     child.on("error", (e) => finish(reject, e));

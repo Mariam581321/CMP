@@ -8,7 +8,7 @@
 // never by diffing source text (immune to reformatting, notation, binder renames,
 // open-shadowing in both directions).
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -194,7 +194,15 @@ export async function originalStmtTypes(problemName, originalSource, decls) {
   }
   try { disk = JSON.parse(readFileSync(STMT_CACHE, "utf8")); } catch { disk = {}; }
   disk[problemName] = { sha256: sha, decls: entry };
-  writeFileSync(STMT_CACHE, JSON.stringify(disk, null, 1));
+  // Write-then-rename, because the failure mode of a torn write is not "one lost entry".
+  // writeFileSync truncates first, so a concurrent reader (a regrade alongside a run) can
+  // see a half-file; that read throws, the catch above resets `disk` to {}, and the very
+  // next write replaces the WHOLE cache with a single problem. Rebuilding costs one
+  // Mathlib compile per entry (1534 of them today). rename(2) is atomic within a
+  // filesystem, so a reader sees either the old file or the new one.
+  const tmp = `${STMT_CACHE}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(disk, null, 1));
+  renameSync(tmp, STMT_CACHE);
   memoOrig.set(problemName, { sha, decls: entry });
   return entry;
 }

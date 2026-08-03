@@ -22,7 +22,8 @@ export const LEAN_URL = `http://127.0.0.1:${LEAN_PORT}`;
 // aggregate CPU no longer convicts — a file whose declarations each elaborate under the
 // cap now compiles however long the whole file takes (CPU is a machine fuse; see
 // CPU_FUSE_MS). This is one-directional: it can only turn old fails into passes.
-// Any change to this number changes what "compiles" means → freeze re-cut (FREEZE.md).
+// Any change to this number changes what "compiles" means: runs recorded either side of
+// it are not comparable, so say so in the commit that changes it.
 export const MAX_HEARTBEATS = 400_000;
 
 // deepseek-v4-flash standard (off-peak) rates in $/1M tokens — the only place prices
@@ -42,6 +43,14 @@ export function postCheck(body, timeoutMs) {
       { host: "127.0.0.1", port: LEAN_PORT, path: "/check", method: "POST", headers: { "content-type": "application/json" }, timeout: timeoutMs },
       (res) => {
         let data = "";
+        // Decode as UTF-8 ACROSS chunk boundaries. Without this, `data += d` coerces each
+        // Buffer independently and a multi-byte char straddling a chunk becomes U+FFFD —
+        // measured 4 replacement chars in one 352 KB response, and JSON.parse still
+        // succeeds, so the corruption is silent. This response carries every compiler
+        // message, every sorry goal, and the CMPSTMT canonical types that decide
+        // statement preservation (0.8% of cached types contain non-ASCII), so a mangled
+        // byte here can read as a changed statement on a valid proof.
+        res.setEncoding("utf8");
         res.on("data", (d) => (data += d));
         res.on("end", () => {
           try { resolve(JSON.parse(data)); } catch (e) { reject(e); }
