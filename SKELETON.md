@@ -248,7 +248,8 @@ extensions/cmp-edit.ts      always-on: shadows pi's edit tool (core in runner/ed
                             failed matches return the closest file region
 extensions/supervisor.ts    always-on: in-process continuation policy (nudges, STOP file)
 runner/edit.js              edit-tool core: trailing-ws-only fuzzy match + closest-region errors
-extensions/max-tokens.ts    injects the per-response max_tokens (always on; default = model max)
+extensions/max-tokens.ts    injects per-response max_tokens = remaining window room,
+                            clamped to [131072, --max-tokens] (always on)
 lean-env/                   shared Lean project (gitignored)
 problems/                   sanitized statements + dev.txt + stmt-types.json (grader cache)
 results/                    per-run dirs + results.jsonl (gitignored)
@@ -263,8 +264,17 @@ results/                    per-run dirs + results.jsonl (gitignored)
                      checked per assistant message, so overshoot ≤ 1 message; 0 disables)
 --timeout <s>        (172800) wall-clock backstop | --concurrency <n> (12)
 --model <id>         deepseek/deepseek-v4-flash | --thinking <level> (high)
---max-tokens <n>     per-response output cap, always sent (default 384000 = model max;
-                     set low, e.g. 8192, only for capped experiment cells)
+--max-tokens <n>     per-response output CEILING, always sent (default 384000, the
+                     model max; set low, e.g. 8192, only for capped experiment cells).
+                     max_tokens is charged against the CONTEXT window at admission
+                     (prompt + max_tokens <= 1048576), so extensions/max-tokens.ts
+                     sends clamp(window - context - slack, 131072, ceiling) per
+                     request rather than a flat reservation (flat 384000 capped
+                     conversation at 664576 and 400'd past it; the largest output
+                     ever observed is 122423, so the 131072 floor truncates nothing).
+                     Once the window can't fit the floor the request 400s — free,
+                     pre-inference — and pi compacts and retries: that cycle, not a
+                     threshold, is what bounds conversation length (~917504/cycle).
 --run-id <s>         default combo+timestamp
 
 ("compiles" is not a flag: the deterministic maxHeartbeats cap is MAX_HEARTBEATS in

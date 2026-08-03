@@ -91,8 +91,17 @@ for (const [flag, v, min] of [
 }
 // Always send an explicit output cap — DeepSeek's server default is 8192/response when
 // none is sent, and PLAN's protocol says a tight cap may only ever be a manipulated
-// factor. Default = deepseek-v4-flash's max output. Capped experiment cells pass e.g.
-// --max-tokens 8192; 0 falls back to the provider default (don't use in real runs).
+// factor. Capped experiment cells pass e.g. --max-tokens 8192; 0 falls back to the
+// provider default (don't use in real runs).
+// The flag is the CEILING on a single response, not a flat reservation: the model max
+// (384000) stays the default, and extensions/max-tokens.ts injects
+// clamp(window - context - slack, 131072, ceiling) per request, which offers the model
+// whatever room physically exists. (Sending the ceiling FLAT was wrong — the cap is
+// charged against the context window at admission, so it capped conversation at 664576
+// and 400'd everything past it; fatex-rest90's 19867 assistant messages never exceeded
+// 122423 output.) Near the window the 131072 floor forces an admission 400 — free,
+// pre-inference — which triggers pi's compact-and-retry, and the attempt continues
+// with a fresh window for as long as it runs.
 const MAX_TOKENS = parseInt(A["max-tokens"]);
 const RUN_ID = A["run-id"] ?? `${COMBO.join("+") || "baseline"}-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "")}`;
 

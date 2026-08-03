@@ -43,8 +43,11 @@ problem) `--timeout <s>` (172800, wall-clock backstop) `--concurrency <n>` (12)
 What "compiles" means is not a flag: the check verdict is a deterministic per-declaration
 `maxHeartbeats` cap (`MAX_HEARTBEATS` in `runner/common.js`), identical for agent,
 supervisor and grader; CPU/wall/memory limits are machine fuses and never verdicts.
-Unknown flags are hard errors. Output is uncapped by default (model-max `max_tokens`
-sent explicitly); `--max-tokens` sets a tight cap only for capped experiment cells.
+Unknown flags are hard errors. `max_tokens` is always sent explicitly and sized per
+request: `--max-tokens` (default 384000, the model max) is only the ceiling, and
+`extensions/max-tokens.ts` offers each request whatever room the context window has
+left, floored at 131072 — below that the request 400s and pi compacts. A tight
+`--max-tokens` (e.g. 8192) is only for capped experiment cells — see SKELETON, "Flags".
 
 The agent gets `read,edit,write` + `lean_check`, plus whatever the combo adds, in an
 isolated scratch dir (the agent must never see the benchmark repo — answers leak in
