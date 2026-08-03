@@ -1,0 +1,103 @@
+// Follow an attempt's pi session file.
+//
+// pi's session jsonl IS the durable, linear record of an attempt: one entry per
+// completed message (assistant with full `usage`, toolResult, user), appended as they
+// happen. Everything the runner accounts for — turns, tool calls, nudges, tokens,
+// cost — reconstructs from it byte-exactly (verified against 0802 records, including
+// the killed and the OOM-killed attempts).
+//
+// The runner used to read the same numbers off pi's `--mode json` event stream
+// instead. That stream re-emits the WHOLE accumulated assistant message once per token
+// delta, so one message of T deltas costs O(T^2) bytes, and pi's writer queues them in
+// memory with no backpressure (core/output-guard.js). A long thinking block therefore
+// killed the child with a V8 heap abort — 11 attempts across 0727-0802 died that way,
+// recorded as `agent_died`. Reading the file instead makes the accounting linear in
+// what actually happened, and the child no longer has to say anything on stdout.
+//
+// Polling, not fs.watch: one stat() per second per attempt is nothing next to the run,
+// and watch semantics on appended files vary by platform. Reads are incremental (byte
+// offset per file) and cut at the last newline, so a half-written line is simply picked
+// up on the next tick. Splitting on 0x0A is UTF-8 safe: a newline byte cannot occur
+// inside a multi-byte sequence.
+
+import { readdirSync, openSync, readSync, closeSync, statSync } from "node:fs";
+import { join } from "node:path";
+
+// onEntry(entry, raw) is called for every appended session entry, in file order.
+// Returns a stop() that clears the timer. Never throws into the caller: a malformed or
+// truncated line is skipped, a vanished file is retried on the next tick.
+export function tailSession(sessionDir, onEntry, { intervalMs = 1000 } = {}) {
+  const offsets = new Map(); // path -> bytes consumed
+
+  const pump = () => {
+    let files;
+    try {
+      files = readdirSync(sessionDir).filter((f) => f.endsWith(".jsonl")).sort();
+    } catch {
+      return; // pi has not created the dir/file yet
+    }
+    for (const f of files) {
+      const path = join(sessionDir, f);
+      let size;
+      try { size = statSync(path).size; } catch { continue; }
+      const off = offsets.get(path) ?? 0;
+      if (size <= off) continue;
+      let buf, n;
+      try {
+        const fd = openSync(path, "r");
+        try {
+          buf = Buffer.alloc(size - off);
+          n = readSync(fd, buf, 0, buf.length, off);
+        } finally { closeSync(fd); }
+      } catch { continue; }
+      const lastNl = buf.lastIndexOf(10, n - 1);
+      if (lastNl < 0) continue; // no complete line yet
+      offsets.set(path, off + lastNl + 1);
+      for (const line of buf.toString("utf8", 0, lastNl + 1).split("\n")) {
+        if (!line.trim()) continue;
+        let entry;
+        try { entry = JSON.parse(line); } catch { continue; }
+        try { onEntry(entry, line); } catch {}
+      }
+    }
+  };
+
+  const timer = setInterval(pump, intervalMs);
+  if (timer.unref) timer.unref();
+  // A final synchronous drain, for the tail written between the last tick and exit.
+  return () => { clearInterval(timer); pump(); };
+}
+
+// The accounting the runner keeps per attempt, fed one session entry at a time.
+// Mirrors what run.js used to derive from the event stream, replayed over all 47
+// finished 0802 attempts: tokens and cost_std match byte-exactly, always. Two counts
+// shift by at most one, and only on attempts the runner killed:
+//   tool_calls now means "returned a result", where the event stream counted "started
+//   executing" — a SIGKILL mid-tool is the difference, and the session file cannot tell
+//   that apart from a final call the agent loop never began (both are a toolCall block
+//   with no result), so no definition reproduces the old count in both directions.
+//   turns counts assistant messages, which no longer misses the last turn when the
+//   budget kill lands between the message landing and its turn_end.
+export function newStats() {
+  return { turns: 0, userMsgs: 0, toolCalls: {}, tokens: { in: 0, out: 0, cache_read: 0 }, cost: 0 };
+}
+
+export function applyEntry(stats, entry) {
+  const m = entry?.message;
+  if (!m) return stats;
+  if (m.role === "toolResult") {
+    stats.toolCalls[m.toolName] = (stats.toolCalls[m.toolName] ?? 0) + 1;
+  } else if (m.role === "assistant") {
+    stats.turns++;
+    const u = m.usage;
+    if (u) {
+      stats.tokens.in += u.input ?? 0;
+      stats.tokens.out += u.output ?? 0;
+      stats.tokens.cache_read += u.cacheRead ?? 0;
+      stats.cost += u.cost?.total ?? 0;
+    }
+  } else if (m.role === "user") {
+    stats.userMsgs++;
+  }
+  return stats;
+}

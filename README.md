@@ -11,8 +11,6 @@ problems); PutnamBench built the harness and stays a secondary anchor.
   questions, and todos.
 - **[`SKELETON.md`](SKELETON.md)** — the implementation: how one attempt runs end-to-end,
   independent grading, the persistent lean server, logging, and tool-level arm designs.
-- **[`FREEZE.md`](FREEZE.md)** — the harness freeze log: the current grid freeze, every
-  re-cut and what it invalidates, and which runs are comparable to which.
 - **[`NOTES.md`](NOTES.md)** — the full collection of research ideas
 - **[`papers/INDEX.md`](papers/INDEX.md)** — annotated reference papers + candidate
   benchmarks with open-source verification notes (PDFs gitignored; the index is the
@@ -38,7 +36,7 @@ node runner/run.js --combo lean-search --problems problems/dev.txt  # + semantic
 ```
 
 Flags: `--combo a,b` `--problems <file>` `--budget-std <usd>` ($1.00 cost_std cap per
-problem) `--timeout <s>` (172800, wall-clock backstop) `--concurrency <n>` (12)
+problem) `--timeout <s>` (172800, wall-clock backstop) `--concurrency <n>` (25)
 `--model <id>` (deepseek/deepseek-v4-flash) `--thinking <level>` (high) `--run-id <s>`.
 What "compiles" means is not a flag: the check verdict is a deterministic per-declaration
 `maxHeartbeats` cap (`MAX_HEARTBEATS` in `runner/common.js`), identical for agent,
@@ -60,6 +58,11 @@ pre-rejected lexically by agent-facing checks. See SKELETON.md.
 ## Gotchas learned the hard way
 
 - pi `--tools` filters custom/extension tools too, not just built-ins.
+- Never run pi `--mode json` for a long-thinking agent: it re-emits the whole
+  accumulated message once per stream delta (O(T²) bytes — 2.55 GB for one 35k-token
+  message) and queues those writes with no backpressure, so the child dies on V8's heap
+  cap. Read the session file instead; `--mode text` emits nothing per delta. SKELETON,
+  "Why the runner does not read stdout".
 - `lake env lean` on a sorry'd file exits 0 (warning only) — grade via `#print axioms`.
 - Compile ≈ 12 s warm / 55 s cold per check (mathlib olean loading dominates) → use the
   persistent REPL.

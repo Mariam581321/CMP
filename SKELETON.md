@@ -13,7 +13,7 @@ rate + cost. pi supports DeepSeek natively (`deepseek/deepseek-v4-flash`, reads
    instructions. No path to the benchmark repo.
 2. Spawns **one** pi process headless in that dir:
    ```
-   pi --mode json --session-dir <dir> --no-extensions --no-skills -nc \
+   pi --mode text --session-dir <dir> --no-extensions --no-skills -nc \
       --model deepseek/deepseek-v4-flash --tools read,edit,write,lean_check \
       -e extensions/lean-check.ts -e extensions/file-sandbox.ts \
       -e extensions/cmp-edit.ts -e extensions/supervisor.ts \
@@ -30,12 +30,12 @@ rate + cost. pi supports DeepSeek natively (`deepseek/deepseek-v4-flash`, reads
    remains, and the agent shows progress (= non-read tool calls since the last nudge;
    reads alone are loopable noise), it queues a nudge as a follow-up message — the
    session keeps going inside the same pi process (same policy for every combo).
-   Nudges are ordinary user messages in the event stream; dropping a `STOP` file in
+   Nudges are ordinary user messages in the session; dropping a `STOP` file in
    the attempt dir aborts one attempt cleanly.
-4. The runner streams all JSON events to `events.jsonl` and keeps only hard
-   enforcement: SIGKILL when the per-problem cost_std budget is spent (checked per
-   assistant message, overshoot ≤ 1 message) and the wall-clock backstop for attempts
-   that hang without emitting usage.
+4. The runner reads pi's **session file** as it is appended (`runner/session-tail.js`,
+   1 s poll) and keeps only hard enforcement: SIGKILL when the per-problem cost_std
+   budget is spent (checked per assistant message, overshoot ≤ 1 message) and the
+   wall-clock backstop. The child writes nothing on stdout.
 5. **Grades independently** after the agent exits (never trust the agent's own
    lean_check).
 6. Appends one record to the run's `results.jsonl`.
@@ -195,17 +195,66 @@ hints), skipping independent grading, parallel arms while wall-time matters.
 
 ## Concurrency
 
-`--concurrency N` worker pool over problems (default 12, inside the 8-16 band above):
+`--concurrency N` worker pool over problems (default 25, sized for the 64 GB server —
+the REPL pool absorbs check load and the deterministic verdict makes load a wall-clock
+cost only, never a verdict risk):
 each attempt = own scratch dir +
 own pi subprocess; checks hit the shared warm REPL. LLM calls are I/O-bound and DeepSeek
 is rate-limit-friendly; Lean compiles were the old bottleneck (now the REPL).
 
+## Why the runner does not read stdout
+
+Until 0802 the runner ran pi in `--mode json` and scraped its event stream. That mode
+serialises every session event to stdout, and `message_update` fires **once per stream
+delta carrying the whole accumulated message** — so an assistant message of T deltas
+costs O(T²) bytes. Measured: 2.16 MB emitted for a 799-token message (900× its final
+size), 2.55 GB for a 35k-token one. pi queues those writes in memory with no
+backpressure (`core/output-guard.js` chains them and returns immediately), so a child
+whose reader fell behind grew a multi-GB backlog and died on V8's heap cap. That is
+what `agent_died` was: 11 attempts across 0727–0802 (4 in fatex-rest90), all with the
+same last three events — `turn_end`, `turn_start`, `message_start`, then a GC abort
+mid-message. It hit short sessions too (`fateh_42`: 13 turns), because the trigger is
+one long *message*, not a long session: 79% of assistant content is `thinking`, and the
+tail runs to 100k+ tokens per turn under `--thinking high`.
+
+Raising the child heap only moves the cliff — backlog is ~quadratic in message length,
+so 4 GB → 8 GB buys ~1.4× more message, and the largest message actually observed
+(103,722 tokens) would need ~27 GB. The runner's own reader was never the fix either: it
+sat at 75% of a core doing nothing but discarding a flood it had already decided to drop.
+
+So the stream is gone. `--mode text` runs the identical print-mode path with a
+subscriber that emits nothing per delta (verified: 0 bytes, flat RSS under the same
+conditions that produced a 2.85 GB backlog), and the accounting reads pi's session file
+instead — which is linear, already on disk, already the resume point, and reproduces
+every recorded number byte-exactly (tokens and `cost_std` on all 47 finished 0802
+attempts; `tool_calls` and `turns` shift by at most one on attempts the runner killed,
+see `runner/session-tail.js`).
+
+The file also exposes a liveness signal the pipe never did — a gap between entries is
+time since the last *completed* message — and a `--stale-min` fuse was built on it and
+then dropped the same day. Every single-operation hang is already bounded far below the
+48 h backstop: `lean_check` by the server's 900 s wall / 600 s CPU fuses under a 30 min
+client wait, loogle by a 30 s abort, a stalled provider stream by pi's 5 min HTTP idle
+timeout, and a retry storm not at all — pi persists each failed assistant message
+(`stopReason: "error"`) like any other, so retries keep the file moving. Meanwhile the
+fuse was sized against the then-default `--max-tokens` of 384k (~58 min of generation),
+so it sat barely above a legitimate long message and was likelier to kill a working
+attempt than a stuck one. The one genuinely unbounded silence — the supervisor waiting
+out a dead lean server — is bounded in the extension itself. Hangs ride the wall backstop
+and stay around to be inspected.
+
+Upstream this is two bugs — the snapshot-per-delta protocol (the delta is already in the
+event as `assistantMessageEvent`, so it could be O(T)) and the unbounded write queue.
+Both are still present in pi 0.83.0; `print-mode.js` and `output-guard.js` are
+byte-identical to 0.80.6.
+
 ## Logging (stats computed after the fact, never during)
 
-Per attempt under `results/<run-id>/<problem>/`: `events.jsonl` (full pi event stream,
-nudges included — one continuous session per attempt), pi session file (replayable
-transcript), `problem.lean` final state, `attempt.json`, `stderr.log`, and `plans/`
-for the plan arm. Run-level `results.jsonl`, one record per attempt. **How the attempt
+Per attempt under `results/<run-id>/<problem>/`: the pi **session file** (`session/*.jsonl`
+— the replayable transcript and the log; one continuous session per attempt, nudges
+included), `problem.lean` final state, `attempt.json`, `stderr.log`, and `plans/` for the
+plan arm. Runs before 0802 also carry `events.jsonl`, pi's json event stream; see
+"Why the runner does not read stdout" below for why that is gone. Run-level `results.jsonl`, one record per attempt. **How the attempt
 ended (`end`) and what the grader says about the final file (`grade`) are separate
 fields, both always recorded** — a timeout's grade verdict still says how close the
 file was, and a verified proof counts regardless of how the attempt ended
@@ -215,7 +264,7 @@ file was, and a verified proof counts regardless of how the attempt ended
  "model": "deepseek-v4-flash", "started_at": "...", "wall_s": 412, "turns": 14,
  "tokens": {"in": 84000, "out": 9100, "cache_read": 2400000}, "cost_usd": 0.021, "cost_std": 0.021,
  "tool_calls": {"lean_check": 6, "search_mathlib": 3}, "nudges": 1,
- "end": "completed|timeout|budget_exceeded|runner_error",
+ "end": "completed|timeout|budget_exceeded|agent_died",
  "grade": {"solved": false, "reason": "uses_sorry|compile_error|statement_changed|unsafe_decl|bad_axioms|no_file",
            "detail": "...", "axioms": null, "suspicious_keywords": null},
  "solved": false, "harness_git_sha": "...", "pi_version": "..."}
@@ -228,6 +277,8 @@ compiling" is a jq query over `end` × `grade`, not a re-grading session.
 
 ```
 runner/run.js               spawn pi per problem, worker pool, logging
+runner/session-tail.js      follow pi's session file: the runner's accounting input
+                            (budget, turns, tools, nudges) and the silence fuse's clock
 runner/sanitize.js          PutnamBench src/*.lean -> problems/*.lean (strip answers + docstrings)
 runner/stmt.js              statement-probe library + checkedCompile (the one agent-facing
                             compile+statement client, shared by lean_check and plan_check)
@@ -262,7 +313,7 @@ results/                    per-run dirs + results.jsonl (gitignored)
 --problems <file>    problem list | --problems-dir <dir> (problems/; problems-nl/ for the NL arm)
 --budget-std <usd>   (1.00) per-problem spend cap in cost_std dollars (peak-invariant;
                      checked per assistant message, so overshoot ≤ 1 message; 0 disables)
---timeout <s>        (172800) wall-clock backstop | --concurrency <n> (12)
+--timeout <s>        (172800) wall-clock backstop | --concurrency <n> (25)
 --model <id>         deepseek/deepseek-v4-flash | --thinking <level> (high)
 --max-tokens <n>     per-response output CEILING, always sent (default 384000, the
                      model max; set low, e.g. 8192, only for capped experiment cells).

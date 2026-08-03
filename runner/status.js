@@ -54,44 +54,56 @@ console.log();
 const reasonOf = (r) => (r.end ? (r.end !== "completed" ? r.end : r.grade?.reason) : r.fail_reason) ?? "failed";
 
 // --- live spend for running attempts ----------------------------------------
-// Sums usage out of each running attempt's events.jsonl the same way run.js does
-// (assistant message_end usage; costStd over in/out/cacheRead), so the live number
-// converges to the recorded one. Incremental: a per-run cache in tmpdir keeps a byte
-// offset per problem and each tick reads only the new bytes — event files reach tens
-// of MB and a full re-parse every 10 s would compete with the run itself. The number
-// trails reality by the turn currently being generated; that is inherent to reading
-// logs. Cache corruption/absence just means one full re-read, never a wrong verdict.
-const CACHE = join(tmpdir(), `cmp-status-${runId}.json`);
+// Sums usage out of each running attempt's pi session file the same way run.js does
+// (assistant `usage`; costStd over in/out/cacheRead), so the live number converges to
+// the recorded one. Incremental: a per-run cache in tmpdir keeps a byte offset per
+// session file and each tick reads only the new bytes. The number trails reality by the
+// message currently being generated; that is inherent to reading logs. Cache
+// corruption/absence just means one full re-read, never a wrong verdict.
+// (Pre-0802 runs logged pi's json event stream to events.jsonl instead; the session
+// file has always been written alongside it, so one code path covers both.)
+// Versioned filename: a cache written by an older status.js holds totals accumulated
+// under a different scheme, and silently adding to them double-counts (observed once —
+// it read a $1.00-capped attempt as $1.93 and made the budget look broken).
+const CACHE = join(tmpdir(), `cmp-status-v2-${runId}.json`);
 let cache = {};
 try { cache = JSON.parse(readFileSync(CACHE, "utf8")); } catch {}
+const sessionFiles = (p) => {
+  const dir = join(runDir, p, "session");
+  try { return readdirSync(dir).filter((f) => f.endsWith(".jsonl")).sort().map((f) => join(dir, f)); }
+  catch { return []; }
+};
 function liveStats(p) {
-  const f = join(runDir, p, "events.jsonl");
-  if (!existsSync(f)) return null;
-  const ent = (cache[p] ??= { off: 0, in: 0, out: 0, cache_read: 0, cost: 0, turns: 0, checks: 0 });
-  const size = statSync(f).size;
-  if (size < ent.off) Object.assign(ent, { off: 0, in: 0, out: 0, cache_read: 0, cost: 0, turns: 0, checks: 0 });
-  if (size > ent.off) {
+  const files = sessionFiles(p);
+  if (!files.length) return null;
+  const ent = (cache[p] ??= { offs: {}, in: 0, out: 0, cache_read: 0, cost: 0, turns: 0, checks: 0 });
+  ent.offs ??= {};
+  for (const f of files) {
+    const size = statSync(f).size;
+    const off = ent.offs[f] ?? 0;
+    if (size < off) { ent.offs[f] = 0; continue; } // truncated: re-read next tick
+    if (size === off) continue;
     const fd = openSync(f, "r");
-    const buf = Buffer.alloc(size - ent.off);
-    const n = readSync(fd, buf, 0, buf.length, ent.off);
+    const buf = Buffer.alloc(size - off);
+    const n = readSync(fd, buf, 0, buf.length, off);
     closeSync(fd);
     const lastNl = buf.lastIndexOf(10, n - 1);
-    if (lastNl >= 0) {
-      for (const line of buf.toString("utf8", 0, lastNl + 1).split("\n")) {
-        if (line.includes('"type":"turn_end"')) { ent.turns++; continue; }
-        if (line.includes('"type":"tool_execution_end"') && line.includes('"toolName":"lean_check"')) { ent.checks++; continue; }
-        if (!line.includes('"type":"message_end"') || !line.includes('"role":"assistant"')) continue;
-        try {
-          const u = JSON.parse(line).message?.usage;
-          if (!u) continue;
-          ent.in += u.input ?? 0;
-          ent.out += u.output ?? 0;
-          ent.cache_read += u.cacheRead ?? 0;
-          ent.cost += u.cost?.total ?? 0;
-        } catch {}
-      }
-      ent.off += lastNl + 1;
+    if (lastNl < 0) continue;
+    for (const line of buf.toString("utf8", 0, lastNl + 1).split("\n")) {
+      if (!line.trim()) continue;
+      let m;
+      try { m = JSON.parse(line).message; } catch { continue; }
+      if (m?.role === "toolResult") { if (m.toolName === "lean_check") ent.checks++; continue; }
+      if (m?.role !== "assistant") continue;
+      ent.turns++;
+      const u = m.usage;
+      if (!u) continue;
+      ent.in += u.input ?? 0;
+      ent.out += u.output ?? 0;
+      ent.cache_read += u.cacheRead ?? 0;
+      ent.cost += u.cost?.total ?? 0;
     }
+    ent.offs[f] = off + lastNl + 1;
   }
   return ent;
 }
@@ -108,8 +120,11 @@ for (const p of run.problems) {
     else console.log(`  ${red(`✗ ${reasonOf(r).padEnd(7)}`)}  ${p.padEnd(20)} ${dim(extras)}`);
   } else if (existsSync(join(runDir, p))) {
     const startMs = statSync(join(runDir, p)).ctimeMs;
-    const ev = join(runDir, p, "events.jsonl");
-    const lastMs = existsSync(ev) ? statSync(ev).mtimeMs : startMs;
+    // "active" = time since the last COMPLETED message, not since the last byte moved.
+    // Nothing kills on it (run.js has no silence fuse — see the comment there): it is
+    // here so a stuck attempt is visible long before the 48 h backstop reaps it.
+    const sess = sessionFiles(p).at(-1);
+    const lastMs = sess ? statSync(sess).mtimeMs : startMs;
     const s = liveStats(p);
     const spend = s ? ` · ~${money(costStd(s))}${run.budget_std ? `/${money(run.budget_std)}` : ""} std, ${s.turns}t ${s.checks}chk` : "";
     liveCost += s?.cost ?? 0;

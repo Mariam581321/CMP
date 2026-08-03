@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 // Run one extension combo over a problem list. One pi subprocess per problem in an
-// isolated scratch dir, full event logging, independent grading, pretty output.
+// isolated scratch dir, pi's own session file as the log, independent grading, pretty
+// output.
 //
 //   node runner/run.js --combo lean-search --problems problems/dev.txt
 //
 // Flags: --combo a,b ("" = baseline) --problems <file> --budget-std <usd> (1.00)
 //        --timeout <s> (172800, wall-clock backstop)
-//        --concurrency <n> (12) --model <id> --thinking <level> (high) --run-id <s>
+//        --concurrency <n> (25) --model <id> --thinking <level> (high) --run-id <s>
 //        --problems-dir <dir> (problems/; e.g. problems-nl/ for statements with
 //        the informal NL docstring kept)
 //
@@ -21,6 +22,7 @@ import { mkdirSync, readFileSync, writeFileSync, appendFileSync, copyFileSync, c
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { grade } from "./grade.js";
+import { tailSession, newStats, applyEntry } from "./session-tail.js";
 import { costStd, LEAN_PORT, LEAN_URL, MAX_HEARTBEATS, green, red, yellow, dim, bold, cyan, money, secs } from "./common.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -37,11 +39,14 @@ try {
       "problems-dir": { type: "string", default: join(ROOT, "problems") },
       "budget-std": { type: "string", default: "1.00" },
       timeout: { type: "string", default: "172800" },
-      // 12: with checks served warm by the REPL pool the LLM is the bottleneck, so
-      // the useful band is 8-16 (SKELETON, "Concurrency"). The old default of 6
-      // under-used the box; the 25-30 of the pre-freeze runs put a run and a Claude
-      // session together over the memory floor (see the 0727 VM death).
-      concurrency: { type: "string", default: "12" },
+      // 25: sized for the 64 GB server (2026-08-02). With checks served warm by the
+      // 8-worker REPL pool the LLM is the bottleneck — the fatex-rest90 run held
+      // "0 checks queued" at concurrency 12 — and under the deterministic heartbeat
+      // verdict load can stretch wall clock but can no longer flip a verdict, so
+      // concurrency is purely a throughput knob. The laptop-era caution (25-30 put a
+      // run plus a Claude session over the 12 GB memory floor, the 0727 VM death)
+      // does not apply on this box.
+      concurrency: { type: "string", default: "25" },
       model: { type: "string", default: "deepseek/deepseek-v4-flash" },
       // Thinking is fixed config for the whole grid, not an arm (PLAN: a model knob,
       // not a harness answer; the on/off pilot found thinking-on same-or-better and
@@ -247,7 +252,7 @@ const toolList = ["read", "edit", "write", ...extTools("lean-check"), ...COMBO.f
 
 const problems = readFileSync(PROBLEMS_FILE, "utf8").split("\n").map((s) => s.trim()).filter(Boolean);
 // A duplicated line would give two concurrent attempts the same work dir and
-// events.jsonl — both corrupted, both graded on the other's file.
+// session dir — both corrupted, both graded on the other's file.
 if (new Set(problems).size !== problems.length) {
   const seen = new Set();
   const dupes = problems.filter((p) => (seen.has(p) ? true : (seen.add(p), false)));
@@ -372,7 +377,17 @@ async function attempt(name, idx) {
   copyFileSync(join(PROBLEMS_DIR, `${name}.lean`), join(work, "problem.lean"));
 
   const args = [
-    "--mode", "json",
+    // NOT --mode json. That mode serialises every session event to stdout, and
+    // `message_update` fires once per stream delta carrying the WHOLE accumulated
+    // message, so one assistant message of T deltas costs O(T^2) bytes — 2.55 GB
+    // measured for a single 35k-token message. pi queues those writes in memory with no
+    // backpressure, so whenever the runner fell behind (one thread, 12 children) the
+    // child hit V8's heap cap and aborted mid-attempt: 11 attempts across 0727-0802,
+    // each recorded `agent_died`, the last four in fatex-rest90. --mode text runs the
+    // identical print-mode path with a subscriber that emits nothing per delta
+    // (modes/print-mode.js), and the runner reads the session file instead — which
+    // carries every number it used to scrape, byte-exactly. See runner/session-tail.js.
+    "--mode", "text",
     "--no-extensions", "--no-skills", "-nc", "--no-prompt-templates", "--no-themes",
     "--model", MODEL, "--thinking", THINKING,
     "--tools", toolList.join(","),
@@ -387,32 +402,32 @@ async function attempt(name, idx) {
     PROMPT,
   ];
 
-  const events = createWriteStream(join(probDir, "events.jsonl"));
   const stderrLog = createWriteStream(join(probDir, "stderr.log"));
   // A log stream error (disk full, quota) must degrade that attempt's logging, not
   // crash the whole runner: an unhandled stream 'error' is an uncaught exception that
   // would take down every in-flight attempt and skip the summary/closing balance.
-  events.on("error", (e) => console.error(`  ${red("events.jsonl write error")} ${name}: ${e.message}`));
   stderrLog.on("error", (e) => console.error(`  ${red("stderr.log write error")} ${name}: ${e.message}`));
   const started = Date.now();
-  const stats = { turns: 0, userMsgs: 0, toolCalls: {}, tokens: { in: 0, out: 0, cache_read: 0 }, cost: 0 };
+  const stats = newStats();
   let timedOut = false;
   let budgetExceeded = false;
 
   // One pi process per attempt. The supervisor extension keeps the agent going
   // in-process (nudges are follow-up messages inside the same session); the runner
   // owns hard enforcement only: budget SIGKILL (overshoot ≤ 1 message) and the
-  // wall-clock backstop for hangs that emit no usage events.
+  // wall-clock backstop for hangs that book no spend.
+  // The child says nothing on stdout (--mode text); everything the runner needs is
+  // read off pi's own session jsonl as it is appended.
   const exit = await new Promise((resolveExit) => {
     const child = spawn("pi", args, {
       cwd: work,
       env: {
         ...process.env,
-        // pi is a node process; a FATE-X-length session (200+ turns, 60+ checks) blows
-        // V8's default old-space cap and dies mid-attempt with a GC abort — 4 of the
-        // first 27 rest90-0802 attempts went down that way, each recorded agent_died.
-        // 8 GB headroom per child; the box (64 GB) can hold concurrency x that, and the
-        // wall/budget caps bound any single runaway long before it matters.
+        // A fuse, not a fix: the GC aborts that killed 11 attempts came from pi's json
+        // event stream (see --mode text above), and that flood is now gone. This just
+        // keeps a child from dying on V8's 4 GB default should anything else ever grow.
+        // Backlog was ~quadratic in message length, so 4 GB → 8 GB would have bought
+        // only ~1.4x more message; nothing here is load-bearing.
         NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --max-old-space-size=8192`.trim(),
         CMP_CONFIG: JSON.stringify({
           original_file: join(PROBLEMS_DIR, `${name}.lean`),
@@ -424,63 +439,53 @@ async function attempt(name, idx) {
         }),
       },
       detached: true,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["ignore", "ignore", "pipe"],
     });
     liveAttempts.add(child.pid);
-    // Decode as UTF-8 across chunk boundaries: per-chunk Buffer→string coercion turned
-    // a ℕ/→/∀ that straddled a 64 KB pipe chunk into U+FFFD in events.jsonl.
-    child.stdout.setEncoding("utf8");
-    const killer = setTimeout(() => {
-      timedOut = true;
-      try { process.kill(-child.pid, "SIGKILL"); } catch {}
-    }, TIMEOUT_S * 1000);
+    const kill = () => { try { process.kill(-child.pid, "SIGKILL"); } catch {} };
+    const killer = setTimeout(() => { timedOut = true; kill(); }, TIMEOUT_S * 1000);
 
-    let buf = "";
-    child.stdout.on("data", (d) => {
-      buf += d;
-      let nl;
-      while ((nl = buf.indexOf("\n")) >= 0) {
-        const line = buf.slice(0, nl);
-        buf = buf.slice(nl + 1);
-        if (!line.trim()) continue;
-        // message_update fires per token and embeds the full accumulated message —
-        // hundreds of MB per problem. message_end carries everything we need.
-        if (line.includes('"type":"message_update"')) continue;
-        events.write(line + "\n");
-        try {
-          const e = JSON.parse(line);
-          if (e.type === "turn_end") stats.turns++;
-          if (e.type === "tool_execution_start")
-            stats.toolCalls[e.toolName] = (stats.toolCalls[e.toolName] ?? 0) + 1;
-          // Every user message beyond the CLI prompt is a supervisor nudge.
-          if (e.type === "message_end" && e.message?.role === "user") stats.userMsgs++;
-          if (e.type === "message_end" && e.message?.role === "assistant") {
-            const u = e.message.usage;
-            if (u) {
-              stats.tokens.in += u.input ?? 0;
-              stats.tokens.out += u.output ?? 0;
-              stats.tokens.cache_read += u.cacheRead ?? 0;
-              stats.cost += u.cost?.total ?? 0;
-              if (BUDGET_STD > 0 && !budgetExceeded && costStd(stats.tokens) >= BUDGET_STD) {
-                budgetExceeded = true;
-                try { process.kill(-child.pid, "SIGKILL"); } catch {}
-              }
-            }
-          }
-        } catch {}
+    // Accounting follows the session file, one completed message at a time — the same
+    // granularity the budget always enforced at ("overshoot ≤ 1 message"), now with up
+    // to one poll interval of extra latency.
+    const untail = tailSession(sessionDir, (entry) => {
+      applyEntry(stats, entry);
+      if (BUDGET_STD > 0 && !budgetExceeded && costStd(stats.tokens) >= BUDGET_STD) {
+        budgetExceeded = true;
+        kill();
       }
     });
+    // No silence fuse. A "no message completed in N minutes" kill was tried (2026-08-02)
+    // and dropped: every way an attempt can sit inside ONE operation is already bounded
+    // well under the wall backstop — lean_check by the server's 900 s wall / 600 s CPU
+    // fuses under a 30 min client wait, loogle by a 30 s abort, a stalled provider stream
+    // by pi's 5 min HTTP idle timeout, and a provider retry storm not at all, since pi
+    // persists each failed assistant message (stopReason "error") like any other. A
+    // single message is capped by --max-tokens, and the 60 min fuse was sized against the
+    // then-default 384k (~58 min of generation at the rate this model streams), so it sat
+    // barely above a legitimate long message and was likelier to kill a working attempt
+    // than a stuck one. The supervisor's server-outage wait — the one genuinely unbounded
+    // silence — is bounded in the extension itself, where it belongs.
+    // An attempt that hangs anyway rides the 48 h backstop and is there to inspect.
     child.stderr.on("data", (d) => stderrLog.write(d));
     child.on("close", (code, signal) => {
       liveAttempts.delete(child.pid);
       clearTimeout(killer);
+      // Drains once more before stopping: the messages written between the last poll
+      // and exit are exactly the ones a killed attempt is judged on.
+      untail();
       resolveExit({ code, signal });
     });
   });
-  events.end();
   stderrLog.end();
 
   const wallMs = Date.now() - started;
+  // A death the runner did not order — OOM kill, pi crash, provider-retry exhaustion —
+  // is not "completed": it used to be recorded as one and silently counted as an
+  // ordinary arm failure (one such record already exists in the 0727 data). The file
+  // still grades on its merits; `end` says the attempt is a rerun candidate, not a
+  // clean sample of the arm.
+  const end = timedOut ? "timeout" : budgetExceeded ? "budget_exceeded" : exit.code === 0 ? "completed" : "agent_died";
   // Verdict (grade) and outcome (end) are orthogonal and both recorded truthfully:
   // the grader's judgment of the final file is never overwritten by how the attempt
   // ended, so "how close were the timeouts?" is a query, not a re-grading session.
@@ -488,12 +493,6 @@ async function attempt(name, idx) {
   // and the same heartbeat cap as the agent's own lean_check, so the agent-observed
   // verdict and the recorded one cannot differ (2026-08-01).
   const g = await grade(name, join(work, "problem.lean"), join(PROBLEMS_DIR, `${name}.lean`));
-  // A death the runner did not order — OOM kill, pi crash, provider-retry exhaustion —
-  // is not "completed": it used to be recorded as one and silently counted as an
-  // ordinary arm failure (one such record already exists in the 0727 data). The file
-  // still grades on its merits; `end` says the attempt is a rerun candidate, not a
-  // clean sample of the arm.
-  const end = timedOut ? "timeout" : budgetExceeded ? "budget_exceeded" : exit.code === 0 ? "completed" : "agent_died";
 
   const record = {
     run_id: RUN_ID, problem: name, combo: COMBO, model: MODEL, thinking: THINKING,
