@@ -56,9 +56,23 @@ export function suspiciousKeywords(source) {
  * could hold differently from the agent (it used to receive the run's `--check-cpu`
  * explicitly, because an ambient read in the runner process would have pinned it to the
  * default while the agent ran on the flag).
+ *
+ * `opts.end` is the attempt's outcome ("completed" | "timeout" | "budget_exceeded" |
+ * "agent_died"). It flavors the statement checks only: `statement_changed` asserts the
+ * agent renamed/deleted/altered the statement it was asked to prove — an accusation a
+ * killed attempt does not support. SIGKILL at the budget cap and SIGABRT crashes
+ * routinely catch the file mid-edit (0-byte fatex_33, mid-refactor fatex_34, 0802),
+ * and a statement found altered at kill time proves nothing about what a finished
+ * attempt would have submitted (agents demonstrably park rewritten statements while
+ * developing and restore them after). So on an abnormal end, every statement-check
+ * failure (missing / type differs / kind changed / body differs) records the end cause
+ * as the reason, keeping the specific diagnosis in the detail. `unsafe_decl`, compile,
+ * sorry and axiom verdicts are untouched — they describe the graded file itself, and
+ * a solved file counts regardless of `end`.
  * @returns {Promise<{solved: boolean, reason?: string, detail?: string, axioms?: object, suspicious_keywords?: string[]}>}
  */
-export async function grade(problemName, solutionPath, originalPath) {
+export async function grade(problemName, solutionPath, originalPath, opts = {}) {
+  const end = opts.end ?? "completed";
   if (!existsSync(solutionPath)) return { solved: false, reason: "no_file", detail: "problem.lean missing" };
   const original = readFileSync(originalPath, "utf8");
   const solution = readFileSync(solutionPath, "utf8");
@@ -108,20 +122,29 @@ export async function grade(problemName, solutionPath, originalPath) {
       ? fail("grader_error", "stmt probe produced no output on a clean compile")
       : fail("compile_error", `statement unknown (file did not elaborate to the end)\n${pretty.slice(0, 3500)}`);
   }
+  // Statement-check failures are attributed to the kill when there was one: the file
+  // at kill time is whatever state SIGKILL/SIGABRT happened to catch, and "maybe it
+  // would have reverted the statement given more budget" is unknowable — the honest
+  // reason the attempt is unsolved is that it was stopped. The diagnosis stays in the
+  // detail either way.
+  const stmtFail = (detail) =>
+    end !== "completed"
+      ? fail(end, `${detail}\n  (attempt ended '${end}' — file state at kill time; not graded as statement tampering)`)
+      : fail("statement_changed", detail);
   for (const d of decls) {
     const s = got[d];
     if (!s || s.missing)
-      return fail("statement_changed", `${d}: declaration missing (renamed/deleted, or its statement fails to elaborate)` + (r.ok ? "" : `\n${pretty.slice(0, 2000)}`));
+      return stmtFail(`${d}: declaration missing (renamed/deleted, or its statement fails to elaborate)` + (r.ok ? "" : `\n${pretty.slice(0, 2000)}`));
     if (s.type !== orig[d].type)
-      return fail("statement_changed", `${d}: elaborated type differs from original\n  expected: ${orig[d].type.slice(0, 300)}\n  got:      ${s.type.slice(0, 300)}`);
+      return stmtFail(`${d}: elaborated type differs from original\n  expected: ${orig[d].type.slice(0, 300)}\n  got:      ${s.type.slice(0, 300)}`);
     if (s.kind !== orig[d].kind)
-      return fail("statement_changed", `${d}: declaration kind changed (${orig[d].kind} -> ${s.kind})`);
+      return stmtFail(`${d}: declaration kind changed (${orig[d].kind} -> ${s.kind})`);
     // Setup-definition bodies are part of the statement: the theorem's type references
     // them by NAME, so type equality alone lets a gutted body through (verified with
     // dist_to_int := fun _ => 0, 2026-07-28). Compared exactly where the original's
     // own value is sorry-free — the sorry'd slots (proofs, _solution) stay the agent's.
     if (!orig[d].direct_sorry && orig[d].value != null && orig[d].value !== "-" && s.value !== orig[d].value)
-      return fail("statement_changed", `${d}: definition body differs from original (setup definitions are part of the statement)\n  expected: ${orig[d].value.slice(0, 300)}\n  got:      ${(s.value ?? "").slice(0, 300)}`);
+      return stmtFail(`${d}: definition body differs from original (setup definitions are part of the statement)\n  expected: ${orig[d].value.slice(0, 300)}\n  got:      ${(s.value ?? "").slice(0, 300)}`);
     if (s.safety !== "safe")
       return fail("unsafe_decl", `${d}: declaration is marked ${s.safety}`);
   }

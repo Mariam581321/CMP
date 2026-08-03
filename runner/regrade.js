@@ -39,7 +39,9 @@ for (const runDir of dirs) {
     const solPath = join(runDir, name, "work", "problem.lean");
     if (!existsSync(attemptPath) || !existsSync(solPath)) { skipped++; continue; }
     const old = JSON.parse(readFileSync(attemptPath, "utf8"));
-    const now = await grade(name, solPath, join(problemsDir, `${name}.lean`));
+    // Pass the recorded outcome so the missing-declaration attribution matches what a
+    // fresh run would record (kill artifact vs statement tampering, grade.js).
+    const now = await grade(name, solPath, join(problemsDir, `${name}.lean`), { end: old.end ?? "completed" });
     // v2 records carry the grader's verdict separately (grade.*) — compare it to the
     // fresh grade directly. Legacy records merged run outcome into fail_reason, so
     // timeout/budget/provider must be carried over to stay comparable.

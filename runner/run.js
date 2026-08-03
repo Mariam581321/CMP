@@ -491,8 +491,13 @@ async function attempt(name, idx) {
   // ended, so "how close were the timeouts?" is a query, not a re-grading session.
   // Nothing about the metric is passed in: the grader compiles against the same server
   // and the same heartbeat cap as the agent's own lean_check, so the agent-observed
-  // verdict and the recorded one cannot differ (2026-08-01).
-  const g = await grade(name, join(work, "problem.lean"), join(PROBLEMS_DIR, `${name}.lean`));
+  // verdict and the recorded one cannot differ (2026-08-01). The one place `end`
+  // enters the grade is the statement checks: on an abnormal end, a missing or
+  // altered benchmark declaration is the file state the kill happened to catch, not
+  // evidence of tampering, and grade.js records the end cause instead of
+  // `statement_changed` (2026-08-03; the 0802 fatex run had three such mislabels —
+  // fatex_25/33/34).
+  const g = await grade(name, join(work, "problem.lean"), join(PROBLEMS_DIR, `${name}.lean`), { end });
 
   const record = {
     run_id: RUN_ID, problem: name, combo: COMBO, model: MODEL, thinking: THINKING,
