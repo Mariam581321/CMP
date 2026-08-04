@@ -459,7 +459,7 @@ the library (`library.lean`), so the compile gate is the only writer, workers
 contribute through the same tool, and a capped phase still ships a valid library (the
 bank compiles at every prefix). All problem statements ride inline in the system
 prompt — no fetch tools; which theory to build and how to split it across workers is
-the librarian's call, and the phase cap ($5 default) plus per-worker caps
+the librarian's call, and the phase cap ($10 default) plus per-worker caps
 (`--worker-cap-std`, via the harness-side `maxCostStd` knob) are enforced by
 tail-and-SIGKILL, never mentioned to any agent. Artifacts: `library.lean`,
 `library.json` (sha256 — the `library_sha` of record), `index.md` (docstring +

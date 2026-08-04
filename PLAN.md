@@ -164,7 +164,7 @@ depth/CM definitions, so one canonical copy transfers by `rfl`.
   sees all 95 statements (digest in prompt + a `get_problem` tool), identifies the
   shared missing theory, and spawns workers per cluster; everything enters through the
   existing `add_fact` gate (compiles against the bank, sorry-free, whitelist axioms,
-  no metaprogramming), under one harness-enforced **$5 @std** phase cap — the
+  no metaprogramming), under one harness-enforced **$10 @std** phase cap — the
   builder, like every agent, is budget-blind. The frozen library (content-hashed;
   `library_sha` in every record) is baked into the REPL resident env for the graded
   run, so library names are ambient exactly like Mathlib names and the grader shares
@@ -179,7 +179,7 @@ depth/CM definitions, so one canonical copy transfers by `rfl`.
   whose outside information includes artifacts built from *other problems in the
   benchmark* — cross-problem persistent state, the axis under Danus's fact graph, and
   how real formalization campaigns behave; the unit of evaluation becomes the
-  campaign, reported as such with the phase cost amortized (~5¢/problem).
+  campaign, reported as such with the phase cost amortized (~10¢/problem).
 
 ⇒ Analysis: paired exact McNemar, library vs the winner's cell, on the 95.
 Pre-registered: the effect concentrates in the audit's tier-B clusters (tier A moves
@@ -329,7 +329,7 @@ cost, removed since). Details and autopsies: `drafts/DRAFT-experiment-notes-*.md
       on a baked test server). Live smoke of the phase loop (mini librarian on FATE-M
       + a `--library` dry cell) pending — queued behind the in-flight spawnfacts run
       so its billed_usd stays clean.
-- [ ] **Block D run**: library phase ($5 cap) → library cell, paired vs the winner's
+- [ ] **Block D run**: library phase ($10 cap) → library cell, paired vs the winner's
       cell; tier-concentration readout; report amortized.
 - [x] Triage plumbing (2026-08-04): `submit_verdict` (terminates the session; a
       content-free resubmit reminder, max 3) + `runner/triage.js` (generous

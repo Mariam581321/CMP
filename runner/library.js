@@ -36,7 +36,7 @@ try {
       combo: { type: "string", default: "lean-search,lean-snippet" },
       problems: { type: "string" },
       "problems-dir": { type: "string", default: join(ROOT, "problems") },
-      "cap-std": { type: "string", default: "5.00" },
+      "cap-std": { type: "string", default: "10.00" },
       "worker-cap-std": { type: "string", default: "1.00" },
       timeout: { type: "string", default: "86400" },
       model: { type: "string", default: "deepseek/deepseek-v4-flash" },

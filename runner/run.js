@@ -371,7 +371,7 @@ const addenda = COMBO.map((x) => join(ROOT, "extensions", `${x}.prompt.md`)).fil
 // agent's rules do not change — the declarations are simply there, like Mathlib's.
 if (LIBRARY)
   addenda.push(
-    `## Additional verified library\n\nBeyond Mathlib, this environment contains the following verified declarations — usable by name in problem.lean and snippets, exactly like Mathlib lemmas:\n\n${LIBRARY.index.trim()}`,
+    `## Additional verified library\n\nBeyond Mathlib, this environment also contains the declarations listed below — usable by name in problem.lean and in snippets, exactly like Mathlib lemmas. Every one of them is fully proved and kernel-checked (no sorry, no axioms beyond Mathlib's standard three), so you may build on them without re-proving or re-checking anything, and proofs that use them grade exactly like proofs that use Mathlib:\n\n${LIBRARY.index.trim()}`,
   );
 const FULL_SYSTEM_PROMPT = [SYSTEM_PROMPT, ...addenda].join("\n\n");
 
