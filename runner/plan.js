@@ -52,6 +52,19 @@ export async function planCheck(original, solution, problemName = "adhoc") {
       details: { ok: false, reason: "statement_changed" },
     };
 
+  // Same axiom gate as lean_check (2026-08-04): a "plan" resting on a smuggled axiom
+  // is not a reduction the compiler verified, it is the conclusion assumed.
+  if (check.axiomsBad && Object.keys(check.axiomsBad).length > 0)
+    return {
+      ok: false,
+      text:
+        `PLAN CHECK FAILED: the file depends on disallowed axioms ` +
+        `(${Object.entries(check.axiomsBad).map(([d, a]) => `${d}: [${a.join(", ")}]`).join("; ")}). ` +
+        `Grading accepts only propext, Classical.choice and Quot.sound. Remove the axiom ` +
+        `declarations — unknown steps belong in sorry'd helper lemmas, that is what a plan is.`,
+      details: { ok: false, reason: "bad_axioms" },
+    };
+
   if (!check.ok)
     return {
       ok: false,

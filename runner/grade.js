@@ -22,15 +22,15 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { classifyLines, withConnRetry } from "./common.js";
+import { classifyLines, withConnRetry, ALLOWED_AXIOMS } from "./common.js";
 import { benchmarkDecls, stmtProbe, parseStmtProbe, originalStmtTypes, serverCheck, renderWithoutProbe } from "./stmt.js";
 
 export { serverCheck } from "./stmt.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-// Exported: the add_fact gate (runner/facts.js) applies the same axiom whitelist, so
-// "trusted" means the same thing in the bank as it does in grading.
-export const ALLOWED_AXIOMS = new Set(["propext", "Classical.choice", "Quot.sound"]);
+// Defined in common.js since 2026-08-04 (stmt.js needs it too, and importing from
+// here would cycle); re-exported so existing importers keep working.
+export { ALLOWED_AXIOMS };
 
 // --- lexical tripwire (advisory only) ----------------------------------------
 // Entry points into compile-time execution / kernel-adjacent features. Presence is

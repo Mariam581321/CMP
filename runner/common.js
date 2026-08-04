@@ -26,6 +26,12 @@ export const LEAN_URL = `http://127.0.0.1:${LEAN_PORT}`;
 // it are not comparable, so say so in the commit that changes it.
 export const MAX_HEARTBEATS = 400_000;
 
+// The axiom whitelist — one definition for the grader (bad_axioms verdict), the
+// agent-facing checks (stmt.js checkedCompile reports would-grade-bad_axioms in-loop,
+// 2026-08-04) and the fact-bank gate (facts.js). Lives here because stmt.js cannot
+// import it from grade.js without a cycle.
+export const ALLOWED_AXIOMS = new Set(["propext", "Classical.choice", "Quot.sound"]);
+
 // deepseek-v4-flash standard (off-peak) rates in $/1M tokens — the only place prices
 // live; update ONLY when DeepSeek reprices or the default model changes.
 // cost_std = tokens re-priced at this fixed table. Unlike billed cost_usd it is

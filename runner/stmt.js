@@ -12,7 +12,7 @@ import { readFileSync, writeFileSync, renameSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { postCheck, classifyLines } from "./common.js";
+import { postCheck, classifyLines, ALLOWED_AXIOMS } from "./common.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const STMT_CACHE = join(ROOT, "problems", "stmt-types.json");
@@ -250,8 +250,13 @@ export async function verifyStatement(problemName, originalSource, messages) {
 // format is used everywhere; `ok` is recomputed from the visible messages, which is the
 // same verdict since the probe only ever emits info.
 const PROBE_LINE = /^\s*CMP(?:STMT|VAL)\|/;
+// `#print axioms` reports are probe internals too (since 2026-08-04 they ride on every
+// checkedCompile, not only the grader's request): the verdict is parsed line-gated and
+// surfaced as an explicit axiom-check message, so the raw report lines are stripped
+// from rendered output the same way CMPSTMT lines are.
+const AXIOM_LINE = /^'[^']*' (?:depends on axioms|does not depend on any axioms)/;
 export function renderWithoutProbe(messages, sorries) {
-  const visible = (messages ?? []).filter((m) => !PROBE_LINE.test(m.text ?? ""));
+  const visible = (messages ?? []).filter((m) => !PROBE_LINE.test(m.text ?? "") && !AXIOM_LINE.test(m.text ?? ""));
   const parts = [];
   for (const m of visible) parts.push(`${m.severity}: problem.lean:${m.line}:${m.column}: ${m.text}`);
   for (const s of sorries ?? []) parts.push(`sorry at line ${s.line}, goal:\n  ${s.goal}`);
@@ -297,9 +302,38 @@ export async function checkedCompile(code, { original, problemName, client }) {
       sorries: [],
     };
   }
-  const r = await postCheck({ code: `${code}\n${stmtProbe(benchmarkDecls(original))}\n`, client }, CLIENT_WAIT_MS);
+  // The probe body is built exactly like the grader's (stmtProbe + one `#print
+  // axioms` per benchmark decl, grade.js): agent-facing checks and the grading
+  // request compile the same bytes, so nothing the grader will decide is invisible
+  // in the agent's own loop. The axiom side closed the last gap (2026-08-04): a
+  // smuggled `axiom` + `exact` passed compile, statement and sorry checks, so
+  // lean_check said green and the supervisor let the attempt end on a file the
+  // grader then failed as bad_axioms — the agent-watches-green-gets-graded-red
+  // class, on the one axis the heartbeat work didn't cover (spawn-fatex10-0804
+  // fatex_99, and the 0802 audit's three axiom-gaming incidents before it).
+  const decls = benchmarkDecls(original);
+  const probes = `${stmtProbe(decls)}\n${decls.map((d) => `#print axioms ${d}`).join("\n")}\n`;
+  const r = await postCheck({ code: `${code}\n${probes}`, client }, CLIENT_WAIT_MS);
   if (r.error) return r; // { ok:false, error, kind, pretty, ... } — caller words it for the agent
   const probe = parseStmtProbe(r.messages);
   const stmt = await verifyStatement(problemName, original, r.messages);
-  return { ...r, pretty: renderWithoutProbe(r.messages, r.sorries), probe, stmt };
+  // Axiom verdict, same mechanics and same line gate as the grader: reports are read
+  // only from messages past the end of the submitted code, so printed text inside the
+  // file cannot spoof them. sorryAx is excluded here — sorries already reach the agent
+  // through the sorries list and warnings, and error-recovery turns every failed proof
+  // into sorryAx, which would make this report pure noise on non-compiling files.
+  const solLines = code.split("\n").length;
+  const probeText = (r.messages ?? []).filter((m) => (m.line ?? 0) > solLines).map((m) => m.text).join("\n");
+  const axiomsBad = {};
+  for (const d of decls) {
+    const esc = d.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const m =
+      probeText.match(new RegExp(`'${esc}' depends on axioms: \\[([^\\]]*)\\]`)) ??
+      (probeText.match(new RegExp(`'${esc}' does not depend on any axioms`)) ? [null, ""] : null);
+    if (!m) continue; // decl missing — the statement verdict reports that on its own
+    const bad = (m[1] === "" ? [] : m[1].split(",").map((s) => s.trim()))
+      .filter((a) => !ALLOWED_AXIOMS.has(a) && a !== "sorryAx");
+    if (bad.length) axiomsBad[d] = bad;
+  }
+  return { ...r, pretty: renderWithoutProbe(r.messages, r.sorries), probe, stmt, axiomsBad };
 }

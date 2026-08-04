@@ -100,6 +100,19 @@ export default function (pi: ExtensionAPI) {
             `Proofs of a modified statement do not count. Restore the original statement — ` +
             `you may only add helper lemmas above it and fill in sorries.\n\nCompiler output:\n${text}`;
         }
+        // Same for disallowed axioms (2026-08-04): the grader's #print axioms verdict
+        // now rides on this very check, so a proof that will grade bad_axioms is a
+        // FAILED check the agent sees immediately, not a surprise after the attempt.
+        const axiomsBad: Record<string, string[]> = r.axiomsBad ?? {};
+        if (Object.keys(axiomsBad).length > 0) {
+          ok = false;
+          const list = Object.entries(axiomsBad).map(([d, a]) => `${d}: [${(a as string[]).join(", ")}]`).join("; ");
+          text =
+            `CHECK FAILED: the proof depends on disallowed axioms (${list}). ` +
+            `Grading accepts only propext, Classical.choice and Quot.sound — a proof that declares or uses ` +
+            `any other axiom can NEVER count, however it is constructed. Remove the axiom declarations and ` +
+            `prove those steps honestly.\n\nCompiler output:\n${text}`;
+        }
         // Identify exactly what was graded, so a path mixup (agent editing a file
         // this tool never sees) can't survive: the header pins the file, and the
         // unchanged note fires when the agent re-checks without touching it.

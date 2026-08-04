@@ -129,7 +129,16 @@ attempt with many queued checks waits behind itself, not in front of everyone el
 (one check-spamming attempt once starved a whole run). ONE definition of "compiles" for
 agent checks, supervisor, and grader alike (2026-07-27: a solve must be observable inside
 the agent's own loop) — honest proof steps check in seconds. The grader's final verdict
-bypasses the memo (`force`) so it always comes from a real compile.
+bypasses the memo (`force`) so it always comes from a real compile. Since 2026-08-04 the
+observability principle covers the axiom gate too: `checkedCompile` builds the same probe
+body as the grader (stmtProbe + `#print axioms` per benchmark decl, line-gated parse, raw
+report lines stripped from display), so a proof that will grade `bad_axioms` is a FAILED
+lean_check/plan_check and blocks the supervisor's "done" — before this, a smuggled
+`axiom` + `exact` passed compile/statement/sorry checks, lean_check said green, and the
+grader failed the finished attempt (spawn-fatex10-0804 fatex_99; three 0802 incidents) —
+the agent-watches-green-gets-graded-red class on the one axis heartbeats didn't cover.
+sorryAx is excluded from the in-loop report (sorries have their own channel, and error
+recovery turns failed proofs into sorryAx — it would be noise on every broken file).
 
 **The verdict is deterministic: `maxHeartbeats`, not a measured budget (2026-08-01).**
 "Compiles" means every declaration elaborates within **400 000 heartbeats**

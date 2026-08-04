@@ -138,8 +138,14 @@ export default function (pi: ExtensionAPI) {
       }
     }
     const stmtBad = check?.stmt?.ok === false;
-    dbg("check:", { ok: check?.ok, sorries: (check?.sorries ?? []).length, stmtBad });
-    if (check?.ok && (check.sorries ?? []).length === 0 && !stmtBad) return; // verified done — let the attempt end
+    // Disallowed axioms block "done" exactly like a tampered statement (2026-08-04):
+    // an axiom-closed file compiles sorry-free with the statement intact, so without
+    // this the supervisor blessed as done a file the grader fails as bad_axioms
+    // (spawn-fatex10-0804 fatex_99; three 0802 incidents before it).
+    const axiomsBad: Record<string, string[]> = check?.axiomsBad ?? {};
+    const axBad = Object.keys(axiomsBad).length > 0;
+    dbg("check:", { ok: check?.ok, sorries: (check?.sorries ?? []).length, stmtBad, axBad });
+    if (check?.ok && (check.sorries ?? []).length === 0 && !stmtBad && !axBad) return; // verified done — let the attempt end
 
     noProgress = actions > actionsAtNudge ? 0 : noProgress + 1;
     actionsAtNudge = actions;
@@ -151,6 +157,9 @@ export default function (pi: ExtensionAPI) {
         : `You are not done. `) +
       (stmtBad
         ? `IMPORTANT: you modified the theorem statement (${check.stmt.detail}). Proofs of a modified statement do not count — restore the original statement exactly; you may only fill sorries and add helper lemmas above it.\n\n`
+        : "") +
+      (axBad
+        ? `IMPORTANT: your proof depends on disallowed axioms (${Object.entries(axiomsBad).map(([d, a]) => `${d}: [${a.join(", ")}]`).join("; ")}). Grading accepts only propext, Classical.choice and Quot.sound, so this can never count. Remove the axiom declarations and prove those steps honestly.\n\n`
         : "") +
       `Checking your current problem.lean reports:\n\n${(check?.pretty ?? "no check result available").slice(0, 3000)}\n\nFix this and run lean_check; do not stop until it passes with no errors and no sorries.`;
     try {
