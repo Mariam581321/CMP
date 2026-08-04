@@ -78,7 +78,12 @@ async function withBankLock(factsFile, fn) {
 
 // Compile-gate one candidate into the bank at factsFile. Returns {ok, pretty, ...};
 // server-level failures come back as {error, kind, ...} for the caller to word.
-export async function addFact(code, { factsFile, client }) {
+// `blockedNames`: benchmark declaration names are reserved — a bank fact declaring
+// one would collide when the bank is baked into the compile env (block D: the 0804
+// smoke librarian pre-proved the benchmark theorems under their exact names, and
+// every statement then failed to elaborate with "already been declared"; caught by
+// drift-check, now rejected at admission where the fix costs one rename).
+export async function addFact(code, { factsFile, client, blockedNames }) {
   code = (code ?? "").trim();
   if (!code) return reject("empty code.");
   if (bannedTactic(code))
@@ -102,6 +107,14 @@ export async function addFact(code, { factsFile, client }) {
     return reject(
       "no named declaration found. The bank admits named lemma/theorem/def/abbrev/instance " +
         "declarations (a name is required so the fact's axioms can be verified and others can use it).",
+    );
+  const reserved = scan.names.filter((n) => blockedNames?.has?.(n) ?? blockedNames?.includes?.(n));
+  if (reserved.length)
+    return reject(
+      `${reserved.map((n) => `\`${n}\``).join(", ")} ${reserved.length > 1 ? "are" : "is a"} reserved ` +
+        "problem-statement name" + (reserved.length > 1 ? "s" : "") + " — the problems must declare " +
+        (reserved.length > 1 ? "these names" : "this name") + " themselves, so the bank may not. " +
+        "State your fact under a different name (the statement can be the same).",
     );
 
   return withBankLock(factsFile, async () => {

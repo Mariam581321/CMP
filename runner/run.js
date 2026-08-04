@@ -22,6 +22,7 @@ import { mkdirSync, readFileSync, readdirSync, writeFileSync, appendFileSync, co
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { grade } from "./grade.js";
+import { benchmarkDecls } from "./stmt.js";
 import { MATHLIB_SRC } from "./grep.js";
 import { tailSessions, newStats, applyEntry } from "./session-tail.js";
 import { costStd, LEAN_PORT, LEAN_URL, MAX_HEARTBEATS, green, red, yellow, dim, bold, cyan, money, secs } from "./common.js";
@@ -512,6 +513,9 @@ async function attempt(name, idx) {
           thinking: THINKING,
           workers_dir: workersRoot,
           facts_file: COMBO.includes("lean-facts") ? join(work, "facts.lean") : null,
+          // The problem's own declaration names are reserved in the bank: a fact named
+          // like the theorem would shadow it in every bank-prefixed snippet.
+          blocked_names: COMBO.includes("lean-facts") ? benchmarkDecls(readFileSync(join(PROBLEMS_DIR, `${name}.lean`), "utf8")) : null,
           library_file: LIBRARY ? join(work, "library.lean") : null,
           mathlib_read: COMBO.includes("lean-grep"),
         }),

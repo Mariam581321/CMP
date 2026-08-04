@@ -142,6 +142,7 @@ export function runWorker({ idx, task, maxCostStd = 0, cfg, onTokens, view, dirN
         max_tokens: cfg.max_tokens ?? null,
         tools,
         facts_file: cfg.facts_file ?? null,
+        blocked_names: cfg.blocked_names ?? null,
       }),
     },
     // NOT detached: staying in the parent pi's process group is what lets the

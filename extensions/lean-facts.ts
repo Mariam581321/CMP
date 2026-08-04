@@ -69,7 +69,7 @@ export default function (pi: ExtensionAPI) {
         let r: any;
         for (;;) {
           try {
-            r = (await addFact(params.code, { factsFile, client })) as any;
+            r = (await addFact(params.code, { factsFile, client, blockedNames: cfg.blocked_names ?? null })) as any;
             break;
           } catch (e: any) {
             const connErr = /ECONNREFUSED|ECONNRESET|EPIPE|socket hang up/i.test(`${e?.code ?? ""} ${e?.message ?? ""}`);

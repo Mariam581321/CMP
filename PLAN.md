@@ -331,17 +331,21 @@ cost, removed since). Details and autopsies: `drafts/DRAFT-experiment-notes-*.md
       + `library_sha`, REPL env baking (`CMP_LIB_FILE`; sha in /health and in every
       memo key; `run.js --library` refuses mismatched envs both ways, `regrade.js`
       likewise), statement-drift recheck (`runner/drift-check.js` — verified 0-drift
-      on a baked test server). Live smoke of the phase loop (mini librarian on FATE-M
-      + a `--library` dry cell) pending — queued behind the in-flight spawnfacts run
-      so its billed_usd stays clean.
+      on a baked test server). Smoked end to end on FATE-M (2026-08-04): phase (librarian +
+      worker, one legitimate compile rejection) → freeze → bake → drift-check clean →
+      dry cell solved via a library lemma by name, `library_sha` in the record. The
+      smoke also caught and fixed the benchmark-name collision (librarian pre-proved
+      the targets under their exact names; drift-check refused the env; now rejected
+      at the add_fact gate — statement names are reserved).
 - [ ] **Block D run**: library phase ($10 cap) → library cell, paired vs the winner's
       cell; tier-concentration readout; report amortized.
 - [x] Triage plumbing (2026-08-04): `submit_verdict` (terminates the session; a
       content-free resubmit reminder, max 3) + `runner/triage.js` (generous
       `--cap-std`, default 0.50 — calibrate after the pilot; no-verdict = excluded,
       engineered to be rare) + `runner/triage-join.js` (confusion matrix + two-stage
-      readout; exclusions printed next to every headline). Live pilot pending, same
-      queue.
+      readout; exclusions printed next to every headline). Piloted on FATE-M: quick
+      verdicts (4–5 turns, ~$0.002), clean terminate, zero reminders, join verified
+      against a real cell.
 - [ ] Triage runs: judge twice on pilot10 (verdict flips = noise floor, cap
       calibration), then the 95 (~$10–15) against the winner's cell and the audit
       tiers.

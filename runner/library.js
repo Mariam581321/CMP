@@ -25,6 +25,7 @@ import { createHash } from "node:crypto";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tailSessions, newStats, applyEntry } from "./session-tail.js";
+import { benchmarkDecls } from "./stmt.js";
 import { LEAN_URL, costStd, classifyLines, green, yellow, dim, bold, money, secs } from "./common.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -88,6 +89,12 @@ if (!health?.ready) { console.error("lean server not ready"); process.exit(1); }
 const digest = problems
   .map((p) => `### ${p}\n\n\`\`\`lean\n${readFileSync(join(PROBLEMS_DIR, `${p}.lean`), "utf8").trim()}\n\`\`\``)
   .join("\n\n");
+// Benchmark declaration names are reserved: a bank fact under one of them would
+// collide with the statement itself once the library is baked (add_fact rejects
+// with a rename instruction — the 0804 smoke found the librarian doing exactly this).
+const blockedNames = [
+  ...new Set(problems.flatMap((p) => benchmarkDecls(readFileSync(join(PROBLEMS_DIR, `${p}.lean`), "utf8")))),
+];
 const preambleFile = join(runDir, "worker-preamble.md");
 writeFileSync(
   preambleFile,
@@ -164,6 +171,7 @@ const exit = await new Promise((resolveExit) => {
         facts_file: join(work, "library.lean"),
         worker_cap_std: WORKER_CAP,
         worker_preamble_file: preambleFile,
+        blocked_names: blockedNames,
       }),
     },
     detached: true, // own process group: the cap SIGKILL takes librarian + workers together
@@ -191,21 +199,36 @@ const bank = existsSync(bankPath) ? readFileSync(bankPath, "utf8") : "";
 writeFileSync(join(runDir, "library.lean"), bank);
 const sha = createHash("sha256").update(bank).digest("hex");
 
-// Index: one entry per declaration — preceding docstring + the head lines up to `:=`
-// (or the whole block if it never assigns). This is the graded run's prompt addendum.
+// Index: one entry per declaration — preceding docstring + the head lines up to the
+// signature-ending `:=`. A human-facing artifact (the graded run points agents at the
+// readable source instead). The cut looks for `:=` at bracket depth 0 only: named
+// arguments (`QuotientGroup.mk (s := H) a`) and structure-instance fields put `:=`
+// INSIDE brackets, and cutting at the first occurrence truncated a signature mid-term
+// (found in the 0804 smoke).
 function buildIndex(source) {
   const entries = [];
   const lines = source.split("\n");
   const kinds = classifyLines(source);
+  const cutAtTopLevelAssign = (line, depth) => {
+    for (let i = 0; i < line.length - 1; i++) {
+      const c = line[i];
+      if ("([{⟨".includes(c)) depth++;
+      else if (")]}⟩".includes(c)) depth--;
+      else if (depth === 0 && c === ":" && line[i + 1] === "=") return { cut: i, depth };
+    }
+    return { cut: -1, depth };
+  };
   for (let i = 0; i < lines.length; i++) {
     if (kinds[i].kind !== "code") continue;
     if (!/^\s*(?:@\[[^\]]*\]\s*)?(?:noncomputable\s+)?(?:abbrev|def|theorem|lemma|instance)\s/.test(lines[i])) continue;
     let doc = "";
     for (let j = i - 1; j >= 0 && kinds[j].kind === "docstring"; j--) doc = lines[j] + "\n" + doc;
     let sig = [];
+    let depth = 0;
     for (let j = i; j < Math.min(i + 12, lines.length); j++) {
-      const cut = lines[j].indexOf(":=");
-      if (cut >= 0) { sig.push(lines[j].slice(0, cut).trimEnd()); break; }
+      const r = cutAtTopLevelAssign(lines[j], depth);
+      if (r.cut >= 0) { sig.push(lines[j].slice(0, r.cut).trimEnd()); break; }
+      depth = r.depth;
       sig.push(lines[j]);
     }
     entries.push((doc ? doc : "") + sig.join("\n"));
