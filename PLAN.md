@@ -151,6 +151,67 @@ soft protocols get abandoned exactly on hard problems)? If it won't, fall back t
 spawns a worker per subgoal, workers report back, and the main agent stitches the
 proof together or replans — the scaffold end of the ownership axis.
 
+**Block D — library: cross-problem amortization.** On the overall winner, against the
+winner's own grid cell as the paired baseline. Motivated by the 0803 audit's §8: the
+genuinely-unsolved FATE-X problems cluster on ~6 shared missing theories
+(depth/CM/Gorenstein ×8, Nagata's UFD criterion, Pic/class groups,
+descent/completion, dimension theory); per-problem agents rebuilt them in-run and died
+at the cap, several thousand lines each, and seven problems share *verbatim* bespoke
+depth/CM definitions, so one canonical copy transfers by `rfl`.
+
+- **library** — a shared formalization phase before the graded run: the spawn+facts
+  machinery pointed at the whole problem set instead of one problem. A librarian agent
+  sees all 95 statements (digest in prompt + a `get_problem` tool), identifies the
+  shared missing theory, and spawns workers per cluster; everything enters through the
+  existing `add_fact` gate (compiles against the bank, sorry-free, whitelist axioms,
+  no metaprogramming), under one harness-enforced **$5 @std** phase cap — the
+  builder, like every agent, is budget-blind. The frozen library (content-hashed;
+  `library_sha` in every record) is baked into the REPL resident env for the graded
+  run, so library names are ambient exactly like Mathlib names and the grader shares
+  the env — one definition of compiles, preserved. Attempts are the winner config + an
+  auto-generated index (name, signature, docstring) in the prompt — the only prompt
+  delta. Guards: memo keys include the env identity; after freeze, every statement
+  recompiles against the library env and its `benchmarkDecls` term must match the
+  no-library env (instance leakage prunes); the library never grows during the graded
+  run (solve-order independence, or the pairing dies). Fallback shipping if env-baking
+  fights the REPL: pre-seed the attempts' facts bank with the library (prefix
+  compilation exists today) and accept the self-containment copying cost. First arm
+  whose outside information includes artifacts built from *other problems in the
+  benchmark* — cross-problem persistent state, the axis under Danus's fact graph, and
+  how real formalization campaigns behave; the unit of evaluation becomes the
+  campaign, reported as such with the phase cost amortized (~5¢/problem).
+
+⇒ Analysis: paired exact McNemar, library vs the winner's cell, on the 95.
+Pre-registered: the effect concentrates in the audit's tier-B clusters (tier A moves
+are budget luck, tier C shouldn't move — the tier table is the prediction). Library
+usage is measured mechanically (library names quoted in accepted proofs); "the
+library proved a statement outright" is reported, not banned — the librarian prompt
+steers toward shared theory, the gate is the only hard rule.
+
+**Off the hill-climb — triage: a feasibility judge, evaluated counterfactually.**
+Does not touch the attempt harness, so it burns no block and can run against any
+completed cell.
+
+- **triage** — a per-problem judge: an agentic loop with the attempt arm's information
+  tools (same search + `check_snippet`, no `lean_check`, no files) that ends by
+  calling `submit_verdict(yes|no, reason)` — can this system prove this statement?
+  Hardcap $0.15/problem, budget-blind like everything else, prompt deliberately
+  minimal (no "scrutinize your no" instruction — whether quick verdicts are calibrated
+  IS the measurement; the scrutiny-prompted variant is the follow-up cell if the "no"s
+  are trigger-happy). The arm is never "run": its verdicts reweight an existing cell —
+  two-stage solve rate = solves among yes over ALL 95, two-stage cost = judge on all +
+  attempts on yes — so the cell costs only the judge phase. Economic case from the
+  0804 pilots: solves cost $0.34 total while fails cost $3.57. Readout: the
+  verdict × outcome confusion matrix against the reference cell (FN = solves the gate
+  deleted, TN = the savings), the same matrix against the 0803 audit tiers (an
+  existing human-verified ground truth), and the "no" reasons as an automated
+  missing-theory map — which is exactly the cluster input the library phase wants; the
+  arms compose. Motivated by both calibration failure modes on record: false-"false"
+  early retirements (fatex_17, 85) and the correct $0.09 unprovability settlement
+  (fatex_99). Judge runs twice on the pilot list; the verdict flip count is this arm's
+  noise floor. Known degenerate mode: all-yes — the arm only earns its cell on a tier
+  where spontaneous "no" verdicts actually occur, which FATE-X demonstrably is.
+
 There is no separate "final FATE-X run" any more: FATE-X *is* the grid, so the
 headroom number nobody publishes falls out of the grid itself. Signal exists — the
 2026-08-04 machinery pilots solved 6/10 on the pilot list.
@@ -259,6 +320,18 @@ cost, removed since). Details and autopsies: `drafts/DRAFT-experiment-notes-*.md
 - [ ] **Block C runs**: spawn, spawn+facts, spawn+plan; contingent spawn+plan+facts;
       delegation analysis → harness-owned pipeline fallback if the model won't
       delegate.
+- [ ] Library-phase plumbing on top of the block-C machinery (block D): librarian
+      launcher (statement digest + `get_problem`; workers via `runner/spawn.js` with
+      the harness-side per-worker caps), library freeze + `library_sha`, REPL env
+      baking with env identity in memo keys, post-freeze statement-drift recheck over
+      the 95, index generation, grep root extended to the library file; smoke the loop
+      on Putnam mid problems (eval-only discipline).
+- [ ] **Block D run**: library phase ($5 cap) → library cell, paired vs the winner's
+      cell; tier-concentration readout; report amortized.
+- [ ] Triage plumbing: `submit_verdict` extension (terminates the session) +
+      `runner/triage.js` + the counterfactual join against a cell's results.jsonl;
+      pilot the judge twice on pilot10 (verdict flips = noise floor), then the 95
+      (~$10–15) against the winner's cell and the audit tiers.
 - [ ] Post-hoc sweep of event logs for emergent behaviours (scratch strategies,
       degenerate loops, give-up patterns, best-state destruction) — feeds the writeup,
       no re-running.
