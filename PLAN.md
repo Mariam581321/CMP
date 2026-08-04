@@ -104,7 +104,10 @@ Loogle but environment-filtered, which needs stating too.
   signatures: retrieval by *spelling*. The autopsies say agents often need
   *confirmation of a name they can nearly guess*, not discovery: one attempt produced
   398 unknown-identifier errors across 193 hallucinated lemma names; another made 127
-  semantic searches and wrongly concluded an API was absent.
+  semantic searches and wrongly concluded an API was absent. Since 2026-08-04 the arm
+  also ships read access to the Mathlib source (work-dir symlink, results carry
+  locations again — `SEARCH.md`): grep + read are one repo-access modality, and the
+  546:8 tool-printed-vs-guessed blocked-read count showed the demand.
 - **loogle** (`lean-loogle`, added 2026-07-31) — Loogle over the compiled environment:
   retrieval by *structure* (type-shape patterns, constants, name fragments), the mode
   for when the agent knows neither the name nor the phrasing, only the goal shape. Sees

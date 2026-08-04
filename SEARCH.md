@@ -99,13 +99,25 @@ A `private` declaration is named and flagged as unusable outside its own file. A
 no nameable declaration — import lines, docstring prose, wrapped binders, proof-body lines,
 anonymous `instance`s, and the 1,253 `alias ⟨fwd, rev⟩` forms; 15% of hits over a 120-query
 replay of the 0730b logs — is headed `(no enclosing declaration …)` above the matched line.
-**File locations are not returned to the agent**; they are kept in the tool's log details.
-That is a deliberate reversal of the earlier shape, decided from the logs: the source text
-under a hit carries the name as *written*, so a path was the only namespace signal and had
-to be decoded, and returning it induced reads that this environment can never serve — of
-grep-arm reads with an identifiable Mathlib path, 546 used a path the tool had just printed
-against 8 guessed, and none in the project's history has ever returned content. It also
-makes the two arms' output shapes match: both now return names and signatures.
+**File locations follow read access** (2026-08-04). The original removal of paths was
+decided from the logs: the source text under a hit carries the name as *written*, so a
+path was the only namespace signal and had to be decoded, and returning it induced reads
+that the environment could never serve — of grep-arm reads with an identifiable Mathlib
+path, 546 used a path the tool had just printed against 8 guessed, and none had ever
+returned content. Both legs are honored separately now. The name-first heading is
+permanent. The path's fate depends on whether it is actionable: **the grep arm ships
+with the Mathlib source readable** — a work-dir symlink `Mathlib/` onto the pinned
+checkout (one canonical tree, not a copy; write/edit through it blocked by the sandbox;
+the same shape exposes `library.lean` in block-D cells) — and with read active, each
+result appends its location as a secondary `— Mathlib/...lean:N` line the ordinary read
+tool opens directly, converting the measured 546-read demand into a capability. Read
+access rides WITH grep — one symbolic-retrieval modality, grep to locate, read to
+browse — and never with base, which stays the no-retrieval floor; in configs without
+read, rendering is path-free exactly as before and locations live only in the tool's
+log details. Consequence stated rather than discovered later: block A's grep arm is
+thereby a "repo access" arm — symbolic search plus source browsing — versus the
+semantic API; the comparison is retrieval *modality*, no longer retrieval mechanism
+alone.
 Declarations whose own text
 matches rank above *usage sites* — matches inside a proof body — which are annotated
 `↳ matches inside its proof, line N`. Zero hits → a "no matches" message (a result, not an

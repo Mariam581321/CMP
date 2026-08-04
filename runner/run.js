@@ -18,10 +18,11 @@
 
 import { spawn, execSync } from "node:child_process";
 import { parseArgs } from "node:util";
-import { mkdirSync, readFileSync, readdirSync, writeFileSync, appendFileSync, copyFileSync, createWriteStream, existsSync, openSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync, appendFileSync, copyFileSync, createWriteStream, existsSync, openSync, symlinkSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { grade } from "./grade.js";
+import { MATHLIB_SRC } from "./grep.js";
 import { tailSessions, newStats, applyEntry } from "./session-tail.js";
 import { costStd, LEAN_PORT, LEAN_URL, MAX_HEARTBEATS, green, red, yellow, dim, bold, cyan, money, secs } from "./common.js";
 
@@ -424,10 +425,17 @@ async function attempt(name, idx) {
   mkdirSync(work, { recursive: true });
   mkdirSync(sessionDir, { recursive: true });
   copyFileSync(join(PROBLEMS_DIR, `${name}.lean`), join(work, "problem.lean"));
-  // Library cell: the full library source is readable in the work dir (its
-  // declarations are baked into the env; this copy is the documentation of them).
-  // The sandbox blocks write/edit to it via CMP_CONFIG.library_file.
-  if (LIBRARY) copyFileSync(join(LIBRARY.dir, "library.lean"), join(work, "library.lean"));
+  // Read access to the sources of the compiled environment, as SYMLINKS — one
+  // canonical file/tree, not a copy per attempt; the sandbox blocks write/edit
+  // through them (a write would corrupt the shared original for every attempt).
+  // Library cell: library.lean documents the baked declarations.
+  if (LIBRARY) try { symlinkSync(join(LIBRARY.dir, "library.lean"), join(work, "library.lean")); } catch {}
+  // Grep arm: the Mathlib checkout itself — the paths grep_mathlib prints
+  // (`Mathlib/...lean`) resolve through this link with the ordinary read tool.
+  // Measured demand: 546 reads of tool-printed Mathlib paths in the 0730b/0731 grep
+  // logs, every one blocked; read access rides WITH grep (one symbolic-retrieval
+  // modality), never with base, which must stay the no-retrieval floor.
+  if (COMBO.includes("lean-grep")) try { symlinkSync(MATHLIB_SRC, join(work, "Mathlib")); } catch {}
   // Worker session dirs appear mid-attempt (first spawn call creates them); re-listed
   // every tail tick.
   const workerSessionDirs = () => {
@@ -505,6 +513,7 @@ async function attempt(name, idx) {
           workers_dir: workersRoot,
           facts_file: COMBO.includes("lean-facts") ? join(work, "facts.lean") : null,
           library_file: LIBRARY ? join(work, "library.lean") : null,
+          mathlib_read: COMBO.includes("lean-grep"),
         }),
       },
       detached: true,

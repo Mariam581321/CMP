@@ -8,7 +8,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { grepMathlib } from "../runner/grep.js";
-import { ToolFailure } from "../runner/common.js";
+import { ToolFailure, cmpConfig } from "../runner/common.js";
 
 // Fixed result count, deliberately not a tool parameter — same reasoning as
 // lean-search's NUM_RESULTS: retrieval depth is a property of the arm, not a
@@ -40,7 +40,11 @@ export default function (pi: ExtensionAPI) {
       "signatures, and case-insensitive matching is tried when exact case finds nothing. " +
       "Returns matching declarations with their fully-qualified names — the name as you would " +
       "write it in a proof, which is often not the name written in the source — and their type " +
-      "signatures; each result states which of these readings produced it.",
+      "signatures; each result states which of these readings produced it." +
+      (cmpConfig().mathlib_read
+        ? " Each result also names its source file, which you can open with the read tool " +
+          "(the Mathlib source tree is readable at Mathlib/ in your working directory)."
+        : ""),
     promptSnippet: "grep_mathlib - text or regex search over Mathlib source",
     parameters: Type.Object({
       pattern: Type.String({ description: "Text or extended-regex pattern to search for" }),
@@ -58,19 +62,23 @@ export default function (pi: ExtensionAPI) {
             details: { count: 0 },
           };
         }
-        // The heading is the assembled name, not the file location. Two reasons, both from
-        // the 0730b/0731 logs: the source text under it carries the name as *written*
-        // (`r_zero`), which is not what a proof can call (`DihedralGroup.r_zero`), so the
-        // namespace had to be decoded from the path — and returning a path made agents try
-        // to read it. Of the grep-arm reads with an identifiable Mathlib path, 546 used a
-        // path this tool had just printed against 8 guessed, in an environment where no
-        // such read has ever succeeded. Locations stay in `details` for the run logs, which
-        // the model never sees.
+        // The heading is the assembled name, not the file location — the source text
+        // under it carries the name as *written* (`r_zero`), which is not what a proof
+        // can call (`DihedralGroup.r_zero`), so the name must lead (0730b/0731 logs).
+        // The location's fate depends on whether it is actionable. Originally paths
+        // were dropped entirely BECAUSE they were a trap: agents tried to read them —
+        // 546 reads of tool-printed Mathlib paths against 8 guessed, in an environment
+        // where no such read had ever succeeded. With read access active
+        // (cfg.mathlib_read: the grep arm ships a work-dir Mathlib/ symlink), the
+        // incentive inverts and the location returns as a secondary line the read tool
+        // can open directly. Without read access, rendering stays path-free exactly as
+        // before; locations then live only in `details` for the run logs.
+        const readable = cmpConfig().mathlib_read === true;
         const blocks = r.hits.map((h) => {
           const head = h.name
             ? `${h.name}${h.isPrivate ? "  [private — declared private, so it cannot be used outside its own file]" : ""}`
             : "(no enclosing declaration — the matching source line is shown as-is)";
-          return `• ${head}\n${h.text}`;
+          return `• ${head}\n${h.text}${readable ? `\n  — ${h.path}:${h.line}` : ""}`;
         });
         // Say which reading of the pattern produced these, so a hit that came from a
         // looser rung is not mistaken for an exact-text match.
