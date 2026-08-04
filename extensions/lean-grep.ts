@@ -23,8 +23,17 @@ export default function (pi: ExtensionAPI) {
     label: "Grep Mathlib",
     // What the tool is and what comes back — no when/why steering, mirroring
     // search_mathlib so the semantic-vs-grep arms differ only in retrieval mode.
+    // In a library cell (CMP_LIB_FILE set) the search surface genuinely includes the
+    // baked library, and the description must say so — from the NAME alone an agent
+    // would never guess grep_mathlib covers it. The name itself stays: renaming per
+    // cell would break tool identity across arms, a bigger uncontrolled delta than
+    // the sentence.
     description:
-      "Text search over the Mathlib source code, at the exact version being compiled against. " +
+      "Text search over the Mathlib source code, at the exact version being compiled against" +
+      (process.env.CMP_LIB_FILE
+        ? ", and over the additional verified library (library.lean) — one search covers both"
+        : "") +
+      ". " +
       "A pattern is matched as literal text (e.g. 'mul_pow' or '(a * b) ^ n'), as an extended " +
       "regex (e.g. 'GL.*Sylow'), or as a fully-qualified declaration name (e.g. " +
       "'IntermediateField.inv_mem'); regex patterns match across the line breaks that wrap long " +
