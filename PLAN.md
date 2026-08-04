@@ -40,15 +40,29 @@ at a time and isolate what moved the needle.
 
 ## Setup
 
-- **Benchmark: FATE-H** — 100 graduate-level algebra problems, eval-only (dev iteration
-  happens on FATE-M + Putnam mid-problems, never on FATE-H). fateh_78 is annotated out
-  of scoring: the formalization is false as stated (machine-checked refutation —
-  `drafts/DRAFT-fateh78-broken-statement-0727.md`).
+- **Benchmark: FATE-X** — 100 PhD-level algebra problems, 95 scoreable: fatex_13, 23,
+  60, 75, 81 are annotated out as broken statements (machine-checked or hand-verified —
+  `drafts/DRAFT-fatex-unsolved-audit-0803.md`, which sets the scoring rules and regrades
+  fatex_19 solved). Eval-only; dev iteration happens on FATE-M + Putnam mid-problems.
+  FATE-X replaced FATE-H as the grid benchmark on 2026-08-04: the ~08-02 silent model
+  upgrade saturates FATE-H — an informal post-upgrade check solved everything it could
+  actually attempt (the remainder died to infra, not difficulty) — so arm effects have
+  nowhere to live there, the same fate as FATE-M before it. (fateh_78 stays annotated
+  out of any FATE-H numbers: broken statement,
+  `drafts/DRAFT-fateh78-broken-statement-0727.md`.) **Open decision:** if FATE-X pins
+  the arms to the floor — too few discordant pairs for McNemar to resolve anything —
+  the grid moves to a Putnam mid-difficulty subset, where differences between arms are
+  plausibly more visible. Decide on the block A cells, not before.
 - **Model: DeepSeek V4 Flash, thinking on, always.** Thinking is a model knob, not a
   harness answer, so it is fixed config rather than an arm; the on/off pilot on a shared
   20-problem set showed thinking-on solves the same or slightly more while being cheaper
   and faster. All results are conditional on a reasoning model — the deployment norm —
   and explicit scaffolding competing with internal reasoning is part of what's measured.
+  Model boundaries (same API id, silently different model) cut run comparability without
+  moving any freeze: 2026-07-31, and **~2026-08-02 — the upgrade that saturated FATE-H
+  and forced this benchmark move**. Every pre-upgrade number, the FATE-H cost
+  calibration included, describes the old model; grid cells start from scratch on the
+  new one.
 - **Progressive baseline (hill-climb).** The experiments run in sequential blocks;
   each block's winner becomes the base configuration for the next. Search is decided
   first — every realistic system ships retrieval, and later arms should stack on the
@@ -137,9 +151,9 @@ soft protocols get abandoned exactly on hard problems)? If it won't, fall back t
 spawns a worker per subgoal, workers report back, and the main agent stitches the
 proof together or replans — the scaffold end of the ownership axis.
 
-**Final (if time allows) — FATE-X with the best-performing combination.** The hardest
-tier (PhD-level). Pilot on 10 problems first and drop the idea near 0 solves; a full
-run only if there's signal. The headroom number nobody publishes.
+There is no separate "final FATE-X run" any more: FATE-X *is* the grid, so the
+headroom number nobody publishes falls out of the grid itself. Signal exists — the
+2026-08-04 machinery pilots solved 6/10 on the pilot list.
 
 ## Archive — not testing, and why
 
@@ -172,20 +186,27 @@ run only if there's signal. The headroom number nobody publishes.
   block C as spawn+facts.
 - **Thinking off as an arm** — model knob, not a harness answer; the pilot showed
   thinking-on is same-or-better and cheaper, so the off cells buy nothing.
-- **FATE-M as grid tier** — saturated by the baseline (10/10); smoke-test tier only.
-  **Putnam** stays a secondary anchor; **Formal Conjectures** is the reserve scale-up
-  if effects land too small for n≈100 to resolve.
+- **FATE-M and FATE-H as grid tiers** — both saturated (FATE-M by the baseline, 10/10;
+  FATE-H by the ~08-02 model upgrade); smoke-test tiers only. **Putnam** stays the
+  secondary anchor and the contingent grid benchmark if FATE-X floors (see Setup);
+  **Formal Conjectures** is the reserve scale-up if effects land too small for n≈95
+  to resolve.
 
 ## Runs so far
 
 Dev phase (Putnam subsets: dev10/mid10/mini3/p100) established the harness, the
 budget-cap regime, and that arm comparisons need mid-difficulty problems. FATE pilots
-placed the tiers (FATE-M saturated, FATE-H mid-range). The first full FATE-H pass with
-thinking on scored **66/100** (66/99 scored) — a **cost-calibration run**, not a grid
-cell: the harness still changes before the freeze (lean_check prompt clarification,
-possible grader fixes), so all block-A runs start fresh after it. Details and autopsies:
-`drafts/DRAFT-experiment-notes-*.md`, `drafts/DRAFT-100fates-collected-0728.md`;
-per-run artifacts under `results/`.
+placed the tiers (FATE-M saturated, FATE-H then mid-range). The first full FATE-H pass
+with thinking on scored **66/100** (66/99 scored) — a **cost-calibration run** on the
+pre-upgrade model, not a grid cell. The 0802 FATE-X runs (semantic search; 51/95 with
+the audit's scoring) produced the unsolved-problem audit that now sets FATE-X scoring
+and the tier map (`drafts/DRAFT-fatex-unsolved-audit-0803.md`). The 2026-08-04 block-C
+machinery pilots ran the FATE-X pilot10 list end to end on the post-upgrade model —
+snippet 6/10, spawn 6/10 (delegation appeared exactly on the hard problems; all 17
+workers completed and reported), spawn+facts in flight as of this edit — machinery
+validation, not grid cells (pre-freeze; the spawn reports still leaked per-worker
+cost, removed since). Details and autopsies: `drafts/DRAFT-experiment-notes-*.md`,
+`drafts/DRAFT-100fates-collected-0728.md`; per-run artifacts under `results/`.
 
 ## Next steps
 
@@ -210,7 +231,13 @@ per-run artifacts under `results/`.
 - [x] Implement `grep_mathlib` + FATE-M smoke (2/2, tool-path probes green).
 - [x] Implement `loogle_mathlib` (public API + environment filter; skew measured, probe
       suite green) + FATE-M smoke.
-- [ ] **Block A runs**: base, semantic, grep, loogle → repeat the winner (noise floor).
+- [ ] Re-cut the grid freeze before block A: the block-C machinery, the in-loop axiom
+      gate and the budget-blind spawn reports all land after `3084411` — pin the new
+      SHA here at block-A launch. (The ~08-02 model upgrade cuts comparability of every
+      earlier run on top, without moving any freeze.) Re-cost `COSTS.md` for the
+      FATE-X grid while at it — post-upgrade pilot rates: ~$0.21–0.39/problem/run.
+- [ ] **Block A runs** (FATE-X, 95 scoreable): base, semantic, grep, loogle → repeat
+      the winner (noise floor).
 - [x] Implement `check_snippet` (smoked via scripted probes incl. timeout/memo paths;
       FATE-M arm smoke still cheap to add before the Block B run).
 - [ ] **Block B run**: snippet on the winning search → substitution analysis
@@ -232,8 +259,6 @@ per-run artifacts under `results/`.
 - [ ] **Block C runs**: spawn, spawn+facts, spawn+plan; contingent spawn+plan+facts;
       delegation analysis → harness-owned pipeline fallback if the model won't
       delegate.
-- [ ] FATE-X: compile check under our toolchain pin → 10-problem pilot → full run with
-      the overall winner.
 - [ ] Post-hoc sweep of event logs for emergent behaviours (scratch strategies,
       degenerate loops, give-up patterns, best-state destruction) — feeds the writeup,
       no re-running.
