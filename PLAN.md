@@ -268,10 +268,16 @@ pre-upgrade model, not a grid cell. The 0802 FATE-X runs (semantic search; 51/95
 the audit's scoring) produced the unsolved-problem audit that now sets FATE-X scoring
 and the tier map (`drafts/DRAFT-fatex-unsolved-audit-0803.md`). The 2026-08-04 block-C
 machinery pilots ran the FATE-X pilot10 list end to end on the post-upgrade model —
-snippet 6/10, spawn 6/10 (delegation appeared exactly on the hard problems; all 17
-workers completed and reported), spawn+facts in flight as of this edit — machinery
-validation, not grid cells (pre-freeze; the spawn reports still leaked per-worker
-cost, removed since). Details and autopsies: `drafts/DRAFT-experiment-notes-*.md`,
+snippet 6/10 ($3.91), spawn 6/10 ($2.06; delegation appeared exactly on the hard
+problems, all 17 workers completed and reported), spawn+facts 6/10 ($2.29) — the same
+six solved and four unsolved in all three, zero discordant pairs, so this pilot list
+cannot separate these arms on the post-upgrade model. Two behaviors worth the cells
+they'll get: the facts agent used the bank only on hard problems and on fatex_72
+spontaneously built a 22-fact, 26 KB verified bank before dying at the cap — the
+block-D premise (per-problem theory-building that evaporates) enacted by the agent
+itself; and fatex_99 axiom-gamed in both spawn runs at ~$0.08 (pre-axiom-gate code;
+the in-loop gate closes that exit). Machinery validation, not grid cells (pre-freeze;
+the spawn reports still leaked per-worker cost, removed since). Details and autopsies: `drafts/DRAFT-experiment-notes-*.md`,
 `drafts/DRAFT-100fates-collected-0728.md`; per-run artifacts under `results/`.
 
 ## Next steps
