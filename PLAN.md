@@ -168,9 +168,11 @@ depth/CM definitions, so one canonical copy transfers by `rfl`.
   builder, like every agent, is budget-blind. The frozen library (content-hashed;
   `library_sha` in every record) is baked into the REPL resident env for the graded
   run, so library names are ambient exactly like Mathlib names and the grader shares
-  the env — one definition of compiles, preserved. Attempts are the winner config + an
-  auto-generated index (name, signature, docstring) in the prompt — the only prompt
-  delta. Guards: memo keys include the env identity; after freeze, every statement
+  the env — one definition of compiles, preserved. Attempts are the winner config plus
+  one prompt paragraph (the library exists, is verified, grades like Mathlib, source in
+  library.lean); discovery rides the existing channels — the full source read-only in
+  the work dir, `grep_mathlib` covering it alongside Mathlib — never a prompt dump.
+  Guards: memo keys include the env identity; after freeze, every statement
   recompiles against the library env and its `benchmarkDecls` term must match the
   no-library env (instance leakage prunes); the library never grows during the graded
   run (solve-order independence, or the pairing dies). Fallback shipping if env-baking

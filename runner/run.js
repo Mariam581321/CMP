@@ -120,7 +120,7 @@ if (A.library) {
   const dir = resolve(A.library);
   try {
     const meta = JSON.parse(readFileSync(join(dir, "library.json"), "utf8"));
-    LIBRARY = { dir, sha: meta.library_sha256, run_id: meta.run_id, index: readFileSync(join(dir, "index.md"), "utf8") };
+    LIBRARY = { dir, sha: meta.library_sha256, run_id: meta.run_id };
   } catch (e) {
     console.error(`--library ${A.library}: not a finished library phase (${e.message})`);
     process.exit(1);
@@ -366,12 +366,15 @@ Rules:
 // Per-arm prompt addenda: extensions/<name>.prompt.md is appended to the system prompt
 // when <name> is in the combo, so prompt deltas are versioned alongside the arm's code.
 const addenda = COMBO.map((x) => join(ROOT, "extensions", `${x}.prompt.md`)).filter(existsSync).map((p) => readFileSync(p, "utf8").trim());
-// The library cell's whole prompt delta: the index of what exists beyond Mathlib.
-// Everything else about the library is ambient (baked into the compile env), so the
-// agent's rules do not change — the declarations are simply there, like Mathlib's.
+// The library cell's whole prompt delta: a pointer, not an index dump. Discovery goes
+// through the same channels as Mathlib discovery — the full source sits in the work
+// dir as library.lean (proofs included, richer than any index; read-only via the
+// sandbox) and grep_mathlib searches it alongside Mathlib (runner/grep.js reads
+// CMP_LIB_FILE). Everything else is ambient: the declarations are baked into the
+// compile env, so they resolve like Mathlib names with nothing to import or copy.
 if (LIBRARY)
   addenda.push(
-    `## Additional verified library\n\nBeyond Mathlib, this environment also contains the declarations listed below — usable by name in problem.lean and in snippets, exactly like Mathlib lemmas. Every one of them is fully proved and kernel-checked (no sorry, no axioms beyond Mathlib's standard three), so you may build on them without re-proving or re-checking anything, and proofs that use them grade exactly like proofs that use Mathlib:\n\n${LIBRARY.index.trim()}`,
+    `## Additional verified library\n\nBeyond Mathlib, this environment also contains an additional library of verified declarations — every one fully proved and kernel-checked (no sorry, no axioms beyond Mathlib's standard three). They are available by name in problem.lean and in snippets, exactly like Mathlib lemmas, and proofs that use them grade exactly like proofs that use Mathlib. The full source is in library.lean in your working directory — read it to see what exists${COMBO.includes("lean-grep") ? "; grep_mathlib searches it alongside Mathlib" : ""}.`,
   );
 const FULL_SYSTEM_PROMPT = [SYSTEM_PROMPT, ...addenda].join("\n\n");
 
@@ -421,6 +424,10 @@ async function attempt(name, idx) {
   mkdirSync(work, { recursive: true });
   mkdirSync(sessionDir, { recursive: true });
   copyFileSync(join(PROBLEMS_DIR, `${name}.lean`), join(work, "problem.lean"));
+  // Library cell: the full library source is readable in the work dir (its
+  // declarations are baked into the env; this copy is the documentation of them).
+  // The sandbox blocks write/edit to it via CMP_CONFIG.library_file.
+  if (LIBRARY) copyFileSync(join(LIBRARY.dir, "library.lean"), join(work, "library.lean"));
   // Worker session dirs appear mid-attempt (first spawn call creates them); re-listed
   // every tail tick.
   const workerSessionDirs = () => {
@@ -497,6 +504,7 @@ async function attempt(name, idx) {
           thinking: THINKING,
           workers_dir: workersRoot,
           facts_file: COMBO.includes("lean-facts") ? join(work, "facts.lean") : null,
+          library_file: LIBRARY ? join(work, "library.lean") : null,
         }),
       },
       detached: true,

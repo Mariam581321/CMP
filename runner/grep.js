@@ -13,6 +13,16 @@ import { fileURLToPath } from "node:url";
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "lean-env", ".lake", "packages", "mathlib");
 export const MATHLIB_SRC = join(PKG_ROOT, "Mathlib");
 
+// Block D: when a library is baked into the compile env (CMP_LIB_FILE — run.js sets
+// it for library cells and pi children inherit it), its source is part of what
+// "exists in the agent's environment", so every rung searches it alongside Mathlib —
+// one search surface for everything ambient. Hits render as `library.lean:<line>`.
+const libFile = () => {
+  const f = process.env.CMP_LIB_FILE;
+  return f && existsSync(f) ? f : null;
+};
+const displayPath = (file) => (file === process.env.CMP_LIB_FILE ? "library.lean" : relative(PKG_ROOT, file));
+
 // Declaration heads sit at column 0 in Mathlib (attributes included); requiring that
 // keeps the upward scan from latching onto `have`/`let` lines inside proof bodies.
 const HEAD_RE =
@@ -28,7 +38,7 @@ function runGrep(pattern, { regex, ci, cap = RAW_LINE_CAP }, signal) {
   return new Promise((resolve, reject) => {
     const args = ["-rnI", "--include=*.lean", regex ? "-E" : "-F"];
     if (ci) args.push("-i");
-    args.push("--", pattern, MATHLIB_SRC);
+    args.push("--", pattern, MATHLIB_SRC, ...(libFile() ? [libFile()] : []));
     const child = spawn("grep", args, { stdio: ["ignore", "pipe", "pipe"] });
     let out = "", err = "", done = false;
     // UTF-8 across chunk boundaries: Mathlib source is unicode-dense, and coercing each
@@ -116,7 +126,7 @@ function collectHits(rawLines, { inText, maxResults, truncatedRaw, declOnly = fa
     if (seen.has(key)) continue;
     seen.add(key);
     if (declHits.length + usageHits.length >= maxResults * 3) { truncated = true; break; }
-    const path = relative(PKG_ROOT, file);
+    const path = displayPath(file);
     // Resolved from the ORIGINAL block, before the usage branch below appends its `↳`
     // note — the note is commentary, not part of the declaration the name belongs to.
     const named = nameOfHit(fileLines, headLine, text);
@@ -355,7 +365,7 @@ async function qualifiedLookup(pattern, maxResults, signal) {
     // Resolved the same way as every other hit rather than reusing `pattern`: the query
     // arrives unquoted, and what goes back has to be the form that parses.
     const named = nameOfHit(fileLines, headLine, text);
-    hits.push({ path: relative(PKG_ROOT, file), line: headLine, text, name: named?.name ?? null, isPrivate: named?.isPrivate ?? false });
+    hits.push({ path: displayPath(file), line: headLine, text, name: named?.name ?? null, isPrivate: named?.isPrivate ?? false });
     if (hits.length >= maxResults) break;
   }
   return hits;

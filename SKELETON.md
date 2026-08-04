@@ -463,7 +463,7 @@ the librarian's call, and the phase cap ($10 default) plus per-worker caps
 (`--worker-cap-std`, via the harness-side `maxCostStd` knob) are enforced by
 tail-and-SIGKILL, never mentioned to any agent. Artifacts: `library.lean`,
 `library.json` (sha256 — the `library_sha` of record), `index.md` (docstring +
-signature per fact — the graded run's entire prompt delta).
+signature per fact — a human-facing summary; the graded run does not use it).
 
 **Library baking (the block-D graded run).** `CMP_LIB_FILE=<library.lean>` makes every
 REPL worker elaborate the library on top of Mathlib at startup and serve all checks
@@ -472,9 +472,15 @@ and grader alike (one definition of compiles), and nobody copies facts anywhere.
 library sha rides in `/health` and inside every memo key (the env identity is part of
 the verdict's identity); a library that fails to elaborate is fatal at startup.
 `run.js --library results/<phase-dir>/` verifies the running server's sha (refusing
-launch on mismatch, both directions), appends index.md to the system prompt, and
-stamps `library_sha` into run.json and every record; `regrade.js` refuses runs whose
-recorded library does not match the server's. Before any library cell:
+launch on mismatch, both directions) and stamps `library_sha` into run.json and every
+record; `regrade.js` refuses runs whose recorded library does not match the server's.
+Discovery goes through the same channels as Mathlib discovery, not a prompt dump: the
+prompt gains one short paragraph (the library exists, is fully verified, grades like
+Mathlib, source in library.lean), the full source sits read-only in the work dir
+(`CMP_CONFIG.library_file`, enforced by file-sandbox), and `grep_mathlib` searches it
+alongside Mathlib (`CMP_LIB_FILE`, hits labeled `library.lean:<line>`). The semantic
+arm cannot index a private library (external API) — there, read access is the
+discovery floor. Before any library cell:
 `runner/drift-check.js` recompiles every benchmark statement against the library env
 and diffs canonical types/values against the bare-env stmt cache — zero drift is a
 launch precondition (new instances changing how a statement elaborates would silently
