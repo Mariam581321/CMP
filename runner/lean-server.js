@@ -105,6 +105,22 @@ const MONITOR_MS = 5000;
 const IMPORT_TIMEOUT_MS = parseInt(process.env.CMP_IMPORT_TIMEOUT_MS ?? "900000");
 const MEMO_MAX = 2000;
 
+// Block D library baking: CMP_LIB_FILE names a gate-verified library (a frozen
+// add_fact bank) that every worker elaborates ON TOP of Mathlib at startup; checks
+// then run against that env, so library names are ambient exactly like Mathlib names
+// — for agents and the grader alike, one definition of compiles. The file is read
+// ONCE at boot and its sha travels in /health (run.js refuses to launch a library
+// cell against the wrong env) and in every memo key (the same bytes compile
+// differently under different envs, so the env identity is part of the verdict's
+// identity). A library that fails to elaborate is fatal: serving without it would
+// silently change every verdict the run is about to record.
+const LIB_FILE = process.env.CMP_LIB_FILE || null;
+let LIB_SOURCE = null, LIB_SHA = null;
+if (LIB_FILE) {
+  LIB_SOURCE = readFileSync(LIB_FILE, "utf8");
+  LIB_SHA = createHash("sha256").update(LIB_SOURCE).digest("hex");
+}
+
 const memo = new Map();
 
 const log = (...a) => console.error(new Date().toISOString(), ...a);
@@ -216,8 +232,25 @@ async function startRepl(w) {
   // accounts for the slow case (see IMPORT_TIMEOUT_MS).
   const resp = await sendToRepl(w, { cmd: "import Mathlib" }, { wallMs: IMPORT_TIMEOUT_MS });
   if (resp.env !== 0) throw new Error(`unexpected import response: ${JSON.stringify(resp)}`);
+  w.baseEnv = 0;
+  if (LIB_SOURCE != null) {
+    // Elaborate the library on top of Mathlib; every check then runs against the
+    // resulting env. The library passed the add_fact gate under the same heartbeat
+    // cap, so the cap line is policy restated, not a new constraint. Any error is
+    // fatal for this worker (throw → the startup/restart retry path owns it).
+    log(`w${w.id} elaborating library (${LIB_SHA.slice(0, 12)}…, ${Buffer.byteLength(LIB_SOURCE)} bytes)...`);
+    const lib = await sendToRepl(
+      w,
+      { cmd: `set_option maxHeartbeats ${MAX_HEARTBEATS}\n${LIB_SOURCE}`, env: 0 },
+      { wallMs: IMPORT_TIMEOUT_MS },
+    );
+    const errs = (lib.messages ?? []).filter((m) => m.severity === "error");
+    if (typeof lib.env !== "number" || errs.length)
+      throw new Error(`library failed to elaborate: ${errs[0]?.data?.slice(0, 300) ?? JSON.stringify(lib).slice(0, 300)}`);
+    w.baseEnv = lib.env;
+  }
   w.ready = true;
-  log(`w${w.id} ready in ${Math.round((Date.now() - t0) / 1000)}s`);
+  log(`w${w.id} ready in ${Math.round((Date.now() - t0) / 1000)}s${LIB_SHA ? " (library baked)" : ""}`);
   dispatch(); // jobs may have queued while this worker was importing
 }
 
@@ -493,7 +526,7 @@ async function handleCheck(w, prep) {
     await new Promise((r) => setTimeout(r, 2000));
   }
   try {
-    const resp = await sendToRepl(w, { cmd: prep.text, env: 0 }, { cpuMs: CPU_FUSE_MS, wallMs: WALL_FUSE_MS });
+    const resp = await sendToRepl(w, { cmd: prep.text, env: w.baseEnv ?? 0 }, { cpuMs: CPU_FUSE_MS, wallMs: WALL_FUSE_MS });
     const result = render(resp, prep.shifted);
     memoPut(prep.key, result);
     // Timings stay OUT of the memo: a replayed verdict must never report the original
@@ -609,6 +642,10 @@ const server = createServer((req, res) => {
       // code deciding today's checks are not necessarily the same (run.js refuses to
       // launch on a mismatch).
       max_heartbeats: MAX_HEARTBEATS,
+      // Which library (if any) is baked into the env — the other half of the verdict's
+      // identity. run.js refuses to launch when this does not match what the run
+      // expects, exactly like max_heartbeats.
+      library_sha256: LIB_SHA,
       cpu_fuse_s: CPU_FUSE_MS / 1000,
       queued: Object.fromEntries([...queues].map(([k, v]) => [k, v.length])),
       workers: workers.map((w) => ({ id: w.id, ready: w.ready, busy: w.busy })),
@@ -645,7 +682,10 @@ const server = createServer((req, res) => {
       // cpuMs, which was a real hole while clients could ask for different budgets;
       // clients no longer set any bound at all.)
       const prep = prepare(body.code);
-      prep.key = createHash("sha256").update(prep.text).digest("hex");
+      // The env identity is part of the key: the same bytes compile differently with a
+      // library baked in, and a memo entry must never cross that boundary (the memo
+      // survives recycles and, in principle, a future durable store).
+      prep.key = createHash("sha256").update(`${prep.text} ${LIB_SHA ?? ""}`).digest("hex");
       // Memo hits skip the queue entirely — re-verification of an unchanged file must
       // never wait behind live checks. force=true (the grader) skips the lookup: the
       // recorded verdict must come from a real compile. The fresh result still lands in
@@ -661,7 +701,7 @@ const server = createServer((req, res) => {
 process.on("exit", () => workers.forEach(killRepl));
 for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => process.exit(0));
 
-server.listen(PORT, "127.0.0.1", () => log(`lean server on 127.0.0.1:${PORT} (${WORKERS} worker${WORKERS > 1 ? "s" : ""}, verdict: maxHeartbeats ${MAX_HEARTBEATS}/decl; fuses: ${CPU_FUSE_MS / 1000}s CPU, ${WALL_FUSE_MS / 1000}s wall, rss cap ${MAX_RSS_MB > 0 ? `${MAX_RSS_MB}MB` : "off"}, avail floor ${MIN_AVAIL_MB > 0 ? `${MIN_AVAIL_MB}MB` : "off"})`));
+server.listen(PORT, "127.0.0.1", () => log(`lean server on 127.0.0.1:${PORT} (${WORKERS} worker${WORKERS > 1 ? "s" : ""}, verdict: maxHeartbeats ${MAX_HEARTBEATS}/decl${LIB_SHA ? `, library ${LIB_SHA.slice(0, 12)}…` : ""}; fuses: ${CPU_FUSE_MS / 1000}s CPU, ${WALL_FUSE_MS / 1000}s wall, rss cap ${MAX_RSS_MB > 0 ? `${MAX_RSS_MB}MB` : "off"}, avail floor ${MIN_AVAIL_MB > 0 ? `${MIN_AVAIL_MB}MB` : "off"})`));
 // Sequential imports: worker 0 pays the cold import; later workers reuse its warm
 // page cache. The pool starts serving as soon as the FIRST worker is ready.
 (async () => {

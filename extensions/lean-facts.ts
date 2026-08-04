@@ -11,13 +11,16 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { resolve, join } from "node:path";
+import { resolve, join, basename } from "node:path";
 import { addFact } from "../runner/facts.js";
 import { cmpConfig, ToolFailure } from "../runner/common.js";
 
 export default function (pi: ExtensionAPI) {
   const cfg = cmpConfig();
   const factsFile: string = cfg.facts_file ?? join(process.cwd(), "facts.lean");
+  // Agent-facing name follows the actual file: facts.lean in attempts, library.lean
+  // in the block-D librarian phase.
+  const bankName = basename(factsFile);
   const client: string = cfg.problem ?? "anon";
   const isWorker = cfg.worker != null;
 
@@ -29,7 +32,7 @@ export default function (pi: ExtensionAPI) {
       return {
         block: true,
         reason:
-          "blocked: facts.lean is the append-only fact bank, written only through add_fact " +
+          `blocked: ${bankName} is the append-only fact bank, written only through add_fact ` +
           "(the compiler gate is what makes its contents trustworthy). Read it freely; to add to it, call add_fact.",
       };
   });
@@ -38,7 +41,7 @@ export default function (pi: ExtensionAPI) {
     name: "add_fact",
     label: "Add fact",
     description:
-      "Add verified Lean declarations to the shared fact bank (facts.lean). The code is " +
+      `Add verified Lean declarations to the shared fact bank (${bankName}). The code is ` +
       "compiled with Mathlib and the current bank in scope, and admitted only if it has no " +
       "errors, no `sorry`, and no axioms beyond propext/Classical.choice/Quot.sound — so " +
       "everything in the bank is machine-verified and can be used without re-checking. " +

@@ -320,18 +320,26 @@ cost, removed since). Details and autopsies: `drafts/DRAFT-experiment-notes-*.md
 - [ ] **Block C runs**: spawn, spawn+facts, spawn+plan; contingent spawn+plan+facts;
       delegation analysis → harness-owned pipeline fallback if the model won't
       delegate.
-- [ ] Library-phase plumbing on top of the block-C machinery (block D): librarian
-      launcher (statement digest + `get_problem`; workers via `runner/spawn.js` with
-      the harness-side per-worker caps), library freeze + `library_sha`, REPL env
-      baking with env identity in memo keys, post-freeze statement-drift recheck over
-      the 95, index generation, grep root extended to the library file; smoke the loop
-      on Putnam mid problems (eval-only discipline).
+- [x] Library-phase plumbing (2026-08-04, `SKELETON.md` has the designs of record):
+      librarian launcher (`runner/library.js` — all statements inline, no fetch tools;
+      workers via `runner/spawn.js` with harness-side per-worker caps), library freeze
+      + `library_sha`, REPL env baking (`CMP_LIB_FILE`; sha in /health and in every
+      memo key; `run.js --library` refuses mismatched envs both ways, `regrade.js`
+      likewise), statement-drift recheck (`runner/drift-check.js` — verified 0-drift
+      on a baked test server). Live smoke of the phase loop (mini librarian on FATE-M
+      + a `--library` dry cell) pending — queued behind the in-flight spawnfacts run
+      so its billed_usd stays clean.
 - [ ] **Block D run**: library phase ($5 cap) → library cell, paired vs the winner's
       cell; tier-concentration readout; report amortized.
-- [ ] Triage plumbing: `submit_verdict` extension (terminates the session) +
-      `runner/triage.js` + the counterfactual join against a cell's results.jsonl;
-      pilot the judge twice on pilot10 (verdict flips = noise floor), then the 95
-      (~$10–15) against the winner's cell and the audit tiers.
+- [x] Triage plumbing (2026-08-04): `submit_verdict` (terminates the session; a
+      content-free resubmit reminder, max 3) + `runner/triage.js` (generous
+      `--cap-std`, default 0.50 — calibrate after the pilot; no-verdict = excluded,
+      engineered to be rare) + `runner/triage-join.js` (confusion matrix + two-stage
+      readout; exclusions printed next to every headline). Live pilot pending, same
+      queue.
+- [ ] Triage runs: judge twice on pilot10 (verdict flips = noise floor, cap
+      calibration), then the 95 (~$10–15) against the winner's cell and the audit
+      tiers.
 - [ ] Post-hoc sweep of event logs for emergent behaviours (scratch strategies,
       degenerate loops, give-up patterns, best-state destruction) — feeds the writeup,
       no re-running.

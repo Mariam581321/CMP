@@ -54,6 +54,11 @@ try {
       // produce an off-protocol run that looks perfectly normal in the output.
       thinking: { type: "string", default: "high" },
       "max-tokens": { type: "string", default: "384000" },
+      // Block D: a finished library phase's results dir (runner/library.js). The
+      // library must ALREADY be baked into the running lean server (CMP_LIB_FILE);
+      // this flag makes the run verify that, advertise the library in the prompt,
+      // and stamp library_sha into every record.
+      library: { type: "string" },
       "run-id": { type: "string" },
     },
     strict: true,
@@ -108,6 +113,19 @@ for (const [flag, v, min] of [
 // pre-inference — which triggers pi's compact-and-retry, and the attempt continues
 // with a fresh window for as long as it runs.
 const MAX_TOKENS = parseInt(A["max-tokens"]);
+// Library cell (block D): resolve the phase artifacts up front — a missing or
+// half-written phase dir must fail the launch, not the 40th attempt.
+let LIBRARY = null;
+if (A.library) {
+  const dir = resolve(A.library);
+  try {
+    const meta = JSON.parse(readFileSync(join(dir, "library.json"), "utf8"));
+    LIBRARY = { dir, sha: meta.library_sha256, run_id: meta.run_id, index: readFileSync(join(dir, "index.md"), "utf8") };
+  } catch (e) {
+    console.error(`--library ${A.library}: not a finished library phase (${e.message})`);
+    process.exit(1);
+  }
+}
 const RUN_ID = A["run-id"] ?? `${COMBO.join("+") || "baseline"}-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "")}`;
 
 // No peak-hour guard. DeepSeek "will soon adopt" peak-valley pricing (2x during
@@ -125,6 +143,9 @@ if (existsSync(dotenv)) process.loadEnvFile(dotenv);
 process.env.PATH = `${process.env.HOME}/.local/node/bin:${process.env.HOME}/.elan/bin:${process.env.PATH}`;
 process.env.CMP_LEAN_ENV = join(ROOT, "lean-env");
 process.env.CMP_LEAN_PORT = LEAN_PORT;
+// A server this run has to spawn itself must come up with the right env baked in; a
+// reused server is checked against the same expectation in verifyCheckVerdict.
+if (LIBRARY) process.env.CMP_LIB_FILE = join(LIBRARY.dir, "library.lean");
 // pi reads settings from here instead of ~/.pi/agent/, so the retry policy is versioned
 // with the experiment: pi-agent/settings.json turns on the SDK-level retry that makes a
 // wifi drop invisible to the model. Set before the --list-models preflight so the
@@ -208,6 +229,20 @@ async function verifyCheckVerdict() {
       `check verdict mismatch: the running lean server enforces maxHeartbeats ` +
         `${h.max_heartbeats ?? "(none — it predates the heartbeat verdict)"}, this checkout defines ${MAX_HEARTBEATS}. ` +
         `Restart the server (scripts/lean-server-watchdog.sh) before launching.`,
+    );
+  // The env identity is the verdict's other half (block D): a library cell against a
+  // bare server would grade every library-using proof compile_error, and a plain cell
+  // against a library server would let attempts lean on declarations the arm does not
+  // include — both silently, hence the refusal either way.
+  const want = LIBRARY?.sha ?? null;
+  if ((h.library_sha256 ?? null) !== want)
+    throw new Error(
+      want
+        ? `library mismatch: this run needs library ${want.slice(0, 12)}… baked into the server ` +
+          `(server has ${h.library_sha256 ? h.library_sha256.slice(0, 12) + "…" : "none"}). ` +
+          `Restart it with CMP_LIB_FILE=${join(LIBRARY.dir, "library.lean")}.`
+        : `the running lean server has library ${h.library_sha256.slice(0, 12)}… baked in, but this run ` +
+          `expects a bare environment. Restart the server without CMP_LIB_FILE.`,
     );
   return h;
 }
@@ -309,7 +344,7 @@ async function deepseekBalance() {
 }
 const balanceBefore = await deepseekBalance();
 const RUN_STARTED = Date.now();
-writeFileSync(join(runDir, "run.json"), JSON.stringify({ run_id: RUN_ID, combo: COMBO, model: MODEL, thinking: THINKING, max_tokens: MAX_TOKENS || null, budget_std: BUDGET_STD || null, timeout_s: TIMEOUT_S, max_heartbeats: MAX_HEARTBEATS, concurrency: CONCURRENCY, problems, problems_dir: PROBLEMS_DIR, git_sha: gitSha, pi_version: piVersion, balance_before: balanceBefore, started_at: new Date(RUN_STARTED).toISOString() }, null, 2));
+writeFileSync(join(runDir, "run.json"), JSON.stringify({ run_id: RUN_ID, combo: COMBO, model: MODEL, thinking: THINKING, max_tokens: MAX_TOKENS || null, budget_std: BUDGET_STD || null, timeout_s: TIMEOUT_S, max_heartbeats: MAX_HEARTBEATS, library_sha: LIBRARY?.sha ?? null, library_run: LIBRARY?.run_id ?? null, concurrency: CONCURRENCY, problems, problems_dir: PROBLEMS_DIR, git_sha: gitSha, pi_version: piVersion, balance_before: balanceBefore, started_at: new Date(RUN_STARTED).toISOString() }, null, 2));
 
 // Benchmark-neutral by design: no "competition" framing, since the problem source
 // changes between blocks (Putnam -> FATE -> whatever is next) and the prompt must not
@@ -331,6 +366,13 @@ Rules:
 // Per-arm prompt addenda: extensions/<name>.prompt.md is appended to the system prompt
 // when <name> is in the combo, so prompt deltas are versioned alongside the arm's code.
 const addenda = COMBO.map((x) => join(ROOT, "extensions", `${x}.prompt.md`)).filter(existsSync).map((p) => readFileSync(p, "utf8").trim());
+// The library cell's whole prompt delta: the index of what exists beyond Mathlib.
+// Everything else about the library is ambient (baked into the compile env), so the
+// agent's rules do not change — the declarations are simply there, like Mathlib's.
+if (LIBRARY)
+  addenda.push(
+    `## Additional verified library\n\nBeyond Mathlib, this environment contains the following verified declarations — usable by name in problem.lean and snippets, exactly like Mathlib lemmas:\n\n${LIBRARY.index.trim()}`,
+  );
 const FULL_SYSTEM_PROMPT = [SYSTEM_PROMPT, ...addenda].join("\n\n");
 
 const PROMPT = "Prove the theorem in problem.lean. Read it first, then work until lean_check passes with no errors and no sorry warnings.";
@@ -563,6 +605,7 @@ async function attempt(name, idx) {
     // nudges = ALL supervisor messages (userMsgs minus the CLI prompt).
     budget_std: BUDGET_STD || null, nudges: Math.max(0, stats.userMsgs - 1),
     ...(workers.length ? { workers, workers_cost_std: +costStd(wStats.tokens).toFixed(5) } : {}),
+    ...(LIBRARY ? { library_sha: LIBRARY.sha } : {}),
     end,
     grade: {
       solved: g.solved, reason: g.solved ? null : g.reason,

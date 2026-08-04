@@ -84,6 +84,9 @@ export default function (pi: ExtensionAPI) {
           runWorker({
             idx: nextIdx++,
             task: t.task,
+            // Harness-side per-worker cap (cfg.worker_cap_std, e.g. the library
+            // phase's) — never surfaced to the model in any form.
+            maxCostStd: cfg.worker_cap_std ?? 0,
             cfg: { ...cfg, workers_dir: workersDir },
             onTokens,
           }),

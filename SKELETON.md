@@ -436,6 +436,50 @@ spawn arm section below.)
 
 ## Tool-level arm designs
 
+**`triage`** (`extensions/lean-verdict.ts`, `runner/triage.js`, join in
+`runner/triage-join.js`) — implemented. One judge per problem: a worker-shaped agent
+(`runWorker` with a judge view) holding the attempt arm's information tools plus
+`submit_verdict(yes|no, reason)`, which records the verdict and ends the session
+(pi `terminate`, plus a harness-side watcher that stops the process when verdict.json
+appears — covers both pi behaviors). The judge's whole contract: here is the statement,
+investigate however you see fit, submit when settled. No method steering, no budget
+language; the generous cap (`--cap-std`, default 0.50) is enforcement, not information,
+and a capped judge simply ends. If a turn ends with no verdict, a fixed content-free
+reminder ("When your verdict is settled, submit it with submit_verdict.") fires, max 3 —
+the supervisor pattern, protecting the spend without leaning on the decision.
+No-verdict problems are EXCLUDED from the counterfactual (an infra artifact must never
+become a filter decision — 2026-08-04) and `triage-join` prints them next to every
+headline. The join is the whole evaluation: verdicts reweight an existing cell
+(confusion matrix, two-stage solve rate and cost), so the arm costs only the judge
+phase.
+
+**`library` phase** (`runner/library.js`; block D) — implemented. One librarian agent
+with `spawn_subagents` + `add_fact` + search + `check_snippet` + `read`; the bank IS
+the library (`library.lean`), so the compile gate is the only writer, workers
+contribute through the same tool, and a capped phase still ships a valid library (the
+bank compiles at every prefix). All problem statements ride inline in the system
+prompt — no fetch tools; which theory to build and how to split it across workers is
+the librarian's call, and the phase cap ($5 default) plus per-worker caps
+(`--worker-cap-std`, via the harness-side `maxCostStd` knob) are enforced by
+tail-and-SIGKILL, never mentioned to any agent. Artifacts: `library.lean`,
+`library.json` (sha256 — the `library_sha` of record), `index.md` (docstring +
+signature per fact — the graded run's entire prompt delta).
+
+**Library baking (the block-D graded run).** `CMP_LIB_FILE=<library.lean>` makes every
+REPL worker elaborate the library on top of Mathlib at startup and serve all checks
+against that env — library names are ambient exactly like Mathlib names, for agents
+and grader alike (one definition of compiles), and nobody copies facts anywhere. The
+library sha rides in `/health` and inside every memo key (the env identity is part of
+the verdict's identity); a library that fails to elaborate is fatal at startup.
+`run.js --library results/<phase-dir>/` verifies the running server's sha (refusing
+launch on mismatch, both directions), appends index.md to the system prompt, and
+stamps `library_sha` into run.json and every record; `regrade.js` refuses runs whose
+recorded library does not match the server's. Before any library cell:
+`runner/drift-check.js` recompiles every benchmark statement against the library env
+and diffs canonical types/values against the bare-env stmt cache — zero drift is a
+launch precondition (new instances changing how a statement elaborates would silently
+change what is being proved).
+
 **`plan`** (`extensions/lean-plan.ts`, core in `runner/plan.js`) — implemented. Registers
 `plan_check`, which validates that `problem.lean` is currently a *plan*: (1) compiles,
 (2) statement preserved, (3) no benchmark declaration's own proof term reaches `sorry`

@@ -53,7 +53,15 @@ export function workerExtensions(combo) {
 const capText = (s, n) => (s.length > n ? s.slice(0, n) + "\n... (truncated)" : s);
 
 function workerSystemPrompt(cfg) {
-  const statement = readFileSync(cfg.original_file, "utf8").trim();
+  // The context block is the problem statement by default (block C: "workers see one
+  // subgoal + the parent statements"). A phase without a single problem — the block-D
+  // librarian — swaps in its own preamble via cfg.worker_preamble_file instead; the
+  // parent's task text stays the only other channel either way.
+  const preamble =
+    cfg.worker_preamble_file && existsSync(cfg.worker_preamble_file)
+      ? readFileSync(cfg.worker_preamble_file, "utf8").trim()
+      : null;
+  const statement = preamble ? null : readFileSync(cfg.original_file, "utf8").trim();
   const bank = cfg.facts_file && existsSync(cfg.facts_file) ? readFileSync(cfg.facts_file, "utf8").trim() : "";
   const factsRules = cfg.facts_file
     ? `
@@ -68,37 +76,39 @@ The fact bank at the time you started (later additions are also in scope for che
 ${bank ? capText(bank, 30000) : "-- (empty)"}
 \`\`\``
     : "";
-  return `You are a worker agent. A main agent working on a Lean 4 / Mathlib problem has delegated ONE subtask to you; the subtask is the first user message. The problem it belongs to is quoted below for context — your job is only the subtask, not the whole problem.
+  const context = preamble
+    ? `\n\n${preamble}`
+    : `\n\nThe problem your subtask belongs to:\n\n\`\`\`lean\n${statement}\n\`\`\``;
+  return `You are a worker agent. A main agent working on a Lean 4 / Mathlib problem has delegated ONE subtask to you; the subtask is the first user message. Your job is only the subtask.
 
 Rules:
 - There are no files and no shell in this environment. Verify Lean code with the check_snippet tool; a snippet must be self-contained (include the \`open\` lines and helper definitions it needs).
 - No new \`axiom\` declarations. No \`native_decide\`. \`sorry\` never counts as proved.${factsRules}
 - Your FINAL message is your report to the main agent — it is the only thing the main agent will ever see of your work. Make it self-contained: state what you established, include verbatim every Lean snippet that check_snippet accepted (with its \`open\` lines and helpers), and say clearly what remains unproved. If you could not finish, report what you tried and what you learned — a precise negative finding is valuable too.
-- NEVER end your response without a tool call until you are ready to deliver the report.
-
-The problem your subtask belongs to:
-
-\`\`\`lean
-${statement}
-\`\`\`${bankSection}`;
+- NEVER end your response without a tool call until you are ready to deliver the report.${context}${bankSection}`;
 }
 
 // Launch one worker. Returns { promise, kill }: the promise resolves (never rejects
 // after launch) to { idx, end, report, stats } once the worker exits and its session
 // is drained; kill(reason) stops it early. onTokens(usage) fires per completed
 // assistant message so the caller can keep a live ledger for the supervisor.
-// maxCostStd is a HARNESS-side knob only (e.g. a future library-builder phase): it is
-// deliberately not exposed in the spawn tool schema — the model is never given budget
-// or spend language to reason about (2026-08-04).
-export function runWorker({ idx, task, maxCostStd = 0, cfg, onTokens }) {
-  const wDir = join(cfg.workers_dir, `w${idx}`);
+// maxCostStd is a HARNESS-side knob only (the triage cap, block-D per-worker caps): it
+// is deliberately not exposed in the spawn tool schema — the model is never given
+// budget or spend language to reason about (2026-08-04).
+// `view` ({ exts, tools, systemPrompt }) overrides the block-C worker view for other
+// worker-shaped agents (the triage judge, and anything after it) — same process
+// hygiene, session accounting and report channel, different role. `dirName` names the
+// worker dir (default wN; triage uses the problem name).
+export function runWorker({ idx, task, maxCostStd = 0, cfg, onTokens, view, dirName }) {
+  const wDir = join(cfg.workers_dir, dirName ?? `w${idx}`);
   const work = join(wDir, "work");
   const sessionDir = join(wDir, "session");
   mkdirSync(work, { recursive: true });
   mkdirSync(sessionDir, { recursive: true });
   writeFileSync(join(wDir, "task.md"), task);
 
-  const { exts, tools } = workerExtensions(cfg.combo);
+  const { exts, tools } = view ?? workerExtensions(cfg.combo);
+  const systemPrompt = view?.systemPrompt ?? workerSystemPrompt(cfg);
   const args = [
     "--mode", "text",
     "--no-extensions", "--no-skills", "-nc", "--no-prompt-templates", "--no-themes",
@@ -106,7 +116,7 @@ export function runWorker({ idx, task, maxCostStd = 0, cfg, onTokens }) {
     "--tools", tools.join(","),
     ...(cfg.max_tokens ? ["-e", join(ROOT, "extensions", "max-tokens.ts")] : []),
     ...exts.flatMap((x) => ["-e", join(ROOT, "extensions", `${x}.ts`)]),
-    "--system-prompt", workerSystemPrompt(cfg),
+    "--system-prompt", systemPrompt,
     "--session-dir", sessionDir,
     task,
   ];

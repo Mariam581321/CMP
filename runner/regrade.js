@@ -11,7 +11,7 @@ import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { grade } from "./grade.js";
-import { green, red, yellow, dim, bold } from "./common.js";
+import { LEAN_URL, green, red, yellow, dim, bold } from "./common.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const dirs = process.argv.slice(2).map((d) => resolve(d));
@@ -20,8 +20,22 @@ if (!dirs.length) {
   process.exit(1);
 }
 
+// The env identity gate (block D): regrading a run against a server with a different
+// library baked in (or none, when the run had one) would flip verdicts for reasons that
+// have nothing to do with the grader — silently. Same refusal as run.js's launch check.
+const serverLib = (await fetch(`${LEAN_URL}/health`, { signal: AbortSignal.timeout(3000) })
+  .then((r) => r.json()).catch(() => null))?.library_sha256 ?? null;
+
 for (const runDir of dirs) {
   const runMeta = JSON.parse(readFileSync(join(runDir, "run.json"), "utf8"));
+  if ((runMeta.library_sha ?? null) !== serverLib) {
+    console.error(
+      `${runMeta.run_id}: skipped — the run recorded library ` +
+        `${runMeta.library_sha ? runMeta.library_sha.slice(0, 12) + "…" : "(none)"} but the server has ` +
+        `${serverLib ? serverLib.slice(0, 12) + "…" : "(none)"} baked in; restart the server to match before regrading.`,
+    );
+    continue;
+  }
   const problemsDir = runMeta.problems_dir ?? join(ROOT, "problems");
   // No budget is passed any more: the verdict is the server's heartbeat cap, so a regrade
   // reproduces a run's metric exactly when the server enforces the cap that run recorded
