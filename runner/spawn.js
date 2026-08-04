@@ -87,6 +87,9 @@ ${statement}
 // after launch) to { idx, end, report, stats } once the worker exits and its session
 // is drained; kill(reason) stops it early. onTokens(usage) fires per completed
 // assistant message so the caller can keep a live ledger for the supervisor.
+// maxCostStd is a HARNESS-side knob only (e.g. a future library-builder phase): it is
+// deliberately not exposed in the spawn tool schema — the model is never given budget
+// or spend language to reason about (2026-08-04).
 export function runWorker({ idx, task, maxCostStd = 0, cfg, onTokens }) {
   const wDir = join(cfg.workers_dir, `w${idx}`);
   const work = join(wDir, "work");

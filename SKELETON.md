@@ -521,8 +521,14 @@ task text as the one user message; tools are `check_snippet` + the run's search 
 (+ `add_fact`) — no `lean_check`, no file tools, no spawn (depth 1 is structural: the
 extension is never loaded into workers), and no supervisor — a worker that stops has
 stopped, its final visible text is the report, and the parent decides what happens next.
-Optional per-task `max_cost_std` is enforced at message granularity (overshoot ≤ 1
-message, like the attempt budget). Workers reuse the parent's REPL client id, so an
+**Budget-blind by design (2026-08-04):** the model is never given budget or spend
+language — no dollar figures or turn counts in worker report headers (outcome word
+only), no cost parameter in the tool schema, nothing about a budget existing in any
+description. Spend telemetry lives in tool-result `details` and `worker.json`, which
+the model never sees. The first spawn pilot leaked per-worker dollars into reports and
+invited strategic early wrap-ups — the opposite of what the arm measures. A per-worker
+`max_cost_std` survives in `runner/spawn.js` as a harness-side knob only (message
+granularity, overshoot ≤ 1 message). Workers reuse the parent's REPL client id, so an
 attempt's workers queue behind its own checks instead of multiplying its share of the
 run. Accounting: the runner tails `workers/*/session/` alongside the parent session —
 the budget binds the SUM, the record's `tokens`/`cost_usd`/`cost_std` are parent +

@@ -19,7 +19,7 @@ import { Type } from "typebox";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runWorker } from "../runner/spawn.js";
-import { cmpConfig, costStd, ToolFailure, money } from "../runner/common.js";
+import { cmpConfig, costStd, ToolFailure } from "../runner/common.js";
 
 export default function (pi: ExtensionAPI) {
   const cfg = cmpConfig();
@@ -48,6 +48,11 @@ export default function (pi: ExtensionAPI) {
     // another copy of itself; sequential keeps two batches from interleaving their
     // worker numbering and budget picture.
     executionMode: "sequential",
+    // No budget/spend language anywhere the model can see (2026-08-04): the harness
+    // never tells the agent how much budget exists or is left, and dollar telemetry
+    // in worker reports invited exactly the strategic early wrap-ups the arm is not
+    // supposed to induce. Cost stays in the tool-result `details` (session log only)
+    // and in worker.json for analysis.
     description:
       "Delegate subtasks to fresh worker agents that run in PARALLEL and report back. " +
       "Each task launches one worker that sees ONLY the problem statement and your task text — " +
@@ -59,9 +64,7 @@ export default function (pi: ExtensionAPI) {
       ", but no files: they cannot see or touch problem.lean, and everything they verify comes " +
       "back only in their report" +
       (hasFacts ? " or through the bank" : "") +
-      ". Workers spend from the same per-problem budget as you; an optional max_cost_std stops " +
-      "a worker after roughly that many dollars and returns its partial findings. The call " +
-      "blocks until every worker in it finishes, so batch independent subtasks into one call.",
+      ". The call blocks until every worker in it finishes, so batch independent subtasks into one call.",
     parameters: Type.Object({
       tasks: Type.Array(
         Type.Object({
@@ -69,9 +72,6 @@ export default function (pi: ExtensionAPI) {
             description:
               "Complete, self-contained brief for one worker (it sees only this and the problem statement)",
           }),
-          max_cost_std: Type.Optional(
-            Type.Number({ description: "Optional spend ceiling for this worker in dollars (e.g. 0.15)" }),
-          ),
         }),
         { minItems: 1 },
       ),
@@ -84,7 +84,6 @@ export default function (pi: ExtensionAPI) {
           runWorker({
             idx: nextIdx++,
             task: t.task,
-            maxCostStd: t.max_cost_std ?? 0,
             cfg: { ...cfg, workers_dir: workersDir },
             onTokens,
           }),
@@ -107,9 +106,11 @@ export default function (pi: ExtensionAPI) {
         signal?.removeEventListener("abort", onAbort);
       }
 
+      // Report headers carry the outcome word only — no turn counts, no dollars: the
+      // model gets the workers' content, never their cost.
       const endNote: Record<string, string> = {
         completed: "finished",
-        task_cap: "stopped at its cost cap",
+        task_cap: "stopped early",
         aborted: "aborted",
         died: "died before finishing",
       };
@@ -117,7 +118,7 @@ export default function (pi: ExtensionAPI) {
         .map((r) => {
           const rep = r.report ?? "(no report — the worker produced no final message)";
           const capped = rep.length > 30000 ? rep.slice(0, 30000) + "\n... (report truncated)" : rep;
-          return `## Worker ${r.idx} — ${endNote[r.end] ?? r.end} (${r.stats.turns} turns, ${money(costStd(r.stats.tokens))} spent)\n\n${capped}`;
+          return `## Worker ${r.idx} — ${endNote[r.end] ?? r.end}\n\n${capped}`;
         })
         .join("\n\n");
       return {
