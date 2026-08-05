@@ -15,7 +15,9 @@ Headline findings:
   **fatex_15** (vacuous — the hypothesis type is empty), **fatex_63** (surjectivity dropped,
   making it free). Machine-checked. §2.
 - **Two statements strictly weaker than their informal**: **fatex_22**, **fatex_59**. §3.
-- **Three faithful-but-free problems** (already in Mathlib): fatex_35, fatex_46, fatex_70. §4.
+- **Three faithful-but-free problems** (one or two Mathlib lemmas each): fatex_35, fatex_46,
+  fatex_70. Their solves are honest, but every arm gets them, so they are dropped from the run
+  list too. §4.
 - Systematic scans that came back **clean** are in §5 — including a corpus-wide scan for the
   fatex_81 parenthesis defect, which finds fatex_81 and nothing else.
 
@@ -27,8 +29,12 @@ Scoring impact:
 | | before | after |
 |---|---|---|
 | FATE-X graded solved | 50 | **46** |
-| invalidated | — | fatex_2, fatex_15, fatex_63, fatex_74 |
-| run list | `safe93.txt` (n = 93) | **`safe90.txt` (n = 90)** |
+| invalidated (not real solves) | — | fatex_2, fatex_15, fatex_63, fatex_74 |
+| dropped as free (real solves, no signal) | — | fatex_35, fatex_46, fatex_70 |
+| run list | `safe93.txt` (n = 93) | **`safe87.txt` (n = 87)** |
+
+On the n = 87 list the 0802 baseline is **43 solved** (46 genuine minus the three §4
+problems, which are no longer in the list).
 
 ---
 
@@ -252,16 +258,20 @@ unique existence of a valuation matching the formula; the value group is never m
 
 ---
 
-## 4. Faithful but free (score inflation, not defects)
+## 4. Faithful but free — excluded from the run list
 
-Not bugs — the statements are correct — but they are solved by one or two Mathlib lemmas, and
-inflate the score relative to what FATE-X is supposed to measure.
+Not bugs, and not bad solves: the statements are correct and the proofs are honest. They are
+excluded because they are closed by one or two Mathlib lemmas, so a grid cell scores them the
+same whatever the arm does. They measure Mathlib coverage, not search.
 
 | problem | why |
 |---|---|
 | fatex_35 | Cohen's theorem, literally `exact IsNoetherianRing.of_prime h_fg`. 10 lines, 5 turns, 12 s. |
 | fatex_46 | Both directions sit on `Module.Flat.exists_factorization_of_isFinitelyPresented` / `Module.Flat.of_forall_exists_factorization`. 65 lines. |
 | fatex_70 | Lying-over for minimal primes under an injective map; two Mathlib lemmas. Solved 4× in 14–24 turns. Its `[IsLocalRing S]` hypothesis is unused. |
+
+These are a different category from §2: **their recorded solves stand**. They are dropped from the
+run list only so the grid does not spend budget on three problems every arm gets for free.
 
 ---
 
@@ -286,8 +296,8 @@ over-broad hypotheses) is semantic and was caught here only by reading.
 
 ## 6. Run list
 
-`problems-fatex/safe90.txt` (n = 90) = the old `safe93` seven (13, 23, 60, 75, 77, 81, 99) **plus
-2, 15, 63**.
+`problems-fatex/safe87.txt` (n = 87) = the old `safe93` seven (13, 23, 60, 75, 77, 81, 99) **plus
+2, 15, 63** (broken, §2) **plus 35, 46, 70** (free from Mathlib, §4). Thirteen excluded in total.
 
 **fatex_74 stays in the list.** The problem itself is legitimate (Murthy's theorem); it was the
 harness that was broken, and it is now protected. Its recorded solve must be regraded.
@@ -297,7 +307,7 @@ economics):
 
 - `scripts/blockA-fatex93-0805.sh` — `--problems problems-fatex/safe93.txt`
 - `COSTS.md` — per-cell budget is computed at n = 93
-- `PLAN.md` — updated to reference `safe90.txt`
+- `PLAN.md` — updated to reference `safe87.txt`
 
 ## 7. Upstream
 

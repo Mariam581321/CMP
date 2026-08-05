@@ -47,16 +47,19 @@ at a time and isolate what moved the needle.
   (`drafts/DRAFT-fatex-solved-audit-0805.md`: 2 is trivially true, 15 hypothesises an
   empty type, 63 drops a surjectivity requirement — all three were graded *solved*, which
   is why the 0803 unsolved-only pass could not see them).
-  **The grid run list is `problems-fatex/safe90.txt` — n = 90**, the 92
-  minus fatex_77 and fatex_99, which the 0803 audit flags *suspect* rather than broken
+  **The grid run list is `problems-fatex/safe87.txt` — n = 87**: the 92 minus
+  fatex_77 and fatex_99, which the 0803 audit flags *suspect* rather than broken
   (§4.1: 77's `ht P' = h+1` needs catenarity nobody assumed; §4.2: 99's abstract-group
   KRvS may be strictly stronger than intended, and it is where both 0804 spawn pilots
-  axiom-gamed). Decided 2026-08-05, before the first grid cell: a suspect statement that
+  axiom-gamed), and minus fatex_35, 46, 70, which are faithful but close on one or two
+  Mathlib lemmas — every arm gets them for free, so they cannot carry an arm effect
+  (0805 audit §4; their recorded solves stand, they are simply not worth grid budget).
+  Decided 2026-08-05, before the first grid cell: a suspect statement that
   later turns out broken would have to be struck from every cell after the fact, and the
-  two of them cannot carry an arm effect worth that risk. So 93 is the paired unit for
+  two of them cannot carry an arm effect worth that risk. So 87 is the paired unit for
   every within-block McNemar, the denominator of every grid solve rate, and the library
-  and triage populations too; 95 survives only as the scoring rule and in pre-grid
-  numbers (the 0802 51/95). Eval-only; dev iteration happens on FATE-M + Putnam mid-problems.
+  and triage populations too; 92 survives only as the scoring rule and in pre-grid
+  numbers (the 0802 51/95, which is 43/87 on this list). Eval-only; dev iteration happens on FATE-M + Putnam mid-problems.
   FATE-X replaced FATE-H as the grid benchmark on 2026-08-04: the ~08-02 silent model
   upgrade saturates FATE-H — an informal post-upgrade check solved everything it could
   actually attempt (the remainder died to infra, not difficulty) — so arm effects have
@@ -330,12 +333,12 @@ the spawn reports still leaked per-worker cost, removed since). Details and auto
       item above. (The ~08-02 model upgrade cuts comparability of every earlier run on
       top, without moving any freeze.) `COSTS.md` re-costed for the FATE-X grid at the
       post-upgrade pilot rates (~$0.21–0.39/problem/run).
-- [ ] **Block A runs** (FATE-X, `problems-fatex/safe90.txt`, n = 90): base, semantic,
+- [ ] **Block A runs** (FATE-X, `problems-fatex/safe87.txt`, n = 87): base, semantic,
       grep, loogle → repeat the winner (noise floor). Launcher:
       `scripts/blockA-fatex93-0805.sh <arm>` — one arm per invocation, sequential, so
       the account-wide `billed_usd` delta stays attributable to a single cell.
       **The launcher and `COSTS.md` still say safe93 / n = 93** — they were left alone
-      because dropping to n = 90 changes the per-cell budget. Decide before Block A runs.
+      because dropping from n = 93 to n = 87 changes the per-cell budget. Decide before Block A runs.
       **Order: grep first (2026-08-05), then base**, then semantic and loogle. Grep is
       the arm the autopsies most implicate (confirmation-retrieval: 398 unknown-identifier
       errors across 193 hallucinated names in one attempt) and it is the newest code, so

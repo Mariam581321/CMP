@@ -28,7 +28,6 @@ fatex_31
 fatex_32
 fatex_33
 fatex_34
-fatex_35
 fatex_36
 fatex_37
 fatex_38
@@ -39,7 +38,6 @@ fatex_42
 fatex_43
 fatex_44
 fatex_45
-fatex_46
 fatex_47
 fatex_48
 fatex_49
@@ -61,7 +59,6 @@ fatex_66
 fatex_67
 fatex_68
 fatex_69
-fatex_70
 fatex_71
 fatex_72
 fatex_73
