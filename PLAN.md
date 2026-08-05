@@ -180,7 +180,7 @@ depth/CM definitions, so one canonical copy transfers by `rfl`.
 
 - **library** — a shared formalization phase before the graded run: the spawn+facts
   machinery pointed at the whole problem set instead of one problem. A librarian agent
-  sees all 93 run-list statements (digest in prompt + a `get_problem` tool), identifies the
+  sees all 87 run-list statements (digest in prompt + a `get_problem` tool), identifies the
   shared missing theory, and spawns workers per cluster; everything enters through the
   existing `add_fact` gate (compiles against the bank, sorry-free, whitelist axioms,
   no metaprogramming), under one harness-enforced **$10 @std** phase cap — the
@@ -202,7 +202,7 @@ depth/CM definitions, so one canonical copy transfers by `rfl`.
   how real formalization campaigns behave; the unit of evaluation becomes the
   campaign, reported as such with the phase cost amortized (~10¢/problem).
 
-⇒ Analysis: paired exact McNemar, library vs the winner's cell, on the 93.
+⇒ Analysis: paired exact McNemar, library vs the winner's cell, on the 87.
 Pre-registered: the effect concentrates in the audit's tier-B clusters (tier A moves
 are budget luck, tier C shouldn't move — the tier table is the prediction). Library
 usage is measured mechanically (library names quoted in accepted proofs); "the
@@ -220,7 +220,7 @@ completed cell.
   minimal (no "scrutinize your no" instruction — whether quick verdicts are calibrated
   IS the measurement; the scrutiny-prompted variant is the follow-up cell if the "no"s
   are trigger-happy). The arm is never "run": its verdicts reweight an existing cell —
-  two-stage solve rate = solves among yes over ALL 93, two-stage cost = judge on all +
+  two-stage solve rate = solves among yes over ALL 87, two-stage cost = judge on all +
   attempts on yes — so the cell costs only the judge phase. Economic case from the
   0804 pilots: solves cost $0.34 total while fails cost $3.57. Readout: the
   verdict × outcome confusion matrix against the reference cell (FN = solves the gate
@@ -271,7 +271,7 @@ headroom number nobody publishes falls out of the grid itself. Signal exists —
 - **FATE-M and FATE-H as grid tiers** — both saturated (FATE-M by the baseline, 10/10;
   FATE-H by the ~08-02 model upgrade); smoke-test tiers only. **Putnam** stays the
   secondary anchor and the contingent grid benchmark if FATE-X floors (see Setup);
-  **Formal Conjectures** is the reserve scale-up if effects land too small for n = 93
+  **Formal Conjectures** is the reserve scale-up if effects land too small for n = 87
   to resolve.
 
 ## Runs so far
@@ -303,10 +303,11 @@ the spawn reports still leaked per-worker cost, removed since). Details and auto
       grid run must be that commit or a descendant. What the re-cut takes in, none of
       which existed at `3084411`: the block-C machinery (`spawn_subagents` + the
       `add_fact` bank), the in-loop axiom gate, budget-blind spawn reports, the
-      library-phase and triage plumbing, `grep_mathlib`'s Mathlib read access, and the
-      safe93 run list. It invalidates nothing that was a grid cell, because none of the
-      runs on record are: the 0802 FATE-X pass and the 0804 pilot chain both predate it,
-      and the ~08-02 model upgrade cuts their comparability anyway.
+      library-phase and triage plumbing, `grep_mathlib`'s Mathlib read access, the
+      class/structure-field statement check, and the safe87 run list. It invalidates
+      nothing that was a grid cell, because none of the runs on record are: the 0802
+      FATE-X pass and the 0804 pilot chain both predate it, and the ~08-02 model upgrade
+      cuts their comparability anyway.
       Re-cutting before a grid cell runs means
       updating the SHA here; re-cutting mid-grid means re-freezing and saying so. What each
       re-cut invalidates is stated in the commit that makes it; the 2026-07-31 model
@@ -335,10 +336,12 @@ the spawn reports still leaked per-worker cost, removed since). Details and auto
       post-upgrade pilot rates (~$0.21–0.39/problem/run).
 - [ ] **Block A runs** (FATE-X, `problems-fatex/safe87.txt`, n = 87): base, semantic,
       grep, loogle → repeat the winner (noise floor). Launcher:
-      `scripts/blockA-fatex93-0805.sh <arm>` — one arm per invocation, sequential, so
-      the account-wide `billed_usd` delta stays attributable to a single cell.
-      **The launcher and `COSTS.md` still say safe93 / n = 93** — they were left alone
-      because dropping from n = 93 to n = 87 changes the per-cell budget. Decide before Block A runs.
+      `scripts/blockA-fatex87-0805.sh <arm>` — one arm per invocation, sequential, so
+      the account-wide `billed_usd` delta stays attributable to a single cell; it
+      detaches into its own tmux session, so a cell never depends on the terminal or the
+      Claude session that launched it. Launcher and `COSTS.md` retargeted to safe87
+      (2026-08-05): the per-cell ceiling drops to 87 × $1 = $87 and the expected cell to
+      ~$23.
       **Order: grep first (2026-08-05), then base**, then semantic and loogle. Grep is
       the arm the autopsies most implicate (confirmation-retrieval: 398 unknown-identifier
       errors across 193 hallucinated names in one attempt) and it is the newest code, so
@@ -390,7 +393,7 @@ the spawn reports still leaked per-worker cost, removed since). Details and auto
       verdicts (4–5 turns, ~$0.002), clean terminate, zero reminders, join verified
       against a real cell.
 - [ ] Triage runs: judge twice on pilot10 (verdict flips = noise floor, cap
-      calibration), then the 93 (~$10–15) against the winner's cell and the audit
+      calibration), then the 87 (~$10–15) against the winner's cell and the audit
       tiers.
 - [ ] Post-hoc sweep of event logs for emergent behaviours (scratch strategies,
       degenerate loops, give-up patterns, best-state destruction) — feeds the writeup,

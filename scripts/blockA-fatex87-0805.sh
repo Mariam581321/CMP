@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Block A (search) on FATE-X, run list problems-fatex/safe93.txt (n = 93).
+# Block A (search) on FATE-X, run list problems-fatex/safe87.txt (n = 87).
 #
-#   ./scripts/blockA-fatex93-0805.sh grep
+#   ./scripts/blockA-fatex87-0805.sh grep
 #
 # Launches into its OWN detached tmux session named after the run id, so the run
 # outlives the ssh connection that started it, the terminal it was typed in, and
 # the Claude session that may have typed it. Nothing to remember at launch time:
 # run it from anywhere and it detaches itself. Attach with
-#   tmux attach -t grep-fatex93-0805      (detach again with ctrl-b d)
+#   tmux attach -t grep-fatex87-0805      (detach again with ctrl-b d)
 # and read the console log at results/<run-id>.console.log either way.
 #
 # ONE ARM PER INVOCATION, and never two at once: billed_usd comes from the
@@ -39,7 +39,7 @@ case "$ARM" in
   *) echo "usage: $0 {grep|base|semantic|loogle}"; exit 2 ;;
 esac
 
-RUN_ID="${ARM}-fatex93-0805"
+RUN_ID="${ARM}-fatex87-0805"
 LOG="$ROOT/results/$RUN_ID.console.log"
 
 # ---- prerequisites -------------------------------------------------------
@@ -68,7 +68,7 @@ if [ -z "${CMP_IN_TMUX_LAUNCH:-}" ]; then
   # readable — a session that vanished on its own is indistinguishable from one
   # that never started.
   tmux new-session -d -s "$RUN_ID" -c "$ROOT" \
-    "CMP_IN_TMUX_LAUNCH=1 '$ROOT/scripts/blockA-fatex93-0805.sh' '$ARM' 2>&1 | tee -a '$LOG'; \
+    "CMP_IN_TMUX_LAUNCH=1 '$ROOT/scripts/blockA-fatex87-0805.sh' '$ARM' 2>&1 | tee -a '$LOG'; \
      echo; echo \"=== $RUN_ID exited at \$(date -Is) — full console log: $LOG\"; \
      echo '=== pane kept open on purpose; tmux kill-session -t $RUN_ID when you are done with it'; \
      exec bash" || { echo "tmux refused to start the session"; exit 1; }
@@ -83,5 +83,5 @@ fi
 # ---- the run itself (inside tmux) ----------------------------------------
 echo "=== $(date -Is) launching $RUN_ID (combo: ${COMBO:-baseline}) at $(git rev-parse --short HEAD)"
 exec node runner/run.js --combo "$COMBO" \
-  --problems problems-fatex/safe93.txt --problems-dir problems-fatex \
+  --problems problems-fatex/safe87.txt --problems-dir problems-fatex \
   --budget-std 1.00 --concurrency 25 --run-id "$RUN_ID"
