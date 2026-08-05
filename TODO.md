@@ -1,5 +1,18 @@
 # TODO
 
+## DONE 2026-08-02 — CMP is off the laptop
+
+Running on `cmp`: a Hetzner auction box, 6C/12T, 62 GB usable, no Windows and no WSL
+underneath. Consequences already banked: the REPL pool defaults to 8 workers
+(`CMP_REPL_WORKERS` in `runner/lean-server.js`), run concurrency defaults to 25
+(`runner/run.js` — the laptop-era 12 GB memory floor is gone), and the memory fuses have
+not fired since the move. The watchdog lives in a tmux session (`tmux attach -t
+watchdog`) rather than a foreground terminal, so it survives session teardown, which was
+the last laptop-shaped failure mode in the harness. The `claude remote-control` story
+below is still accurate and still the way to drive a run from elsewhere.
+
+Original entry follows.
+
 ## Get CMP off the laptop: a small VPS (and where Claude Code fits)
 
 **Why:** the laptop is the least reliable part of the harness — sleep corrupts runs

@@ -43,7 +43,16 @@ at a time and isolate what moved the needle.
 - **Benchmark: FATE-X** — 100 PhD-level algebra problems, 95 scoreable: fatex_13, 23,
   60, 75, 81 are annotated out as broken statements (machine-checked or hand-verified —
   `drafts/DRAFT-fatex-unsolved-audit-0803.md`, which sets the scoring rules and regrades
-  fatex_19 solved). Eval-only; dev iteration happens on FATE-M + Putnam mid-problems.
+  fatex_19 solved). **The grid run list is `problems-fatex/safe93.txt` — n = 93**, the 95
+  minus fatex_77 and fatex_99, which the same audit flags *suspect* rather than broken
+  (§4.1: 77's `ht P' = h+1` needs catenarity nobody assumed; §4.2: 99's abstract-group
+  KRvS may be strictly stronger than intended, and it is where both 0804 spawn pilots
+  axiom-gamed). Decided 2026-08-05, before the first grid cell: a suspect statement that
+  later turns out broken would have to be struck from every cell after the fact, and the
+  two of them cannot carry an arm effect worth that risk. So 93 is the paired unit for
+  every within-block McNemar, the denominator of every grid solve rate, and the library
+  and triage populations too; 95 survives only as the scoring rule and in pre-grid
+  numbers (the 0802 51/95). Eval-only; dev iteration happens on FATE-M + Putnam mid-problems.
   FATE-X replaced FATE-H as the grid benchmark on 2026-08-04: the ~08-02 silent model
   upgrade saturates FATE-H — an informal post-upgrade check solved everything it could
   actually attempt (the remainder died to infra, not difficulty) — so arm effects have
@@ -164,7 +173,7 @@ depth/CM definitions, so one canonical copy transfers by `rfl`.
 
 - **library** — a shared formalization phase before the graded run: the spawn+facts
   machinery pointed at the whole problem set instead of one problem. A librarian agent
-  sees all 95 statements (digest in prompt + a `get_problem` tool), identifies the
+  sees all 93 run-list statements (digest in prompt + a `get_problem` tool), identifies the
   shared missing theory, and spawns workers per cluster; everything enters through the
   existing `add_fact` gate (compiles against the bank, sorry-free, whitelist axioms,
   no metaprogramming), under one harness-enforced **$10 @std** phase cap — the
@@ -186,7 +195,7 @@ depth/CM definitions, so one canonical copy transfers by `rfl`.
   how real formalization campaigns behave; the unit of evaluation becomes the
   campaign, reported as such with the phase cost amortized (~10¢/problem).
 
-⇒ Analysis: paired exact McNemar, library vs the winner's cell, on the 95.
+⇒ Analysis: paired exact McNemar, library vs the winner's cell, on the 93.
 Pre-registered: the effect concentrates in the audit's tier-B clusters (tier A moves
 are budget luck, tier C shouldn't move — the tier table is the prediction). Library
 usage is measured mechanically (library names quoted in accepted proofs); "the
@@ -204,7 +213,7 @@ completed cell.
   minimal (no "scrutinize your no" instruction — whether quick verdicts are calibrated
   IS the measurement; the scrutiny-prompted variant is the follow-up cell if the "no"s
   are trigger-happy). The arm is never "run": its verdicts reweight an existing cell —
-  two-stage solve rate = solves among yes over ALL 95, two-stage cost = judge on all +
+  two-stage solve rate = solves among yes over ALL 93, two-stage cost = judge on all +
   attempts on yes — so the cell costs only the judge phase. Economic case from the
   0804 pilots: solves cost $0.34 total while fails cost $3.57. Readout: the
   verdict × outcome confusion matrix against the reference cell (FN = solves the gate
@@ -255,7 +264,7 @@ headroom number nobody publishes falls out of the grid itself. Signal exists —
 - **FATE-M and FATE-H as grid tiers** — both saturated (FATE-M by the baseline, 10/10;
   FATE-H by the ~08-02 model upgrade); smoke-test tiers only. **Putnam** stays the
   secondary anchor and the contingent grid benchmark if FATE-X floors (see Setup);
-  **Formal Conjectures** is the reserve scale-up if effects land too small for n≈95
+  **Formal Conjectures** is the reserve scale-up if effects land too small for n = 93
   to resolve.
 
 ## Runs so far
@@ -303,13 +312,24 @@ the spawn reports still leaked per-worker cost, removed since). Details and auto
 - [x] Implement `grep_mathlib` + FATE-M smoke (2/2, tool-path probes green).
 - [x] Implement `loogle_mathlib` (public API + environment filter; skew measured, probe
       suite green) + FATE-M smoke.
-- [ ] Re-cut the grid freeze before block A: the block-C machinery, the in-loop axiom
-      gate and the budget-blind spawn reports all land after `3084411` — pin the new
-      SHA here at block-A launch. (The ~08-02 model upgrade cuts comparability of every
-      earlier run on top, without moving any freeze.) Re-cost `COSTS.md` for the
-      FATE-X grid while at it — post-upgrade pilot rates: ~$0.21–0.39/problem/run.
-- [ ] **Block A runs** (FATE-X, 95 scoreable): base, semantic, grep, loogle → repeat
-      the winner (noise floor).
+- [x] Re-cut the grid freeze before block A (2026-08-05): the block-C machinery, the
+      in-loop axiom gate, the budget-blind spawn reports and the library/triage plumbing
+      all land after `3084411` — the new freeze SHA is pinned in the first Next-steps
+      item above. (The ~08-02 model upgrade cuts comparability of every earlier run on
+      top, without moving any freeze.) `COSTS.md` re-costed for the FATE-X grid at the
+      post-upgrade pilot rates (~$0.21–0.39/problem/run).
+- [ ] **Block A runs** (FATE-X, `problems-fatex/safe93.txt`, n = 93): base, semantic,
+      grep, loogle → repeat the winner (noise floor). Launcher:
+      `scripts/blockA-fatex93-0805.sh <arm>` — one arm per invocation, sequential, so
+      the account-wide `billed_usd` delta stays attributable to a single cell.
+      **Order: grep first (2026-08-05), then base**, then semantic and loogle. Grep is
+      the arm the autopsies most implicate (confirmation-retrieval: 398 unknown-identifier
+      errors across 193 hallucinated names in one attempt) and it is the newest code, so
+      it is the cell most worth seeing early. base-vs-grep is also the widest contrast in
+      the grid, which makes it the cheapest available test of the Setup section's open
+      decision: if those two cells produce too few discordant pairs, FATE-X is floored and
+      the grid moves to Putnam — read the discordance the moment cell two grades, not after
+      all five.
 - [x] Implement `check_snippet` (smoked via scripted probes incl. timeout/memo paths;
       FATE-M arm smoke still cheap to add before the Block B run).
 - [ ] **Block B run**: snippet on the winning search → substitution analysis
@@ -353,7 +373,7 @@ the spawn reports still leaked per-worker cost, removed since). Details and auto
       verdicts (4–5 turns, ~$0.002), clean terminate, zero reminders, join verified
       against a real cell.
 - [ ] Triage runs: judge twice on pilot10 (verdict flips = noise floor, cap
-      calibration), then the 95 (~$10–15) against the winner's cell and the audit
+      calibration), then the 93 (~$10–15) against the winner's cell and the audit
       tiers.
 - [ ] Post-hoc sweep of event logs for emergent behaviours (scratch strategies,
       degenerate loops, give-up patterns, best-state destruction) — feeds the writeup,
