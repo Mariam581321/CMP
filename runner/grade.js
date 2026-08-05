@@ -145,8 +145,14 @@ export async function grade(problemName, solutionPath, originalPath, opts = {}) 
     // them by NAME, so type equality alone lets a gutted body through (verified with
     // dist_to_int := fun _ => 0, 2026-07-28). Compared exactly where the original's
     // own value is sorry-free — the sorry'd slots (proofs, _solution) stay the agent's.
+    // For class/structure/inductive the "value" is the constructor telescope, which is
+    // where the field types live — the inductive's own type is only `… → Prop` and does
+    // not move when a field is gutted (fatex_74: `injDim_le_infity : True`, 2026-08-05).
     if (!orig[d].direct_sorry && orig[d].value != null && orig[d].value !== "-" && s.value !== orig[d].value)
-      return stmtFail(`${d}: definition body differs from original (setup definitions are part of the statement)\n  expected: ${orig[d].value.slice(0, 300)}\n  got:      ${(s.value ?? "").slice(0, 300)}`);
+      return stmtFail(
+        `${d}: ${orig[d].kind === "induct" ? "class/structure fields differ" : "definition body differs"} from original ` +
+          `(setup declarations are part of the statement)\n  expected: ${orig[d].value.slice(0, 300)}\n  got:      ${(s.value ?? "").slice(0, 300)}`,
+      );
     if (s.safety !== "safe")
       return fail("unsafe_decl", `${d}: declaration is marked ${s.safety}`);
   }

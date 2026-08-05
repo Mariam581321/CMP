@@ -40,6 +40,20 @@ export const CLIENT_WAIT_MS = 30 * 60_000; // server queue is serialized; be pat
 // scopes ever open, so the emitted names are the bare heads exactly as before.
 // Lean names are not \w: subscripts (eval₂_…), primes (M'), and pure-unicode idents
 // (τ, 𝔽) are all legal, so match everything up to a delimiter instead of an ASCII set.
+//
+// `class`/`structure`/`inductive` are tracked too (2026-08-05). They were not, and that
+// was the whole hole behind the fatex_74 solve: FATE-X problem 74 ships
+// `class IsGorensteinLocalRing … where injDim_le_infity : ∃ n, ∀ i, n ≤ i → Subsingleton …`,
+// the attempt shipped `injDim_le_infity : True`, and the grader passed it. The theorem's
+// own type was untouched — it still reads `IsGorensteinRing (R ⧸ …)` — because a type
+// references a class by NAME only, exactly the setup-definition hole the CMPVAL value
+// probe closes for def/abbrev, left open for the field types of a class. 39 declarations
+// across FATE-X (36 class, 2 structure, 1 inductive) were unprotected; FATE-H, FATE-M and
+// PutnamBench have none, which is why it surfaced only here.
+// `instance` is deliberately NOT tracked: every instance in the corpus is anonymous, so
+// there is no source-level name to look up, and instances are covered transitively —
+// they are fully resolved inside the canonical types of the decls that use them, so
+// swapping or deleting one changes a tracked type or constructor.
 export function benchmarkDecls(originalSource) {
   const decls = [];
   const scopes = []; // each entry: [] for a section, the dot-split components for a namespace
@@ -48,7 +62,7 @@ export function benchmarkDecls(originalSource) {
     if ((m = /^\s*namespace\s+(\S+)\s*$/.exec(line))) { scopes.push(m[1].split(".")); continue; }
     if (/^\s*section(\s+\S+)?\s*$/.test(line)) { scopes.push([]); continue; }
     if (/^\s*end(\s+\S+)?\s*$/.test(line)) { scopes.pop(); continue; }
-    if ((m = /^\s*(?:noncomputable\s+)?(?:abbrev|def|theorem)\s+([^\s:({\[⦃]+)/.exec(line))) {
+    if ((m = /^\s*(?:noncomputable\s+)?(?:abbrev|def|theorem|class|structure|inductive)\s+([^\s:({\[⦃]+)/.exec(line))) {
       decls.push([...scopes.flat(), m[1]].join("."));
     }
   }
@@ -64,6 +78,13 @@ export function benchmarkDecls(originalSource) {
 // line closes the setup-definition hole: a theorem's TYPE references file-local
 // defs by NAME only, so an agent could gut a setup def's body (dist_to_int := fun
 // _ => 0, verified exploitable 2026-07-28) without changing the theorem's type.
+// For a class/structure/inductive the same hole exists one level down — the field
+// types live in the CONSTRUCTOR, not in the inductive's own type, which is just
+// `Type → … → Prop` and stays byte-identical when a field is gutted (measured on
+// fatex_74). So the value slot of an inductive carries every constructor's canonical
+// type, `<ctor>|<type>` joined by " ;; ", and the same value comparison that protects
+// def bodies protects class fields. `extends` parents are constructor arguments too,
+// so they are covered by the same string.
 // Which decls must keep their value is decided caller-side: exactly those whose
 // ORIGINAL value is sorry-free (setup defs yes; the sorry'd _solution slot no).
 // The canonical type erases binder names (α-equivalence), elaboration
@@ -126,6 +147,13 @@ run_cmd do
       logInfo s!"CMPSTMT|{n}|{kind}|{safety}|{ds}|{(CMPStmtCanon ty).dbgToString}"
       let vs := match ci with
         | .defnInfo v => (CMPStmtCanon (v.value.instantiateLevelParams lvls uls)).dbgToString
+        | .inductInfo v => String.intercalate " ;; " (v.ctors.map fun c =>
+            match env.find? c with
+            | some ci2 =>
+              let l2 := ci2.levelParams
+              let u2 := (List.range l2.length).map fun i => Level.param (Name.mkSimple s!"cmpu{i}")
+              s!"{c}|{(CMPStmtCanon (ci2.type.instantiateLevelParams l2 u2)).dbgToString}"
+            | none => s!"{c}|missing")
         | _ => "-"
       logInfo s!"CMPVAL|{n}|{vs}"
 `;
@@ -173,13 +201,20 @@ const memoOrig = new Map();
 // sha key alone would keep serving it and silently skip the value check — treat it
 // as a miss and recompute.
 const hasValues = (entry) => Object.values(entry?.decls ?? {}).every((d) => d.value !== undefined);
+// An entry written before benchmarkDecls tracked class/structure/inductive covers only
+// the def/abbrev/theorem heads, so the sha (which is over the ORIGINAL source, unchanged
+// by a tracker fix) would keep serving it and every newly-tracked class would read back
+// as `undefined` — i.e. verifyStatement would fail every FATE-X problem with a class as
+// "statement no longer elaborates". Treat a cache entry that is missing any requested
+// decl as a miss, the same way a missing .value is treated.
+const hasAll = (entry, decls) => decls.every((d) => entry?.decls?.[d] !== undefined);
 export async function originalStmtTypes(problemName, originalSource, decls) {
   const sha = createHash("sha256").update(originalSource).digest("hex");
   const hit = memoOrig.get(problemName);
-  if (hit?.sha === sha) return hit.decls;
+  if (hit?.sha === sha && hasAll({ decls: hit.decls }, decls)) return hit.decls;
   let disk = {};
   try { disk = JSON.parse(readFileSync(STMT_CACHE, "utf8")); } catch {}
-  if (disk[problemName]?.sha256 === sha && hasValues(disk[problemName])) {
+  if (disk[problemName]?.sha256 === sha && hasValues(disk[problemName]) && hasAll(disk[problemName], decls)) {
     memoOrig.set(problemName, { sha, decls: disk[problemName].decls });
     return disk[problemName].decls;
   }
@@ -228,7 +263,13 @@ export async function verifyStatement(problemName, originalSource, messages) {
     // type references it by name only). Enforced exactly where the original's own
     // value is sorry-free — the sorry'd slots (_solution, the proof) are the agent's.
     if (!orig[d].direct_sorry && orig[d].value != null && orig[d].value !== "-" && s.value !== orig[d].value)
-      return { ok: false, detail: `the definition of ${d} was changed — its body is part of the problem statement and must stay exactly as given` };
+      return {
+        ok: false,
+        detail:
+          orig[d].kind === "induct"
+            ? `the fields of ${d} were changed — a class/structure declaration is part of the problem statement (the theorem refers to it by name only, so weakening a field silently weakens the theorem) and must stay exactly as given`
+            : `the definition of ${d} was changed — its body is part of the problem statement and must stay exactly as given`,
+      };
     if (s.safety !== "safe")
       return { ok: false, detail: `${d} is marked ${s.safety}; unsafe/partial declarations are not accepted` };
   }
