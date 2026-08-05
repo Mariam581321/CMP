@@ -291,8 +291,16 @@ the spawn reports still leaked per-worker cost, removed since). Details and auto
 
 ## Next steps
 
-- [x] Remaining grader fixes; **grid freeze: `3084411`** — the `harness_git_sha` of every
-      grid run must be that commit or a descendant. Re-cutting before a grid cell runs means
+- [x] Remaining grader fixes; **grid freeze: `638f697` (re-cut 2026-08-05, before the
+      first block-A cell; previously `3084411`)** — the `harness_git_sha` of every
+      grid run must be that commit or a descendant. What the re-cut takes in, none of
+      which existed at `3084411`: the block-C machinery (`spawn_subagents` + the
+      `add_fact` bank), the in-loop axiom gate, budget-blind spawn reports, the
+      library-phase and triage plumbing, `grep_mathlib`'s Mathlib read access, and the
+      safe93 run list. It invalidates nothing that was a grid cell, because none of the
+      runs on record are: the 0802 FATE-X pass and the 0804 pilot chain both predate it,
+      and the ~08-02 model upgrade cuts their comparability anyway.
+      Re-cutting before a grid cell runs means
       updating the SHA here; re-cutting mid-grid means re-freezing and saying so. What each
       re-cut invalidates is stated in the commit that makes it; the 2026-07-31 model
       boundary does not move the freeze but cuts run comparability the same way. The
