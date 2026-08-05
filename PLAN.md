@@ -344,14 +344,17 @@ the spawn reports still leaked per-worker cost, removed since). Details and auto
       Claude session that launched it. Launcher and `COSTS.md` retargeted to safe87
       (2026-08-05): the per-cell ceiling drops to 87 × $1 = $87 and the expected cell to
       ~$23.
-      **Order: grep first (2026-08-05), then base**, then semantic and loogle. Grep is
-      the arm the autopsies most implicate (confirmation-retrieval: 398 unknown-identifier
-      errors across 193 hallucinated names in one attempt) and it is the newest code, so
-      it is the cell most worth seeing early. base-vs-grep is also the widest contrast in
-      the grid, which makes it the cheapest available test of the Setup section's open
-      decision: if those two cells produce too few discordant pairs, FATE-X is floored and
-      the grid moves to Putnam — read the discordance the moment cell two grades, not after
-      all five.
+      **Order as run: grep (launched 2026-08-05 16:23), then semantic, then base,
+      then loogle.** Grep first because the autopsies most implicate it
+      (confirmation-retrieval: 398 unknown-identifier errors across 193 hallucinated
+      names in one attempt) and it was the newest code, so it was the cell most worth
+      seeing early. Semantic second by decision on the day; it makes cell two the
+      grep-vs-semantic contrast — the discovery-vs-confirmation question the block is
+      actually about — rather than the effect-size ruler. **Consequence to hold onto:
+      the Setup section's open decision (does FATE-X floor or saturate the arms?) is
+      answered by base, so it now waits for cell three.** Grep's own solve rate is a
+      one-sided hint at best: a high number could be the arm working or the tier being
+      easy, and only base separates those.
 - [x] Implement `check_snippet` (smoked via scripted probes incl. timeout/memo paths;
       FATE-M arm smoke still cheap to add before the Block B run).
 - [ ] **Block B run**: snippet on the winning search → substitution analysis
