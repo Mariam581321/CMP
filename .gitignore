@@ -26,3 +26,5 @@ pi-agent/auth.json
 pi-agent/sessions/
 problems-fatex/*
 !problems-fatex/pilot10-0802.txt
+!problems-fatex/safe93.txt
+!problems-fatex/safe90.txt

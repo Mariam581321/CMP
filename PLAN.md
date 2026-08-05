@@ -40,11 +40,15 @@ at a time and isolate what moved the needle.
 
 ## Setup
 
-- **Benchmark: FATE-X** — 100 PhD-level algebra problems, 95 scoreable: fatex_13, 23,
+- **Benchmark: FATE-X** — 100 PhD-level algebra problems, 92 scoreable: fatex_13, 23,
   60, 75, 81 are annotated out as broken statements (machine-checked or hand-verified —
   `drafts/DRAFT-fatex-unsolved-audit-0803.md`, which sets the scoring rules and regrades
-  fatex_19 solved). **The grid run list is `problems-fatex/safe93.txt` — n = 93**, the 95
-  minus fatex_77 and fatex_99, which the same audit flags *suspect* rather than broken
+  fatex_19 solved), and fatex_2, 15, 63 join them from the solved-side audit
+  (`drafts/DRAFT-fatex-solved-audit-0805.md`: 2 is trivially true, 15 hypothesises an
+  empty type, 63 drops a surjectivity requirement — all three were graded *solved*, which
+  is why the 0803 unsolved-only pass could not see them).
+  **The grid run list is `problems-fatex/safe90.txt` — n = 90**, the 92
+  minus fatex_77 and fatex_99, which the 0803 audit flags *suspect* rather than broken
   (§4.1: 77's `ht P' = h+1` needs catenarity nobody assumed; §4.2: 99's abstract-group
   KRvS may be strictly stronger than intended, and it is where both 0804 spawn pilots
   axiom-gamed). Decided 2026-08-05, before the first grid cell: a suspect statement that
@@ -326,10 +330,12 @@ the spawn reports still leaked per-worker cost, removed since). Details and auto
       item above. (The ~08-02 model upgrade cuts comparability of every earlier run on
       top, without moving any freeze.) `COSTS.md` re-costed for the FATE-X grid at the
       post-upgrade pilot rates (~$0.21–0.39/problem/run).
-- [ ] **Block A runs** (FATE-X, `problems-fatex/safe93.txt`, n = 93): base, semantic,
+- [ ] **Block A runs** (FATE-X, `problems-fatex/safe90.txt`, n = 90): base, semantic,
       grep, loogle → repeat the winner (noise floor). Launcher:
       `scripts/blockA-fatex93-0805.sh <arm>` — one arm per invocation, sequential, so
       the account-wide `billed_usd` delta stays attributable to a single cell.
+      **The launcher and `COSTS.md` still say safe93 / n = 93** — they were left alone
+      because dropping to n = 90 changes the per-cell budget. Decide before Block A runs.
       **Order: grep first (2026-08-05), then base**, then semantic and loogle. Grep is
       the arm the autopsies most implicate (confirmation-retrieval: 398 unknown-identifier
       errors across 193 hallucinated names in one attempt) and it is the newest code, so
