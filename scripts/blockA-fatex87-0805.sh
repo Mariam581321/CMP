@@ -76,7 +76,7 @@ if [ -z "${CMP_IN_TMUX_LAUNCH:-}" ]; then
   echo "=== $RUN_ID launched in its own tmux session (survives ssh disconnect)"
   echo "    watch:  tmux attach -t $RUN_ID     (ctrl-b d to detach)"
   echo "    or:     tail -f $LOG"
-  echo "    status: node runner/status.js results/$RUN_ID"
+  echo "    status: node runner/status.js $RUN_ID"
   exit 0
 fi
 
