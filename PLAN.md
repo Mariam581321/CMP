@@ -298,8 +298,10 @@ the spawn reports still leaked per-worker cost, removed since). Details and auto
 
 ## Next steps
 
-- [x] Remaining grader fixes; **grid freeze: `638f697` (re-cut 2026-08-05, before the
-      first block-A cell; previously `3084411`)** — the `harness_git_sha` of every
+- [x] Remaining grader fixes; **grid freeze: `b6d312e` (re-cut 2026-08-05, before the
+      first block-A cell; same day's earlier cut `638f697` is superseded — the
+      class/structure statement check and the safe87 run list both landed after it;
+      previously `3084411`)** — the `harness_git_sha` of every
       grid run must be that commit or a descendant. What the re-cut takes in, none of
       which existed at `3084411`: the block-C machinery (`spawn_subagents` + the
       `add_fact` bank), the in-loop axiom gate, budget-blind spawn reports, the
