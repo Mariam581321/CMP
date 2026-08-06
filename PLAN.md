@@ -362,6 +362,26 @@ the spawn reports still leaked per-worker cost, removed since). Details and auto
       if search usage collapses.
 - [ ] Write the fair-comparison rationale (which post-hoc readout: solve-vs-token
       curves, matched dollars, cost-per-solve) *before* full-grid numbers exist.
+- [ ] **Candidate arm — how compiler output reaches the agent** (think about it; not
+      scheduled). Today the check result is one blob capped at 8000 chars
+      (`render()` in `lean-server.js`, `renderWithoutProbe()` in `stmt.js`), assembled
+      warnings-first and **sorries last, so the cap eats the sorries first**. Measured
+      on the first two block-A cells: **675/5689 checks truncated in grep (12%),
+      820/7369 in semantic (11%)**; one fatex_19 check spent its whole allowance on 78
+      repetitions of the same `unnecessarySeqFocus` lint. It is *not* currently a
+      correctness bug and should not be filed as one: the supervisor's done-gate reads
+      the structured `check.sorries`, never the rendered text, and 0 of the 42
+      `uses_sorry` attempts across both cells ended on a clean-looking truncated check.
+      What it plausibly costs is turns — an agent re-reading a wall of lint it cannot
+      see past. Options, cheapest first: (a) print sorries BEFORE the warning dump, so
+      the one thing that decides "am I done" always survives the cap; (b) write the full
+      output to a file in the work dir and show a digest plus a pointer, letting the
+      agent choose what to page in; (c) parse and summarize — dedupe repeated lint
+      classes, rank by severity, keep every error and elide the 78th copy of a style
+      note. Why this is an **arm and not a harness fix**: it changes what every agent
+      sees on every check, so landing it silently mid-grid would split a cell across two
+      observation channels. It needs its own cell and a freeze re-cut, and it belongs
+      after block A at the earliest.
 - [x] Block C machinery (2026-08-04, `SKELETON.md` has the arm designs of record):
       `spawn_subagents` as a blocking batch of parallel child-pi workers with
       child-usage roll-up (runner tails worker sessions; budget binds the sum; workers
