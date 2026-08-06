@@ -84,5 +84,11 @@ if [ "$(python3 -c "print(1 if float('$bal') < $MIN_BALANCE else 0)")" = "1" ]; 
 fi
 
 say "launching $NEXT_ARM"
-"$ROOT/scripts/blockA-fatex87-0805.sh" "$NEXT_ARM" 2>&1 | tee -a "$LOG"
+# env -u, and not a plain call: this script re-execs ITSELF with
+# CMP_IN_TMUX_LAUNCH=1, and a child inherits it. The launcher reads that same
+# variable to mean "you are already in your own session, run in the foreground
+# and skip the prerequisites" — so an inherited copy makes the next cell run
+# inside the chain's pane with every guard skipped, under a session named for
+# the chain rather than the run. (Observed on the semantic cell, 2026-08-06.)
+env -u CMP_IN_TMUX_LAUNCH "$ROOT/scripts/blockA-fatex87-0805.sh" "$NEXT_ARM" 2>&1 | tee -a "$LOG"
 say "chain done (the cell now runs in its own tmux session)"
