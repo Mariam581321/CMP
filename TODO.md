@@ -5,8 +5,12 @@
 Running on `cmp`: a Hetzner auction box, 6C/12T, 62 GB usable, no Windows and no WSL
 underneath. Consequences already banked: the REPL pool defaults to 8 workers
 (`CMP_REPL_WORKERS` in `runner/lean-server.js`), run concurrency defaults to 25
-(`runner/run.js` — the laptop-era 12 GB memory floor is gone), and the memory fuses have
-not fired since the move. The watchdog lives in a tmux session (`tmux attach -t
+(`runner/run.js` — the laptop-era 12 GB memory floor is gone). The claim that stood here
+until 2026-08-06 — "the memory fuses have not fired since the move" — was wrong the day
+it was written and got worse: the RSS fuse fired 234 times in grep-fatex87-0805 alone.
+The cause was snapshot retention in the vendored repl, not the box (SKELETON.md, "The
+REPL keeps nothing it is not asked to keep"); it is fixed, and the fuse is recalibrated
+for a pool that no longer grows. The watchdog lives in a tmux session (`tmux attach -t
 watchdog`) rather than a foreground terminal, so it survives session teardown, which was
 the last laptop-shaped failure mode in the harness. The `claude remote-control` story
 below is still accurate and still the way to drive a run from elsewhere.

@@ -173,6 +173,36 @@ is tagged with the fuse that fired (`bound: cpu | wall | rss | mem`) and every c
 records its own `wall_ms`/`cpu_ms` (absent on memo hits, so replays are distinguishable
 from measurements).
 
+**The REPL keeps nothing it is not asked to keep (2026-08-06).** Upstream repl records
+every environment a command produces into `cmdStates`, and one `ProofSnapshot` per
+`sorry` into `proofStates`, so a client can resume from an index later. The arrays never
+shrink — an id handed out has to stay valid. CMP never resumes: every check is sent
+against the worker's base env and the returned id is discarded. So each check left behind
+an immortal copy of everything its file elaborated, and since an agent resubmits its
+*whole* file each time, retention grew with the sum of the file's sizes over the attempt,
+not its final size. grep-fatex87-0805 paid for that: ~1.4 GB per worker per 10 min of
+serving, the RSS fuse firing 234 times (every worker every ~16 min, median 12 MB past the
+line — workers parked under the cap and drifting across it, not checks demanding memory),
+3.9 h of check work discarded on kill, and two attempts losing their verdict to
+`grader_error` — one of them, fatex_19, a complete sorry-free proof for the second run
+running (first flagged in the 0803 unsolved audit). The vendored repl now bounds both
+arrays (`REPL_CMD_SNAPSHOT_LIMIT`, `REPL_PROOF_SNAPSHOT_LIMIT`, set per worker in
+`startRepl`); the base envs are kept so they can still be named, and an id past the limit
+resolves to "Unknown environment" rather than to the wrong env. Stock repl ignores both,
+so an unpatched binary still serves — it just leaks again, visibly, in the rss log lines.
+
+The fuse moved with it (9000 → 13000 MB per worker, avail floor 4000 → 6000), because
+9000 was calibrated in July *against the leak*: "healthy" then meant a worker climbing to
+7.1 GB in 10 minutes, which put the highest non-false-firing line at ~8.5 GB. It was also
+simply too low — a fresh worker sits at 6.35 GB RSS and FATE-X's heaviest file adds ~2 GB
+of its own, so fatex_19 was marginal even on a pristine REPL. Note what the swept number
+means: RSS counts each worker's ~5.2 GB `.olean` mapping in full, and those are clean
+file-backed pages the kernel holds once for the pool. Measured across 8 live workers on
+2026-08-06: 6.35-7.7 GB RSS each, 1.16-2.56 GB PSS each — ~17 GB of real memory behind
+~60 GB of summed RSS. Any per-worker RSS line is therefore ~5 GB above the memory it
+protects, which is why `CMP_MIN_AVAIL_MB`, not the per-worker cap, is what actually keeps
+the box alive.
+
 Heartbeats bound elaboration, not kernel reduction — a `decide`-heavy proof passes
 elaboration under the cap and is then replayed by the kernel with no heartbeat cap. That
 rare class cannot be bounded deterministically, so it is flagged, not verdicted: kernel

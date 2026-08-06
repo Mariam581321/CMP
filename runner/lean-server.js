@@ -48,20 +48,36 @@
 //        verdict (2026-08-01) costs only wall time, never a verdict flip, and full
 //        occupancy is rare (checks arrive bursty between LLM turns). 8 of 12 threads
 //        leaves room for the runner, the pi children and a Claude session.
-//      CMP_REPL_MAX_RSS_MB (default 9000; 0 = off) — per-worker balloon fuse.
-//        Measured 2026-07-26: a HEALTHY worker group idles ~5.9 GB post-import and
-//        reaches ~7.1 GB within 10 min of serving (heap grows per check until the
-//        REPL watchdog's ~5-min restart churn resets it), so anything below
-//        ~8.5 GB false-fires; 9000 catches only true balloons (the Jul-25 OOM class).
-//      CMP_MIN_AVAIL_MB (default 4000; 0 = off) — system fuse: when /proc/meminfo
+//      CMP_REPL_MAX_RSS_MB (default 13000; 0 = off) — per-worker balloon fuse.
+//        Raised from 9000 on 2026-08-06, with the snapshot-retention fix below; the
+//        two are one change. 9000 was calibrated 2026-07-26 against a pool whose heap
+//        grew per check, where "a healthy worker reaches ~7.1 GB in 10 min" made 8.5 GB
+//        the highest non-false-firing line. It fired 234 times in grep-fatex87-0805 —
+//        every worker every ~16 min, median 12 MB past the line, i.e. workers parked
+//        under the cap and drifting across it, not checks demanding memory. Two of
+//        those cost an attempt its verdict (fatex_19, fatex_31).
+//        With retention capped a fresh worker sits at 6.35 GB RSS and stays there, and
+//        the heaviest file in FATE-X (fatex_19: 2113 lines, 272 decls) adds ~2 GB of
+//        its own — which 9000 did not clear even on a pristine worker. 13000 leaves
+//        that file ~4.5 GB of margin and still catches the balloon class this fuse
+//        exists for (the Jul-25 OOM, tens of GB in one check).
+//      CMP_MIN_AVAIL_MB (default 6000; 0 = off) — system fuse: when /proc/meminfo
 //        MemAvailable drops below this, kill the fattest worker. Self-adjusting
 //        (page sharing between workers, cache eviction) where RSS math is not.
-//        This is the fuse that actually protects a multi-worker box: 8 x the 9 GB RSS
+//        This is the fuse that actually protects a multi-worker box: 8 x the 13 GB RSS
 //        cap is more memory than exists, so the per-worker cap alone stops nothing.
-//        Raised from 1200 with the worker count — the floor has to be crossable before
-//        the pool can allocate its way past it, and 8 workers can claim 1.2 GB between
-//        two sweeps. It doubles as the load governor: if it fires more than
-//        occasionally (see "system memory low" log lines), run fewer workers.
+//        Raised 4000 -> 6000 with the RSS cap: the floor is what a single ballooning
+//        worker now has to cross before its OWN cap fires, so it needs more room than
+//        when the per-worker line sat at 9000. It doubles as the load governor: if it
+//        fires more than occasionally (see "system memory low" log lines), run fewer
+//        workers.
+//
+// WHY RSS OVERSTATES THE COST (it is a fuse, not a budget): the number swept here
+// counts each worker's ~5.2 GB .olean mapping in full, and those are clean file-backed
+// pages the kernel holds ONCE for the whole pool. Measured 2026-08-06 on 8 live
+// workers: 6.35-7.7 GB RSS each but 1.16-2.56 GB PSS each — ~17 GB of real memory for
+// a pool whose RSS sums to ~60. Any per-worker RSS line is therefore ~5 GB higher than
+// the memory it is protecting; CMP_MIN_AVAIL_MB is the number that tracks reality.
 
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -76,8 +92,8 @@ const LEAN_ENV = process.env.CMP_LEAN_ENV ?? join(ROOT, "lean-env");
 const REPL_BIN = process.env.CMP_REPL_BIN ?? join(ROOT, "vendor/repl/.lake/build/bin/repl");
 const PORT = parseInt(LEAN_PORT);
 const WORKERS = Math.max(1, parseInt(process.env.CMP_REPL_WORKERS ?? "8"));
-const MAX_RSS_MB = parseInt(process.env.CMP_REPL_MAX_RSS_MB ?? "9000");
-const MIN_AVAIL_MB = parseInt(process.env.CMP_MIN_AVAIL_MB ?? "4000");
+const MAX_RSS_MB = parseInt(process.env.CMP_REPL_MAX_RSS_MB ?? "13000");
+const MIN_AVAIL_MB = parseInt(process.env.CMP_MIN_AVAIL_MB ?? "6000");
 // CPU fuse — machine protection, NOT a budget and never a verdict (2026-08-01). It was
 // THE check budget (120 CPU-s) until the fateh_32 incident: any verdict defined by a
 // measured quantity has a noise band around its threshold, and the same 49 KB file
@@ -183,14 +199,36 @@ function sendToRepl(w, obj, budget) {
   });
 }
 
+let retentionWarned = false;
+
 async function startRepl(w) {
   w.ready = false;
+  w.lastCheckEnv = null; // ids restart with the process; see the retention guard below
   // proc identity guard: after a restart, a half-dead old REPL can still emit
   // output/close events; those must never reach the current onResponse resolver
   // (seen in practice: a stale check response consumed as the import response).
   // detached => repl gets its own process group, so killing -pid takes down the
   // lake wrapper AND the repl binary (otherwise restarts leak 6 GB orphans)
-  const proc = spawn("lake", ["env", REPL_BIN], { cwd: LEAN_ENV, env: process.env, stdio: ["pipe", "pipe", "pipe"], detached: true });
+  // Snapshot retention: the REPL stores every environment it produces so a client can
+  // resume from it (`{"cmd": ..., "env": 17}`), and the arrays only ever grow. We never
+  // resume — every check is sent against baseEnv and the returned id is discarded (see
+  // handleCheck) — so past the base envs each snapshot is garbage that pins the whole
+  // elaborated environment of a 2000-line proof file. That was ~1.4 GB per worker per
+  // 10 min of serving, and it is what walked the pool into the RSS fuse 234 times in
+  // grep-fatex87-0805. Keep exactly the base envs (import, then the baked library if
+  // there is one) and drop the rest; proof snapshots, one per `sorry`, we never name at
+  // all. Stock upstream repl ignores both variables, so an unpatched binary still runs —
+  // it just leaks again, visibly, in the rss cap log lines.
+  const proc = spawn("lake", ["env", REPL_BIN], {
+    cwd: LEAN_ENV,
+    env: {
+      ...process.env,
+      REPL_CMD_SNAPSHOT_LIMIT: String(LIB_SOURCE != null ? 2 : 1),
+      REPL_PROOF_SNAPSHOT_LIMIT: "0",
+    },
+    stdio: ["pipe", "pipe", "pipe"],
+    detached: true,
+  });
   // Without these two handlers an unhandled 'error' event is an uncaught exception
   // that kills the WHOLE server: (a) spawn failure (broken PATH — a session-spawned
   // server does not get the watchdog's exports); (b) EPIPE on stdin when a check is
@@ -527,6 +565,23 @@ async function handleCheck(w, prep) {
   }
   try {
     const resp = await sendToRepl(w, { cmd: prep.text, env: w.baseEnv ?? 0 }, { cpuMs: CPU_FUSE_MS, wallMs: WALL_FUSE_MS });
+    // Retention guard. The REPL_*_SNAPSHOT_LIMIT vars startRepl passes are silently
+    // ignored by a stock repl, so pointing CMP_REPL_BIN at one — or rebuilding
+    // vendor/repl from upstream — brings the leak back with nothing to see until the
+    // rss cap starts firing hours into a run. The tell is free: a capped repl hands
+    // back the SAME env id every check (the index the dropped snapshot would have had),
+    // a stock one hands back an increasing id. Warn once per server, not per check.
+    if (typeof resp.env === "number") {
+      if (w.lastCheckEnv != null && resp.env !== w.lastCheckEnv && !retentionWarned) {
+        retentionWarned = true;
+        log(
+          `WARNING: repl is retaining command snapshots (env id ${w.lastCheckEnv} -> ${resp.env}). ` +
+            `This binary is not the retention-capped build (${REPL_BIN}); the pool will grow into ` +
+            `the ${MAX_RSS_MB}MB rss cap and checks will be killed and requeued.`,
+        );
+      }
+      w.lastCheckEnv = resp.env;
+    }
     const result = render(resp, prep.shifted);
     memoPut(prep.key, result);
     // Timings stay OUT of the memo: a replayed verdict must never report the original
