@@ -362,8 +362,31 @@ the spawn reports still leaked per-worker cost, removed since). Details and auto
       if search usage collapses.
 - [ ] Write the fair-comparison rationale (which post-hoc readout: solve-vs-token
       curves, matched dollars, cost-per-solve) *before* full-grid numbers exist.
-- [ ] **Candidate arm — how compiler output reaches the agent** (think about it; not
-      scheduled). Today the check result is one blob capped at 8000 chars
+- [x] **How compiler output reaches the agent — landed as the default, 2026-08-07**
+      (`runner/render.js`; SKELETON.md "What a check LOOKS like" is the design of
+      record). Not run as an arm in the end: **every block-A cell reruns anyway** on
+      this re-cut, so there is no split channel to protect and no cell to spend — the
+      old channel simply stops existing. What shipped, against the options below:
+      (a) and (d) together, plus (b) as a companion — header line stating the error
+      count and every sorry's line number, then errors → sorries → warnings; the eight
+      style linters off at source in `prepare()` (`linter.deprecated` and
+      `linter.dupNamespace` deliberately kept); identical messages deduped to one plus
+      their locator list; the heartbeat note once per check instead of once per message
+      (3,991 copies, 1.72 MB across the two cells); cap raised 8 KB → 16 KB; the full
+      uncapped output written to `.check/last.txt` every check with the header pointing
+      at it; and, when the cap does bind, the ERROR section absorbs the cut, never the
+      sorries. (c) was designed and rejected as too much machinery for the gain.
+      Replaying the 13,058 recorded checks (`scripts/render-replay.mjs`): 1,495
+      truncations → 0, 175 checks that lost every sorry goal → 0, 39.2 MB → 25.1 MB of
+      agent-visible text. Invariants probed Lean-free in `scripts/probe-render.mjs`;
+      `maxErrors` was tested and does NOT work in our path (it lives in the CLI's
+      reportMessages, not the REPL's message harvest — `set_option maxErrors 1` on a
+      3-error file returns all 3). Lean's `pp.deepTerms.threshold` DOES shrink big goals
+      (840 → 120 bytes on a probe) and is left alone on purpose: unlike lint
+      suppression it removes information the agent may need, so it is a knob for later,
+      chosen from replayed real checks rather than guessed.
+      The original entry, kept for the reasoning:
+      Today the check result is one blob capped at 8000 chars
       (`render()` in `lean-server.js`, `renderWithoutProbe()` in `stmt.js`), assembled
       warnings-first and **sorries last, so the cap eats the sorries first**. Measured
       on the first two block-A cells: **675/5689 checks truncated in grep (12%),

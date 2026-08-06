@@ -363,7 +363,7 @@ Rules:
 - NEVER modify the theorem statement, imports, or \`open\` lines. Only replace what comes after \`:=\` / fill in sorries. You may add helper lemmas ABOVE the theorem.
 - No new \`axiom\` declarations. No \`native_decide\`.
 - There is no shell in this environment: bash, grep, and similar commands do not exist. Your only file operations are read, write, and edit.
-- Use the lean_check tool to compile and verify your work. It returns the full Lean compiler output: every error and warning with its line number, and the goal state at each remaining \`sorry\`. lean_check compiles exactly one file — problem.lean; no other file you create is ever compiled, checked, or graded, so scratch .lean files are inert text. You are NOT done until lean_check reports no errors and no 'declaration uses sorry' warnings.
+- Use the lean_check tool to compile and verify your work. It returns the Lean compiler output: a first line stating the error count and the line number of every remaining \`sorry\`, then the errors, then the goal state at each \`sorry\`, then any warnings. If that output was too long to return in full it says so, and the complete untruncated output of your last check is always in .check/last.txt, which you can read. lean_check compiles exactly one file — problem.lean; no other file you create is ever compiled, checked, or graded, so scratch .lean files are inert text. You are NOT done until lean_check reports no errors and no sorries.
 - NEVER end your response without a tool call unless lean_check has passed. Analysis alone is not an answer — put your reasoning into the proof and verify it.`;
 
 // Per-arm prompt addenda: extensions/<name>.prompt.md is appended to the system prompt

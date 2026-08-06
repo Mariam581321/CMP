@@ -8,11 +8,12 @@
 // never by diffing source text (immune to reformatting, notation, binder renames,
 // open-shadowing in both directions).
 
-import { readFileSync, writeFileSync, renameSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { postCheck, classifyLines, ALLOWED_AXIOMS } from "./common.js";
+import { postCheck, classifyLines, ALLOWED_AXIOMS, MAX_HEARTBEATS } from "./common.js";
+import { renderCheck } from "./render.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const STMT_CACHE = join(ROOT, "problems", "stmt-types.json");
@@ -292,26 +293,36 @@ export async function verifyStatement(problemName, originalSource, messages) {
 // 50 attempts in the 0730b run and again on 0731: agents responded by re-checking the
 // byte-identical file, spending a turn to re-ask a question already answered. It also
 // left the statement-changed message quoting an empty "Compiler output:".
-// Same shape as lean-server's render() and snippet.js's renderSnippet(), so one error
-// format is used everywhere; `ok` is recomputed from the visible messages, which is the
-// same verdict since the probe only ever emits info.
+// Shape and cap live in runner/render.js, shared with lean-server's render() and
+// snippet.js's renderSnippet(), so one error format is used everywhere; `ok` is
+// recomputed from the visible messages, which is the same verdict since the probe only
+// ever emits info.
 const PROBE_LINE = /^\s*CMP(?:STMT|VAL)\|/;
 // `#print axioms` reports are probe internals too (since 2026-08-04 they ride on every
 // checkedCompile, not only the grader's request): the verdict is parsed line-gated and
 // surfaced as an explicit axiom-check message, so the raw report lines are stripped
 // from rendered output the same way CMPSTMT lines are.
 const AXIOM_LINE = /^'[^']*' (?:depends on axioms|does not depend on any axioms)/;
-export function renderWithoutProbe(messages, sorries) {
+export function renderWithoutProbe(messages, sorries, opts = {}) {
   const visible = (messages ?? []).filter((m) => !PROBE_LINE.test(m.text ?? "") && !AXIOM_LINE.test(m.text ?? ""));
-  const parts = [];
-  for (const m of visible) parts.push(`${m.severity}: problem.lean:${m.line}:${m.column}: ${m.text}`);
-  for (const s of sorries ?? []) parts.push(`sorry at line ${s.line}, goal:\n  ${s.goal}`);
-  const ok = !visible.some((m) => m.severity === "error");
-  let pretty = parts.join("\n\n") || "compiled successfully: no errors, no warnings";
-  if (ok && parts.length) pretty = `compiled with output:\n${pretty}`;
-  if (!ok) pretty = `compilation FAILED:\n${pretty}`;
-  if (pretty.length > 8000) pretty = pretty.slice(0, 8000) + "\n... (truncated)";
-  return pretty;
+  return renderCheck({ messages: visible, sorries, maxHeartbeats: MAX_HEARTBEATS, ...opts });
+}
+
+// The full, uncapped rendering goes to a file in the work dir on EVERY check, so the
+// agent-facing text can be a digest without anything being destroyed: whatever the cap
+// leaves out is one `read` away, and the header says where. Failure to write is not a
+// check failure — the digest still stands on its own, and a check is not the moment to
+// tell an agent about our filesystem.
+export const CHECK_OUTPUT_DIR = ".check";
+export const CHECK_OUTPUT_FILE = "last.txt";
+function writeFullOutput(dir, name, text) {
+  try {
+    mkdirSync(join(dir, CHECK_OUTPUT_DIR), { recursive: true });
+    writeFileSync(join(dir, CHECK_OUTPUT_DIR, name), text);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // --- agent-facing check client ----------------------------------------------
@@ -334,7 +345,7 @@ export function bannedTactic(code) {
   return NATIVE_DECIDE_RE.test(codeOnly) ? "native_decide" : null;
 }
 
-export async function checkedCompile(code, { original, problemName, client }) {
+export async function checkedCompile(code, { original, problemName, client, workDir = null, cap = undefined }) {
   if (bannedTactic(code)) {
     return {
       ok: false,
@@ -381,5 +392,12 @@ export async function checkedCompile(code, { original, problemName, client }) {
       .filter((a) => !ALLOWED_AXIOMS.has(a) && a !== "sorryAx");
     if (bad.length) axiomsBad[d] = bad;
   }
-  return { ...r, pretty: renderWithoutProbe(r.messages, r.sorries), probe, stmt, axiomsBad };
+  // Render twice over the same structured messages: once uncapped for the file, once as
+  // the digest the agent reads. The digest only advertises the file if the write landed.
+  const bare = renderWithoutProbe(r.messages, r.sorries, { cap });
+  const wrote = workDir ? writeFullOutput(workDir, CHECK_OUTPUT_FILE, bare.full) : false;
+  const shown = wrote
+    ? renderWithoutProbe(r.messages, r.sorries, { cap, outputName: `${CHECK_OUTPUT_DIR}/${CHECK_OUTPUT_FILE}` })
+    : bare;
+  return { ...r, pretty: shown.pretty, full: bare.full, probe, stmt, axiomsBad };
 }

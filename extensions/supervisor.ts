@@ -122,7 +122,13 @@ export default function (pi: ExtensionAPI) {
     for (;;) {
       try {
         check = origPath && existsSync(origPath)
-          ? await checkedCompile(content, { original: readFileSync(origPath, "utf8"), problemName: problem, client: problem })
+          // Rendered at the nudge's own budget rather than sliced to 3000 after the fact:
+          // a prefix slice of a full-size check used to hand a nudged agent 3 KB that
+          // could be pure warning text, with the sorry list — the thing the nudge is
+          // about — past the cut. renderCheck keeps the header and the sorries and lets
+          // the errors absorb it. No workDir: the file this writes is lean_check's, and
+          // the supervisor must not overwrite it behind the agent's back.
+          ? await checkedCompile(content, { original: readFileSync(origPath, "utf8"), problemName: problem, client: problem, cap: 3000 })
           : await serverCheck(content, problem); // adhoc run without CMP_CONFIG
         break;
       } catch (e: any) {
@@ -161,7 +167,7 @@ export default function (pi: ExtensionAPI) {
       (axBad
         ? `IMPORTANT: your proof depends on disallowed axioms (${Object.entries(axiomsBad).map(([d, a]) => `${d}: [${a.join(", ")}]`).join("; ")}). Grading accepts only propext, Classical.choice and Quot.sound, so this can never count. Remove the axiom declarations and prove those steps honestly.\n\n`
         : "") +
-      `Checking your current problem.lean reports:\n\n${(check?.pretty ?? "no check result available").slice(0, 3000)}\n\nFix this and run lean_check; do not stop until it passes with no errors and no sorries.`;
+      `Checking your current problem.lean reports:\n\n${check?.pretty ?? "no check result available"}\n\nFix this and run lean_check; do not stop until it passes with no errors and no sorries.`;
     try {
       // pi.sendUserMessage (ExtensionAPI, not the event ctx): messages queued by
       // agent_end handlers get a continuation inside the same headless prompt()

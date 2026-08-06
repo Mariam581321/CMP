@@ -155,6 +155,30 @@ which narrowed the noise band but could not zero it — fateh_32 (0801, ~49 KB p
 line) was measured four times on the same bytes and flipped twice, recording
 `compile_error` on a proof the agent watched compile. Count, don't measure.
 
+**What a check LOOKS like (2026-08-07 re-cut, `runner/render.js`).** One renderer serves
+lean_check, plan_check, check_snippet, the supervisor's nudge and the server's own
+`pretty`. Every result opens with a header line — `FAILED — 12 errors (5 distinct), 3
+sorries at line 44, 88, 120 · full output: .check/last.txt` — so the done-signal is the
+first 200 characters and no cap can reach it; then errors, then sorries, then warnings.
+Identical message texts collapse to one plus their locator list, and the heartbeat note
+is emitted once per check rather than once per message. The cap is 16 KB, and when it
+binds it is the ERROR section that absorbs the cut (marked inline), never the sorries:
+errors are the only unbounded section (p50 217 chars, max 7 996, up to 160 in one check,
+against p90 835 for a goal and at most 14 sorries ever seen). The full uncapped output is
+written to `.check/last.txt` in the work dir on every check, so nothing is ever destroyed
+— only deferred to a `read`. **Style linters are off at source**: `prepare()` injects
+`set_option linter.<8 classes> false` on the same physical line as the heartbeat cap (one
+line, or every reported line number shifts). `linter.deprecated` and `linter.dupNamespace`
+stay ON — the first is free retrieval of renamed lemmas, the second is the one lint that
+flags a grader-visible fault (a doubled namespace grades as "declaration missing").
+What this replaced: warnings first, sorries LAST, then a blunt 8 000-char prefix slice.
+Measured over the 13 058 checks of the first two block-A cells: 1 495 truncated (11.4%),
+175 of them losing every sorry goal on a file that had sorries, 47% of all checks
+carrying errors and sorries at once, and 25% of all check bytes spent on style lints.
+Replaying that corpus through the new renderer (`scripts/render-replay.mjs`): 0 truncated,
+0 lost goals, 39.2 MB → 25.1 MB of agent-visible text. Invariants are probed without Lean
+in `scripts/probe-render.mjs`.
+
 **No resource bound is ever a verdict.** CPU (600 s, `CMP_CPU_FUSE_MS`), wall (900 s),
 RSS and MemAvailable are machine fuses. A fuse kill is **never reported to the client at
 all**: the server requeues the check and answers only once Lean itself has answered.
@@ -355,6 +379,9 @@ runner/regrade.js           re-grade finished runs with the current grader (read
 runner/highwater.js         the done-gate (verifiedDone) + solved high-water snapshots
 scripts/highwater-scan.mjs  reconstruct the high-water mark for pre-0807 runs from the
                             session files (read-only; md5-checked edit replay)
+runner/render.js            the one agent-facing rendering of a compile result (header,
+                            error/sorry/warning order, dedupe, 16 KB cap) — shared by
+                            lean_check, plan_check, check_snippet and the server itself
 runner/lean-server.js       persistent Lean REPL HTTP daemon (round-robin across clients)
 runner/plan.js              plan_check core logic
 extensions/lean-check.ts    always-on agent-facing compile tool

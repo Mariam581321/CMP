@@ -164,8 +164,13 @@ function scanAttempt(runDir, name, problemsDir) {
     checkIndex++;
     const h = HEADER.exec(text);
     const d = m.details ?? null;
-    const truncated = text.trimEnd().endsWith("(truncated)");
-    const sorried = text.includes("sorry at line") || text.includes("declaration uses 'sorry'");
+    // Both renderers, because this scanner reads transcripts from before and after the
+    // 2026-08-07 check-output re-cut: the old one ended a cut result with "(truncated)"
+    // and printed sorries last (hence "ambiguous" — an ok-looking check that may have
+    // hidden a sorry list); the new one cuts only the ERROR section, marks it inline, and
+    // states every sorry line in its header, so `ambiguous` cannot arise in new runs.
+    const truncated = text.trimEnd().endsWith("(truncated)") || text.includes("[... errors truncated");
+    const sorried = /sorr(?:y|ies) at line/.test(text) || text.includes("declaration uses 'sorry'");
     const replayMd5 = md5(state);
     const rec = {
       index: checkIndex,

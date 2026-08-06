@@ -4,8 +4,9 @@
 // extensions/lean-snippet.ts (and block-C workers, which get this instead of
 // lean_check).
 
-import { postCheck } from "./common.js";
+import { postCheck, MAX_HEARTBEATS } from "./common.js";
 import { CLIENT_WAIT_MS, bannedTactic } from "./stmt.js";
+import { renderCheck } from "./render.js";
 
 // The server renders message positions as `problem.lean:line:col` (historically its
 // only compiled file); for a snippet that label is actively misleading — the agent
@@ -13,19 +14,12 @@ import { CLIENT_WAIT_MS, bannedTactic } from "./stmt.js";
 // structured messages/sorries with `snippet:` labels instead of changing the server:
 // a server-side label param would poison the memo (keyed by code hash alone, so the
 // first caller's label would be served to everyone compiling identical code).
-// Format otherwise mirrors lean-server.js render(), so the agent sees one error
-// shape across both check tools.
-function renderSnippet(messages, sorries) {
-  const parts = [];
-  for (const m of messages ?? []) parts.push(`${m.severity}: snippet:${m.line}:${m.column}: ${m.text}`);
-  for (const s of sorries ?? []) parts.push(`sorry at line ${s.line}, goal:\n  ${s.goal}`);
-  const ok = (messages ?? []).every((m) => m.severity !== "error");
-  let pretty = parts.join("\n\n") || "snippet compiled successfully: no errors, no warnings";
-  if (ok && parts.length) pretty = `snippet compiled with output:\n${pretty}`;
-  if (!ok) pretty = `snippet compilation FAILED:\n${pretty}`;
-  if (pretty.length > 8000) pretty = pretty.slice(0, 8000) + "\n... (truncated)";
-  return { ok, pretty };
-}
+// Format is otherwise renderCheck's, so the agent sees one error shape across both check
+// tools. No `outputName` here: a snippet is stateless and block-C workers have no file
+// tools at all, so there is nothing for a pointer to point at — the digest is the whole
+// channel, which is why it gets the same 16 KB cap rather than a smaller one.
+const renderSnippet = (messages, sorries) =>
+  renderCheck({ messages, sorries, label: "snippet", maxHeartbeats: MAX_HEARTBEATS });
 
 // `prefix` (the facts arm): compile [prefix + snippet] so the shared fact bank is in
 // scope for scratch work — the bank's whole point as a channel. The prefix is trusted

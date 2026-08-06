@@ -87,6 +87,10 @@ export default function (pi: ExtensionAPI) {
               original: readFileSync(origPath, "utf8"),
               problemName,
               client: problemName,
+              // Full uncapped compiler output lands in <cwd>/.check/last.txt every check;
+              // the digest's header points at it. Inside the sandbox root on purpose —
+              // the agent is meant to read it — and it is never compiled or graded.
+              workDir: ctx.cwd,
             })) as any;
             break;
           } catch (e: any) {
@@ -163,7 +167,15 @@ export default function (pi: ExtensionAPI) {
             cost_std: +(costStd(tokens) + workerSpendStd(cfg, ctx.cwd)).toFixed(5),
           });
         }
-        return { content: [{ type: "text", text }], details: { ok, cached: r.cached }, isError: false };
+        // full_bytes/cut are write-only bookkeeping (details never reach the model): they
+        // are how "how often does the 16 KB digest still overflow, and by how much" stops
+        // being unanswerable. Under the old renderer the tail of a truncated check was
+        // recorded nowhere, so every count of what the cap destroyed was a lower bound.
+        return {
+          content: [{ type: "text", text }],
+          details: { ok, cached: r.cached, full_bytes: r.full?.length ?? null, cut: (r.pretty ?? "").includes("[... errors truncated") },
+          isError: false,
+        };
       } catch (e: any) {
         // Thrown = the request never got a server response (connection refused mid-
         // restart, client-side socket error) — genuinely transient, unlike the typed

@@ -112,7 +112,7 @@ export async function grade(problemName, solutionPath, originalPath, opts = {}) 
   // that the same bytes can fail one minute and pass the next.
   if (r.error) return fail("grader_error", `${r.error}${r.bound ? ` [bound: ${r.bound}]` : ""}`);
   // Probe/axiom internals stay out of recorded details — only real compiler output.
-  const pretty = renderWithoutProbe(r.messages, r.sorries);
+  const { pretty } = renderWithoutProbe(r.messages, r.sorries);
 
   // Classification order (statement first, matching the old grader's priority):
   // probe output → statement checks → compile status → axiom checks.

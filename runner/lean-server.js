@@ -86,6 +86,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { LEAN_PORT, MAX_HEARTBEATS } from "./common.js";
+import { renderCheck } from "./render.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const LEAN_ENV = process.env.CMP_LEAN_ENV ?? join(ROOT, "lean-env");
@@ -492,59 +493,67 @@ const clampHeartbeats = (line) =>
     return Number.isFinite(v) && v > 0 && v <= MAX_HEARTBEATS ? whole : `${head}${MAX_HEARTBEATS}`;
   });
 
+// Style linters, off at source. They are advice about tidiness — none of them can change
+// a verdict (the grade is compiles / sorry-free / statement intact / axioms clean) — and
+// they were 25% of every byte the check channel spent in the first two block-A cells:
+// 20,652 `unusedSimpArgs`, 13,546 `unnecessarySimpa`, 3,794 `unusedVariables` and the
+// rest, 9.8 MB of the 39.2. Suppressing them recovers 92%/83% of the truncated checks in
+// those cells without touching one bit of what Lean decides.
+// Deliberately NOT in the list:
+//   * `linter.deprecated` — `Use \`map_add\` instead` is free retrieval, the compiler
+//     handing the agent the modern name (~1,180 occurrences across the two cells);
+//   * `linter.dupNamespace` — the only lint here that flags a GRADER-visible fault: a
+//     file that nests `Problem1` inside `Problem1` compiles fine and grades as
+//     "declaration missing", because the grader looks declarations up by qualified name;
+//   * anything blanket (`linter.all`) — it would take both of the above with it.
+// Every name is a registered option in the v4.27.0 pin (core, Batteries, Mathlib); an
+// unknown option is an ERROR, so a typo here reds every check in a run.
+const LINTERS_OFF = [
+  "unusedSimpArgs", "unnecessarySimpa", "unusedVariables", "unnecessarySeqFocus",
+  "unusedTactic", "unreachableTactic", "unusedSectionVars", "unusedRCasesPattern",
+].map((l) => `set_option linter.${l} false`).join(" ");
+
 // Replace import lines (Mathlib is already in the env); the first one becomes the
 // heartbeat cap so line numbers in errors stay aligned with the agent's file. The cap is
 // a file-level `set_option`, so it applies to every declaration BELOW it and each one
 // gets the full allowance — the bound is per declaration, not per file (a file with many
 // expensive declarations can still cost arbitrarily much CPU in total; that is the CPU
 // fuse's business, and no longer any verdict's).
+// The linter suppressions ride on that SAME physical line: Lean parses commands
+// whitespace-separated, so several `set_option`s share a line happily, and one line in
+// means `shifted` bookkeeping stays as it was. Spending an extra line here would shift
+// every reported line number by one against the file the agent is editing.
+const PREPARE_HEAD = `set_option maxHeartbeats ${MAX_HEARTBEATS} ${LINTERS_OFF}`;
 function prepare(code) {
   const lines = code.split("\n").map(clampHeartbeats);
   let capPlaced = false;
   for (let i = 0; i < lines.length; i++) {
     if (/^\s*import\s/.test(lines[i])) {
-      lines[i] = capPlaced ? "" : `set_option maxHeartbeats ${MAX_HEARTBEATS}`;
+      lines[i] = capPlaced ? "" : PREPARE_HEAD;
       capPlaced = true;
     }
   }
   let shifted = 0;
   if (!capPlaced) {
-    lines.unshift(`set_option maxHeartbeats ${MAX_HEARTBEATS}`);
+    lines.unshift(PREPARE_HEAD);
     shifted = 1;
   }
   return { text: lines.join("\n"), shifted };
 }
 
-// Lean's own advice when a declaration runs out of heartbeats is "use `set_option
-// maxHeartbeats <num>` to set the limit" — the one move this harness makes impossible
-// (prepare() clamps it). An agent that follows it re-checks a file whose verdict cannot
-// change and burns turns on it, so the note travels with the message. Attached to the
-// MESSAGE, not to `pretty`, because the agent-facing text is rebuilt from messages
-// (stmt.js renderWithoutProbe) and both paths must say the same thing.
-const HEARTBEAT_TIMEOUT = /maximum number of heartbeats/;
-const HEARTBEAT_NOTE =
-  `\n\nNOTE (harness): every check fixes maxHeartbeats at ${MAX_HEARTBEATS} per declaration; a ` +
-  `\`set_option maxHeartbeats\` in your file can only lower that, never raise it. Raising it will not ` +
-  `help — make the step cheaper instead (smaller \`decide\`/\`interval_cases\` ranges, fewer \`simp\` ` +
-  `lemmas, split the work into separate lemmas so each gets its own allowance).`;
-
+// The heartbeat NOTE used to be appended to every timeout MESSAGE here, so that the
+// server's `pretty` and the agent-facing rebuild (stmt.js) would say the same thing.
+// Both now go through renderCheck, which emits it once per check instead of once per
+// message — same words, in one place, 1.72 MB less of them across a cell pair.
 function render(resp, shifted) {
   const messages = (resp.messages ?? []).map((m) => ({
     severity: m.severity,
     line: (m.pos?.line ?? 0) - shifted,
     column: m.pos?.column ?? 0,
-    text: HEARTBEAT_TIMEOUT.test(m.data ?? "") ? `${m.data}${HEARTBEAT_NOTE}` : m.data,
+    text: m.data,
   }));
   const sorries = (resp.sorries ?? []).map((s) => ({ line: (s.pos?.line ?? 0) - shifted, goal: s.goal }));
-  const errors = messages.filter((m) => m.severity === "error");
-  const parts = [];
-  for (const m of messages) parts.push(`${m.severity}: problem.lean:${m.line}:${m.column}: ${m.text}`);
-  for (const s of sorries) parts.push(`sorry at line ${s.line}, goal:\n  ${s.goal}`);
-  const ok = errors.length === 0;
-  let pretty = parts.join("\n\n") || "compiled successfully: no errors, no warnings";
-  if (ok && parts.length) pretty = `compiled with output:\n${pretty}`;
-  if (!ok) pretty = `compilation FAILED:\n${pretty}`;
-  if (pretty.length > 8000) pretty = pretty.slice(0, 8000) + "\n... (truncated)";
+  const { ok, pretty } = renderCheck({ messages, sorries, maxHeartbeats: MAX_HEARTBEATS });
   return { ok, pretty, messages, sorries };
 }
 
