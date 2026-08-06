@@ -149,7 +149,17 @@ load, at any REPL age — so over-cap is an ordinary, byte-reproducible compile 
 ("(deterministic) timeout"), the same for agent, supervisor, grader and any regrade. The
 server clamps any `set_option maxHeartbeats` in a submitted file to the cap (all numeral
 forms; lowering is allowed), and tags the error with a harness note saying raising it
-cannot help. The history that led here: the bound was wall clock until 2026-07-31 (52% of
+cannot help. **Two budgets print "maximum number of heartbeats" and only one of them is
+ours**: `synthInstance.maxHeartbeats` is Lean's own per-instance-problem default of
+20 000, 20x below the cap, so the clamp lets a file raise it freely up to 400 000 — and
+Lean's message says exactly that. Until 2026-08-07 the harness note landed on both, so
+1 466 of the 4 049 heartbeat timeouts in the two block-A cells (69 of 174 attempts, and
+the most common timeout site in the corpus) told the agent that a raise it was entitled
+to make would not help. The two notes are now separate. What agents actually write bears
+this out: 99 `set_option synthInstance.maxHeartbeats` in 29 attempts, against 2 writes of
+the bare option, both LOWERING it — nobody has ever asked for a bigger elaboration
+budget, and no attempt on record was graded unsolved with a heartbeat timeout in its
+final file. The history that led here: the bound was wall clock until 2026-07-31 (52% of
 one run's "too expensive" verdicts compiled fine replayed idle), then 120 CPU-seconds,
 which narrowed the noise band but could not zero it — fateh_32 (0801, ~49 KB proof on the
 line) was measured four times on the same bytes and flipped twice, recording

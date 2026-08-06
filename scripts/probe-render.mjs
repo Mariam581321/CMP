@@ -45,13 +45,22 @@ const big = (n) => "x".repeat(n);
   check("every duplicate site still located", pretty.includes("(same message also at 5:0, 9:0)"), pretty);
 }
 
-// 7-8. Heartbeat note: once per check, and only when a timeout is present.
+// 7-10. Heartbeat notes: once per check per budget, only when that budget timed out, and
+// never telling an agent that a raise it IS allowed to make will not help.
 {
   const t = "(deterministic) timeout at `whnf`, maximum number of heartbeats (400000) has been reached";
+  const s = "(deterministic) timeout at `typeclass`, maximum number of heartbeats (20000) has been reached\n\nNote: Use `set_option synthInstance.maxHeartbeats <num>` to set the limit.";
   const { pretty } = renderCheck({ messages: [err(1, t), err(2, t.replace("whnf", "elab"))], sorries: [], maxHeartbeats: 400000 });
   check("heartbeat note appears once", pretty.split("NOTE (harness)").length - 1 === 1);
   const none = renderCheck({ messages: [err(1, "boom")], sorries: [], maxHeartbeats: 400000 });
   check("no heartbeat note without a timeout", !none.pretty.includes("NOTE (harness)"));
+  const si = renderCheck({ messages: [err(1, s)], sorries: [], maxHeartbeats: 400000 });
+  check("a synthInstance timeout is NOT told that raising is futile",
+    si.pretty.includes("You MAY raise it") && !si.pretty.includes("can only lower that"), si.pretty.slice(-200));
+  const both = renderCheck({ messages: [err(1, t), err(2, s)], sorries: [], maxHeartbeats: 400000 });
+  check("a file hitting both budgets gets both notes, one each",
+    both.pretty.includes("can only lower that") && both.pretty.includes("You MAY raise it") &&
+    both.pretty.split("NOTE (harness)").length - 1 === 2);
 }
 
 // 9-12. The cap: errors absorb it, sorries and warnings survive, the header always does.
