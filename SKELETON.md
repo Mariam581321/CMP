@@ -312,6 +312,35 @@ Everything raw is kept, so any stat (tool-use patterns, time-to-first-check, err
 is computable later without re-running — e.g. "how many timeouts were one error from
 compiling" is a jq query over `end` × `grade`, not a re-grading session.
 
+### The solved high-water mark (`high_water`, 2026-08-07)
+
+`solved` is the verdict on the FINAL file, and an attempt can hold a verified proof and
+then wreck it (the agent refactors; the budget SIGKILL catches the file mid-edit). So
+every check that passes the done-gate snapshots the exact bytes beside the attempt
+(`highwater-first.lean`, `highwater-last.lean`, `highwater.json`), and the runner grades
+both snapshots at the end:
+```json
+"high_water": {"greens": 4, "ever_solved": true,
+               "first": {"check_index": 131, "turn": 88, "cost_std": 0.93094, "md5": "...",
+                         "bytes": 77524, "wall_at": "...", "solved": true, "reason": null},
+               "last":  {"...": "same shape"}}
+```
+- **The headline metric does not move.** `solved` stays the verdict on the final file;
+  this is a separate field, so cells recorded before it stay comparable and it could
+  land mid-grid. `summary.json` reports `ever_solved` and `lost_proofs` alongside
+  `solved`, never folded into it.
+- **One gate, one definition.** `verifiedDone()` in `runner/highwater.js` — compiles,
+  zero sorries, statement intact, axioms clean — is what the supervisor's stop-nudging
+  test reads too, so the watermark and the done-gate cannot drift apart.
+- **Stamped in `lean_check`, not in the supervisor**, which only looks at `agent_end`:
+  an agent that reaches a proof and wrecks it inside one turn would never be seen
+  holding one.
+- **Invisible to the agent**: the snapshots live in the attempt dir, one level above the
+  sandbox root that `file-sandbox.ts` confines every file tool to.
+- Runs before this have no stamp; `scripts/highwater-scan.mjs` reconstructs one from the
+  session files by replaying every write/edit through `applyEdits` and checking the
+  result against the `md5` each `lean_check` prints (53418/53419 exact over the corpus).
+
 ## Files
 
 ```
@@ -323,6 +352,9 @@ runner/stmt.js              statement-probe library + checkedCompile (the one ag
                             compile+statement client, shared by lean_check and plan_check)
 runner/grade.js             independent grading over the lean server
 runner/regrade.js           re-grade finished runs with the current grader (read-only)
+runner/highwater.js         the done-gate (verifiedDone) + solved high-water snapshots
+scripts/highwater-scan.mjs  reconstruct the high-water mark for pre-0807 runs from the
+                            session files (read-only; md5-checked edit replay)
 runner/lean-server.js       persistent Lean REPL HTTP daemon (round-robin across clients)
 runner/plan.js              plan_check core logic
 extensions/lean-check.ts    always-on agent-facing compile tool

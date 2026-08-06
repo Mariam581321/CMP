@@ -23,7 +23,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { checkedCompile, serverCheck } from "../runner/stmt.js";
-import { cmpConfig, costStd } from "../runner/common.js";
+import { cmpConfig, costStd, workerSpendStd } from "../runner/common.js";
+import { verifiedDone } from "../runner/highwater.js";
 
 export default function (pi: ExtensionAPI) {
   const cfg = cmpConfig();
@@ -33,14 +34,10 @@ export default function (pi: ExtensionAPI) {
   const work = process.cwd(); // run.js spawns pi with cwd = the attempt's work dir
 
   const tokens = { in: 0, out: 0, cache_read: 0 };
-  // Worker spend (block C). This extension's own counter sees only the parent's
-  // message_end events, but the budget the runner enforces binds parent + workers
-  // together — so the soft stop must read the ledger lean-spawn keeps on disk, or it
-  // would keep nudging into a cap the attempt has already spent through its workers.
-  const workersLedger = join(cfg.workers_dir ?? join(work, "..", "workers"), "ledger.json");
-  const workerSpend = (): number => {
-    try { return costStd(JSON.parse(readFileSync(workersLedger, "utf8")).tokens); } catch { return 0; }
-  };
+  // Worker spend (block C): the soft stop must count it, or it would keep nudging into
+  // a cap the attempt has already spent through its workers. Shared with the high-water
+  // stamp in lean-check.ts — see workerSpendStd in runner/common.js.
+  const workerSpend = (): number => workerSpendStd(cfg, work);
   // Progress = calls to REAL non-read tools (the runner passes the session's toolset
   // in cfg.tools). Reads don't count — a nudged model can loop on re-reading the file
   // forever (observed) — and neither do calls to hallucinated tool names (also
@@ -145,7 +142,10 @@ export default function (pi: ExtensionAPI) {
     const axiomsBad: Record<string, string[]> = check?.axiomsBad ?? {};
     const axBad = Object.keys(axiomsBad).length > 0;
     dbg("check:", { ok: check?.ok, sorries: (check?.sorries ?? []).length, stmtBad, axBad });
-    if (check?.ok && (check.sorries ?? []).length === 0 && !stmtBad && !axBad) return; // verified done — let the attempt end
+    // verifiedDone, not the same condition spelled out again: this test and the
+    // high-water watermark in lean-check.ts must never disagree about what a solved
+    // file looks like (runner/highwater.js).
+    if (verifiedDone(check)) return; // verified done — let the attempt end
 
     noProgress = actions > actionsAtNudge ? 0 : noProgress + 1;
     actionsAtNudge = actions;
