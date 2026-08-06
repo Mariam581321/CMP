@@ -25,7 +25,12 @@ const STMT_CACHE = join(ROOT, "problems", "stmt-types.json");
 // the file, so agent, supervisor, grader and any later regrade necessarily agree on it
 // whoever compiles first. What used to differ between them — a measured CPU budget
 // passed per request — is gone: CPU is a machine fuse the server owns.
-export const CLIENT_WAIT_MS = 30 * 60_000; // server queue is serialized; be patient
+// Outermost bound of the check chain: CPU fuse < wall fuse < retry deadline < this
+// (lean-server.js states the invariant). postCheck() sets it as a hard socket timeout and
+// destroys the request when it expires, so a client that gives up first converts a fuse
+// kill — which the server hides and retries — into a connection error the agent DOES see.
+// Raised 30 -> 190 min with the fuses (2026-08-06); the queue is serialized, be patient.
+export const CLIENT_WAIT_MS = 190 * 60_000;
 
 // Names of the declarations the benchmark expects (theorem + setup defs/abbrevs),
 // FULLY QUALIFIED: FATE-X wraps every file in `namespace ProblemN`, so the environment

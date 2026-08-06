@@ -17,7 +17,10 @@
 import { postCheck } from "./common.js";
 import { checkedCompile, benchmarkDecls } from "./stmt.js";
 
-const CLIENT_WAIT_MS = 30 * 60_000; // server queue is serialized; be patient
+// Own copy rather than an import from stmt.js, but it must track it: this is the
+// outermost bound of the check chain (see lean-server.js at CPU_FUSE_MS). Raised with
+// the fuses, 30 -> 190 min (2026-08-06).
+const CLIENT_WAIT_MS = 190 * 60_000; // server queue is serialized; be patient
 
 // Crude goal similarity: Jaccard over the token sets of the pretty-printed goals.
 // A helper that restates the theorem reproduces its sorry goal almost verbatim.

@@ -101,13 +101,35 @@ const MIN_AVAIL_MB = parseInt(process.env.CMP_MIN_AVAIL_MB ?? "6000");
 // job (MAX_HEARTBEATS), so this exists only to stop one check from occupying a worker
 // indefinitely — set far from the action, where tripping it says "this file cannot be
 // compiled on this machine at all", not "this file fails".
-const CPU_FUSE_MS = parseInt(process.env.CMP_CPU_FUSE_MS ?? "600000");
+//
+// 600 s was NOT far from the action (raised to 3600 s, 2026-08-06). A real 2113-line
+// FATE-X proof compiles in ~250 s, so 600 sat at 2.4x a legitimate large file, and it
+// showed: 43 kills in one day, every one landing between 600 and 605 s — i.e. files
+// pressed right against the line, not runaways. semantic/fatex_10 was killed at 605 s,
+// requeued, and PASSED on the retry: the same bytes on both sides of the bound, which is
+// the fateh_32 coin flip resurfacing. It can no longer flip a verdict — but it flips
+// "verdict" vs "no verdict", and that is how fatex_19 lost its grade twice.
+// The rate is also arm-dependent, which makes it a confound and not just a nuisance:
+// 0 kills across the whole grep cell, 19 across semantic, 24 in base's first two hours
+// (11 distinct problems). An arm with no search guesses and hammers, so it writes the
+// expensive files — the fuse was quietly taxing the arm it was most important to measure
+// cleanly. At 3600 s a check may hold a worker for an hour; that is the intended trade,
+// because a worker hour is cheap and a lost verdict is not.
+//
+// THE FOUR BOUNDS ARE A CHAIN AND MUST STAY ORDERED:
+//   CPU fuse  <  wall fuse  <  retry deadline  <  CLIENT_WAIT_MS (stmt.js, plan.js)
+// Break the order and raising the CPU fuse makes things WORSE, not better: the client
+// hangs up before the fuse fires and the agent gets a connection error — a harsher
+// failure than the `unavailable` it replaced, and one that says even less. Anything that
+// moves one of these has to move the ones outside it.
+const CPU_FUSE_MS = parseInt(process.env.CMP_CPU_FUSE_MS ?? "3600000");
 // Wall-clock backstop. A check consuming no CPU at all (true hang, or .olean page-fault
 // thrash under memory pressure) can never reach the CPU fuse, so something has to break
 // it. Kept ABOVE the CPU fuse so that a CPU-bound check trips the bound that describes
 // it: on a busy box wall ≥ cpu always, and a wall kill on a file that was in fact
-// burning CPU would log the less informative of the two.
-const WALL_FUSE_MS = parseInt(process.env.CMP_WALL_FUSE_MS ?? "900000");
+// burning CPU would log the less informative of the two. Moved with the CPU fuse
+// (900 -> 4800 s, 2026-08-06) to keep that ordering; it has never fired, in any run.
+const WALL_FUSE_MS = parseInt(process.env.CMP_WALL_FUSE_MS ?? "4800000");
 // CPU fuse and memory fuses share one /proc sweep. The sweep period is also the fuse's
 // granularity — a check can overshoot by up to one tick — which no longer matters to any
 // verdict now that no measured bound decides anything.
@@ -625,8 +647,17 @@ async function handleCheck(w, prep) {
 // "accepted as the file's own cost" and became a charged, memoized failure — a verdict
 // decided by a measurement, which is exactly the coin-flip this change removes. What a
 // file costs is now unjudged; what it elaborates to is judged by the heartbeat cap.
+// MAX_KILLS stays 2 even though the fuses grew (2026-08-06). Retrying is worth it when a
+// kill is a machine event — load, memory pressure, a worker that had been leaking for
+// twenty minutes. It is worth nothing when the cost is a property of the file: something
+// that burns 3600 CPU-seconds once burns them again, so a third attempt buys another hour
+// of wall clock and the same answer. The fuse's SIZE is what keeps kills away from the
+// agent now; the retry count only decides how long we take to admit one.
 const MAX_KILLS = 2;
-const RETRY_DEADLINE_MS = parseInt(process.env.CMP_RETRY_DEADLINE_MS ?? "1200000"); // < CLIENT_WAIT_MS
+// Must exceed MAX_KILLS x WALL_FUSE_MS (the per-attempt worst case, since wall >= cpu),
+// or the deadline silently cancels the retry the kill budget promised. 2 x 4800 s + queue
+// slack. And it must stay under CLIENT_WAIT_MS — see the chain at CPU_FUSE_MS.
+const RETRY_DEADLINE_MS = parseInt(process.env.CMP_RETRY_DEADLINE_MS ?? "10200000"); // < CLIENT_WAIT_MS
 const unavailable = (r, kills) => ({
   ok: false, kind: "unavailable", bound: r.bound, error: r.error,
   pretty:
