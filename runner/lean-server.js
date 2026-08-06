@@ -513,6 +513,25 @@ const LINTERS_OFF = [
   "unusedTactic", "unreachableTactic", "unusedSectionVars", "unusedRCasesPattern",
 ].map((l) => `set_option linter.${l} false`).join(" ");
 
+// Typeclass synthesis gets the same budget as everything else (2026-08-07). Lean's
+// default is 20 000 heartbeats per instance problem — 20x below our elaboration cap and,
+// on this benchmark, the tightest limit in the harness: instance synthesis was the most
+// common timeout site in the two block-A cells (1,448 of 4,049), ahead of `whnf`, and
+// the ONLY budget agents ever asked to raise (99 writes in 29 attempts, against 2 writes
+// of the bare option, both lowering it). FATE-X is PhD algebra — quotients,
+// localizations, algebra towers — so those searches are deep, and a limit nobody chose
+// was deciding what compiles.
+// One number now governs both: a search may use up to the whole declaration's allowance,
+// and `clampHeartbeats` still lets a file LOWER either (`set_option
+// synthInstance.maxHeartbeats 5000 in` to keep one search honest is a legitimate move and
+// costs the agent nothing to make). Raising above the cap stays a no-op.
+// The cost, stated so the reruns can check it: an instance that does NOT exist now fails
+// after up to 400 000 heartbeats instead of 20 000, spending the declaration's budget to
+// reach the same "failed to synthesize". Where that used to be a fast, informative error
+// it can now be a timeout at the outer cap. If the block-A reruns show that trade going
+// the wrong way, this constant is the one line to change.
+const SYNTH_INSTANCE_BUDGET = `set_option synthInstance.maxHeartbeats ${MAX_HEARTBEATS}`;
+
 // Replace import lines (Mathlib is already in the env); the first one becomes the
 // heartbeat cap so line numbers in errors stay aligned with the agent's file. The cap is
 // a file-level `set_option`, so it applies to every declaration BELOW it and each one
@@ -523,7 +542,7 @@ const LINTERS_OFF = [
 // whitespace-separated, so several `set_option`s share a line happily, and one line in
 // means `shifted` bookkeeping stays as it was. Spending an extra line here would shift
 // every reported line number by one against the file the agent is editing.
-const PREPARE_HEAD = `set_option maxHeartbeats ${MAX_HEARTBEATS} ${LINTERS_OFF}`;
+const PREPARE_HEAD = `set_option maxHeartbeats ${MAX_HEARTBEATS} ${SYNTH_INSTANCE_BUDGET} ${LINTERS_OFF}`;
 function prepare(code) {
   const lines = code.split("\n").map(clampHeartbeats);
   let capPlaced = false;

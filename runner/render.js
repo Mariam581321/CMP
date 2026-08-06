@@ -31,33 +31,18 @@ export const RENDER_CAP = 16000;
 // message — 3,991 copies across the two cells, 1.72 MB of the 39.2 MB those runs spent
 // on check output. It says the same thing once now.
 //
-// And it says it only where it is TRUE. Two different budgets print "maximum number of
-// heartbeats", and the note used to land on both:
-//   * the elaboration budget — our cap, clamped, raising really is futile;
-//   * `synthInstance.maxHeartbeats` — Lean's own default of 20 000 for ONE typeclass
-//     synthesis problem, 20x below our cap, which the clamp therefore lets a file raise
-//     freely up to 400 000. Lean's message says so ("Use `set_option
-//     synthInstance.maxHeartbeats <num>`") and the harness was contradicting it: 1,466
-//     of the 4,049 heartbeat timeouts in the two block-A cells were instance-synthesis
-//     timeouts, across 69 of 174 attempts, each one told that raising would not help.
-//     It is also the single most common timeout site in the corpus. Agents wrote
-//     `set_option synthInstance.maxHeartbeats` 99 times in 29 attempts — against exactly
-//     2 writes of the bare option, both LOWERING it — so this note is aimed at nearly
-//     every raise anyone actually attempts here.
+// ONE note, because there is now one number: `prepare()` sets both the elaboration
+// budget and `synthInstance.maxHeartbeats` (typeclass search, Lean's default 20 000) to
+// the cap, and `clampHeartbeats` lets a file lower either and raise neither. So the same
+// sentence is true of every timeout Lean can print, and a second note explaining a
+// distinction the agent can no longer act on would be noise on top of an error.
 const HEARTBEAT_TIMEOUT = /maximum number of heartbeats/;
-const SYNTH_INSTANCE = /synthInstance\.maxHeartbeats/;
 export const heartbeatNote = (maxHeartbeats) =>
-  `NOTE (harness): every check fixes maxHeartbeats at ${maxHeartbeats} per declaration; a ` +
-  `\`set_option maxHeartbeats\` in your file can only lower that, never raise it. Raising it will not ` +
-  `help — make the step cheaper instead (smaller \`decide\`/\`interval_cases\` ranges, fewer \`simp\` ` +
-  `lemmas, split the work into separate lemmas so each gets its own allowance).`;
-export const synthInstanceNote = (maxHeartbeats) =>
-  `NOTE (harness): the timeout above is the TYPECLASS SYNTHESIS budget ` +
-  `(\`synthInstance.maxHeartbeats\`, Lean's default 20000 per instance problem), not the ` +
-  `elaboration cap. You MAY raise it in your file — \`set_option synthInstance.maxHeartbeats N\`, ` +
-  `up to ${maxHeartbeats}; anything larger is clamped to ${maxHeartbeats}. If the instance genuinely ` +
-  `exists this often just works; if it does not, a bigger budget only fails more slowly, so provide ` +
-  `the instance explicitly instead.`;
+  `NOTE (harness): every check fixes maxHeartbeats at ${maxHeartbeats} per declaration — typeclass ` +
+  `synthesis included — and a \`set_option ...maxHeartbeats\` in your file can only lower that, never ` +
+  `raise it. Raising it will not help: make the step cheaper instead (smaller ` +
+  `\`decide\`/\`interval_cases\` ranges, fewer \`simp\` lemmas, split the work into separate lemmas so ` +
+  `each gets its own allowance), and for a failing instance search, supply the instance explicitly.`;
 
 // Identical message text at many positions is one fact, not N (2.1 MB of the 39.2 was
 // exact duplicates). Collapse to the first site plus a locator list, which keeps every
@@ -110,12 +95,8 @@ export function renderCheck({
   const errParts = dedupe(errs, label);
   const sorryParts = srs.map((s) => `sorry at line ${s.line}, goal:\n  ${s.goal}`);
   const warnParts = dedupe(warns, label);
-  // One note per budget per check: a file can hit both, and they say opposite things.
-  if (maxHeartbeats != null) {
-    const timeouts = msgs.filter((m) => HEARTBEAT_TIMEOUT.test(m.text ?? ""));
-    if (timeouts.some((m) => !SYNTH_INSTANCE.test(m.text))) warnParts.push(heartbeatNote(maxHeartbeats));
-    if (timeouts.some((m) => SYNTH_INSTANCE.test(m.text))) warnParts.push(synthInstanceNote(maxHeartbeats));
-  }
+  if (maxHeartbeats != null && msgs.some((m) => HEARTBEAT_TIMEOUT.test(m.text ?? "")))
+    warnParts.push(heartbeatNote(maxHeartbeats));
 
   const head = headerLine(errs.length, errParts.length, srs, warns.length);
   // The pointer rides on the header, so it is present on every check whether or not
