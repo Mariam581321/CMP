@@ -1,6 +1,8 @@
 // Shared bits: config, lean-server client, CLI/TTY helpers, PutnamBench line classifier.
 
 import { request } from "node:http";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 // --- config -----------------------------------------------------------------
 export const LEAN_PORT = process.env.CMP_LEAN_PORT ?? "8787";
@@ -39,6 +41,18 @@ export const ALLOWED_AXIOMS = new Set(["propext", "Classical.choice", "Quot.soun
 export const STD_PRICES = { in: 0.14, cacheRead: 0.0028, out: 0.28 };
 export const costStd = (t) =>
   ((t?.in ?? 0) * STD_PRICES.in + (t?.cache_read ?? 0) * STD_PRICES.cacheRead + (t?.out ?? 0) * STD_PRICES.out) / 1e6;
+
+// Block C: what this attempt's spawned workers have spent so far, read from the ledger
+// runner/spawn.js keeps on disk. An extension's own message_end handler sees only the
+// PARENT's usage, but the budget the runner enforces binds parent + workers together —
+// so anything reasoning about "what has this attempt spent" (the supervisor's soft stop,
+// the high-water mark's cost-at-first-proof stamp) has to add this in or it is quoting a
+// number the runner does not enforce on. 0 outside block C, and 0 if the ledger is
+// mid-write: a missed poll is worth less than a crash in an agent_end handler.
+export function workerSpendStd(cfg, cwd) {
+  const dir = cfg?.workers_dir ?? join(cwd ?? process.cwd(), "..", "workers");
+  try { return costStd(JSON.parse(readFileSync(join(dir, "ledger.json"), "utf8")).tokens); } catch { return 0; }
+}
 
 // POST JSON to the lean server via node:http. Deliberately NOT fetch(): undici's
 // built-in 300s headers-timeout kills any request that queues >5 min at the server,

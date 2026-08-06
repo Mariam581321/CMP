@@ -391,6 +391,26 @@ the spawn reports still leaked per-worker cost, removed since). Details and auto
       sees on every check, so landing it silently mid-grid would split a cell across two
       observation channels. It needs its own cell and a freeze re-cut, and it belongs
       after block A at the earliest.
+- [x] **Solved high-water mark** — landed 2026-08-07 (`runner/highwater.js`;
+      `SKELETON.md` has the record shape). `verifiedDone()` is now the single definition
+      of the done-gate, read by both the supervisor's stop-nudging test and the
+      watermark; `lean_check` snapshots the bytes at every green check (in the tool, not
+      in the supervisor — the supervisor only sees `agent_end`, so a proof made and
+      wrecked inside one turn would be invisible); the runner grades both snapshots into
+      a separate `high_water` field, and `summary.json` reports `ever_solved` /
+      `lost_proofs` beside `solved` without folding them in.
+      **The corpus-wide scan says the expectation below was right.**
+      `scripts/highwater-scan.mjs` reconstructs the mark for the 759 attempts recorded
+      before this by replaying every write/edit and checking the result against the md5
+      each check prints (53418/53419 exact). 472 attempts (62%) reached a verified
+      proof; 213 of them kept editing afterwards; **all 213 got back to a green check —
+      none shipped bytes it had not re-verified.** The 8 that reached a proof and graded
+      unsolved are all harness-era artefacts, not self-destruction: 5 `bad_axioms` from
+      before the axiom gate joined the agent-facing check (0804), 1 `compile_error` from
+      the pre-0801 CPU budget (`fateh_32`), and `fatex_19` twice on the RSS fuse. What
+      the scan does show is the by-product: **cost at first proof is 92% of cost at
+      attempt end** — 8% of all spend happens after the problem is already solved.
+      Original entry follows.
 - [ ] **Solved high-water mark** (recording only — can land mid-grid). An attempt can
       reach a verified solve and then wreck it: the agent decides to simplify or
       refactor, and the budget SIGKILL catches the file mid-edit, so the FINAL file —

@@ -25,6 +25,7 @@ import { grade } from "./grade.js";
 import { benchmarkDecls } from "./stmt.js";
 import { MATHLIB_SRC } from "./grep.js";
 import { tailSessions, newStats, applyEntry } from "./session-tail.js";
+import { readHighWater, FIRST_FILE, LAST_FILE } from "./highwater.js";
 import { costStd, LEAN_PORT, LEAN_URL, MAX_HEARTBEATS, green, red, yellow, dim, bold, cyan, money, secs } from "./common.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -595,6 +596,34 @@ async function attempt(name, idx) {
   // fatex_25/33/34).
   const g = await grade(name, join(work, "problem.lean"), join(PROBLEMS_DIR, `${name}.lean`), { end });
 
+  // The solved high-water mark: did this attempt ever HOLD a proof, whatever it ended
+  // up submitting? extensions/lean-check.ts snapshots problem.lean at every check that
+  // passes the done-gate (runner/highwater.js); here the snapshots are graded like any
+  // other file so "ever had one" is a verdict, not an inference from the agent's own
+  // tool output. Graded with end:"completed" deliberately — a snapshot is a file the
+  // agent deliberately produced and watched pass, so the statement checks apply
+  // straight, unlike the final file a SIGKILL may have caught mid-edit.
+  // This does NOT move the headline metric: `solved` below is still the verdict on the
+  // final file. Failure here is recorded as null and never fails an attempt.
+  let highWater = null;
+  try {
+    const hw = readHighWater(probDir);
+    if (hw) {
+      const gradeSnap = async (file, stamp) => {
+        if (!stamp || !existsSync(join(probDir, file))) return null;
+        const r = await grade(name, join(probDir, file), join(PROBLEMS_DIR, `${name}.lean`), { end: "completed" });
+        return { ...stamp, solved: r.solved, reason: r.solved ? null : r.reason, detail: r.solved ? null : (r.detail ?? "").slice(0, 500) };
+      };
+      const first = await gradeSnap(FIRST_FILE, hw.first);
+      // One compile, not two, when the attempt only ever had one green check or never
+      // moved off it — the common case, and the md5 says so without asking Lean.
+      const last = hw.last?.md5 === hw.first?.md5 ? first : await gradeSnap(LAST_FILE, hw.last);
+      highWater = { greens: hw.greens ?? 0, ever_solved: !!(first?.solved || last?.solved), first, last };
+    }
+  } catch (e) {
+    console.error(`  ${red("high-water grade error")} ${name}: ${e.message}`);
+  }
+
   // Per-worker records, written by runner/spawn.js at each worker's exit. A dir with
   // no record is a worker the kill caught mid-flight — its usage is still in wStats
   // (tailed from the session file), only the per-worker breakdown line is partial.
@@ -634,6 +663,9 @@ async function attempt(name, idx) {
       axioms: g.axioms ?? null, suspicious_keywords: g.suspicious_keywords ?? null,
     },
     solved: g.solved, // = grade.solved; a verified proof counts regardless of how the attempt ended
+    // Recording only, and separate from `solved` on purpose: the gap between "ever had
+    // a proof" and "ended with one". null = the attempt never reached a green check.
+    high_water: highWater,
     harness_git_sha: gitSha, pi_version: piVersion,
   };
   writeFileSync(join(probDir, "attempt.json"), JSON.stringify(record, null, 2));
@@ -641,7 +673,11 @@ async function attempt(name, idx) {
 
   const tag =
     (g.solved ? green("✓ solved ") : end === "timeout" ? yellow("⏱ timeout") : end === "budget_exceeded" ? yellow("$ budget ") : red(`✗ ${g.reason}`)) +
-    (g.suspicious_keywords ? yellow(` ⚠ ${g.suspicious_keywords.join(",")}`) : "");
+    (g.suspicious_keywords ? yellow(` ⚠ ${g.suspicious_keywords.join(",")}`) : "") +
+    // The case this whole mechanism exists for, called out where it happens rather
+    // than left for a later query: unsolved on the final file, but a graded proof in
+    // the attempt's own history.
+    (!g.solved && highWater?.ever_solved ? yellow(" ⚑ had a proof") : "");
   const checks = stats.toolCalls.lean_check ?? 0;
   const workersNote = workers.length ? `, ${workers.length}w` : "";
   console.log(
@@ -681,6 +717,10 @@ const costStdTotal = records.reduce((s, r) => s + (r.cost_std ?? 0), 0);
 const reasonOf = (r) => (r.end !== "completed" ? r.end : r.grade?.reason ?? "unknown");
 const reasons = {};
 for (const r of records) if (!r.solved) reasons[reasonOf(r)] = (reasons[reasonOf(r)] ?? 0) + 1;
+// Attempts that held a graded proof and did not submit one. Reported next to the
+// solve count but never folded into it: the headline stays the verdict on the final
+// file (see high_water in the attempt record).
+const lostProofs = records.filter((r) => !r.solved && r.high_water?.ever_solved);
 // Let the last requests settle on DeepSeek's side before reading the closing balance,
 // or the tail of the run bills after the sample and vanishes from billed_usd.
 let balanceAfter = null, billedUsd = null, billedNote = null;
@@ -700,12 +740,18 @@ const billedStr = billedUsd != null && billedUsd >= 0 ? `, ${money(billedUsd)} b
 console.log(bold(`\n${COMBO.join("+") || "baseline"}: ${solved.length}/${records.length} solved  (${money(costStdTotal)} @std, ${money(cost)} est${billedStr})`));
 if (solved.length) console.log(`  ${green("solved:")} ${solved.map((r) => r.problem).join(", ")}`);
 for (const [reason, n] of Object.entries(reasons)) console.log(`  ${dim(`${reason}: ${n}`)}`);
+if (lostProofs.length)
+  console.log(`  ${yellow("⚑ held a proof but did not submit one:")} ${lostProofs.map((r) => r.problem).join(", ")}`);
 if (billedNote) console.log(dim(`  billed_usd: ${billedNote}`));
 console.log(dim(`  full records: results/${RUN_ID}/results.jsonl\n`));
 
 const summary = {
   run_id: RUN_ID, combo: COMBO, model: MODEL, thinking: THINKING, git_sha: gitSha,
   problems: records.length, solved: solved.length, cost_usd: +cost.toFixed(4), cost_std: +costStdTotal.toFixed(4),
+  // Separate from `solved`, always: ever_solved counts attempts whose final file failed
+  // but whose history contains a graded proof.
+  ever_solved: records.filter((r) => r.solved || r.high_water?.ever_solved).length,
+  lost_proofs: lostProofs.map((r) => r.problem),
   // billed_usd is DeepSeek's own number (balance delta); cost_usd/cost_std are ours.
   balance_before: balanceBefore, balance_after: balanceAfter, billed_usd: billedUsd, billed_note: billedNote,
   fail_reasons: reasons, finished_at: new Date().toISOString(),

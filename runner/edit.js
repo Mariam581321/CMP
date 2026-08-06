@@ -15,6 +15,29 @@
 // Error messages otherwise mirror pi's so run comparisons before/after the swap stay
 // interpretable.
 
+// --- argument shims -----------------------------------------------------------
+// pi's compatibility shims for how models actually call the edit tool: some send
+// `edits` as a JSON string, some send a single legacy top-level oldText/newText pair.
+// Lives here rather than inside the tool because a session transcript records the RAW
+// model arguments, so anything replaying an attempt's edits (scripts/highwater-scan.mjs)
+// has to normalize them the same way the tool did or it reconstructs a different file.
+// Measured: the legacy pair form accounts for every replay divergence in the 0805 grep
+// cell — 5 attempts, up to 109 checks each, reconstructed against the wrong bytes.
+export function normalizeEditArgs(args) {
+  if (!args || typeof args !== "object") return args;
+  if (typeof args.edits === "string") {
+    try {
+      const parsed = JSON.parse(args.edits);
+      if (Array.isArray(parsed)) args.edits = parsed;
+    } catch {}
+  }
+  if (typeof args.oldText === "string" && typeof args.newText === "string") {
+    const { oldText, newText, ...rest } = args;
+    return { ...rest, edits: [...(Array.isArray(args.edits) ? args.edits : []), { oldText, newText }] };
+  }
+  return args;
+}
+
 // --- text helpers ------------------------------------------------------------
 
 const stripTrailingWS = (text) => text.split("\n").map((l) => l.replace(/[ \t]+$/, "")).join("\n");

@@ -11,13 +11,36 @@ import { createHash } from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
 import { join, basename } from "node:path";
 import { checkedCompile } from "../runner/stmt.js";
-import { cmpConfig, ToolFailure } from "../runner/common.js";
+import { cmpConfig, costStd, workerSpendStd, ToolFailure } from "../runner/common.js";
+import { verifiedDone, recordHighWater } from "../runner/highwater.js";
 
 export default function (pi: ExtensionAPI) {
   // Hash of problem.lean at the last check that returned a result. Lets the tool
   // flag "you re-checked without changing the file" — the observation the
   // putnam_1965_b6 agent needed to escape its wrong-path loop.
   let lastCheckedHash: string | null = null;
+
+  // The solved high-water mark (runner/highwater.js). Stamped HERE rather than in the
+  // supervisor because the supervisor only looks at agent_end: an agent that reaches a
+  // proof and then wrecks it inside the same turn would never be seen holding one.
+  // Everything below is write-only bookkeeping the model cannot observe — the snapshots
+  // go to the attempt dir, one level above the sandbox root, and the tool's returned
+  // text is not touched.
+  const cfg = cmpConfig();
+  const isWorker = cfg.worker != null; // block C workers don't own problem.lean
+  let checkIndex = 0;
+  let turns = 0;
+  const tokens = { in: 0, out: 0, cache_read: 0 };
+  pi.on("message_end", (event: any) => {
+    const m = event.message;
+    if (m?.role !== "assistant") return;
+    turns++;
+    const u = m.usage;
+    if (!u) return;
+    tokens.in += u.input ?? 0;
+    tokens.out += u.output ?? 0;
+    tokens.cache_read += u.cacheRead ?? 0;
+  });
 
   pi.registerTool({
     name: "lean_check",
@@ -29,6 +52,11 @@ export default function (pi: ExtensionAPI) {
     promptSnippet: "lean_check - compile problem.lean (the only file ever compiled) and get Lean compiler errors/warnings",
     parameters: Type.Object({}),
     async execute(_toolCallId, _params, signal, _onUpdate, ctx) {
+      // Counted here, before anything can fail: check_index is the ordinal of this
+      // call's result in the session, errors and policy rejections included, so a
+      // stamp can be located in the transcript (and reproduced by scripts/
+      // highwater-scan.mjs) by counting lean_check results.
+      checkIndex++;
       // Failures THROW; pi ignores the isError field of a returned result (see
       // ToolFailure in runner/common.js). A compile that FAILS is not a tool
       // failure — it is this tool's normal output and still returns normally.
@@ -124,6 +152,17 @@ export default function (pi: ExtensionAPI) {
         }
         lastCheckedHash = hash;
         text = `${header}\n\n${text}`;
+
+        // Watermark: this file would grade solved, whatever the attempt submits later.
+        // `ok` above is the same verdict minus the sorry test, so verifiedDone is asked
+        // about the full result — one predicate, shared with the supervisor's done-gate.
+        if (!isWorker && verifiedDone(r)) {
+          recordHighWater(join(ctx.cwd, ".."), code, {
+            check_index: checkIndex,
+            turn: turns,
+            cost_std: +(costStd(tokens) + workerSpendStd(cfg, ctx.cwd)).toFixed(5),
+          });
+        }
         return { content: [{ type: "text", text }], details: { ok, cached: r.cached }, isError: false };
       } catch (e: any) {
         // Thrown = the request never got a server response (connection refused mid-

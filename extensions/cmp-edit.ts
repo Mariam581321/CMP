@@ -11,7 +11,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { applyEdits } from "../runner/edit.js";
+import { applyEdits, normalizeEditArgs } from "../runner/edit.js";
 import { ToolFailure } from "../runner/common.js";
 
 export default function (pi: ExtensionAPI) {
@@ -44,21 +44,9 @@ export default function (pi: ExtensionAPI) {
       ),
     }),
     // pi's compatibility shims, kept: some models send edits as a JSON string, or a
-    // single legacy top-level oldText/newText pair.
-    prepareArguments(args: any) {
-      if (!args || typeof args !== "object") return args;
-      if (typeof args.edits === "string") {
-        try {
-          const parsed = JSON.parse(args.edits);
-          if (Array.isArray(parsed)) args.edits = parsed;
-        } catch {}
-      }
-      if (typeof args.oldText === "string" && typeof args.newText === "string") {
-        const { oldText, newText, ...rest } = args;
-        return { ...rest, edits: [...(Array.isArray(args.edits) ? args.edits : []), { oldText, newText }] };
-      }
-      return args;
-    },
+    // single legacy top-level oldText/newText pair. In runner/edit.js so a transcript
+    // replay normalizes the raw recorded arguments exactly as the tool did.
+    prepareArguments: normalizeEditArgs,
     async execute(_toolCallId, params: any, _signal, _onUpdate, ctx) {
       // Failures THROW (pi ignores a returned isError — see ToolFailure in
       // runner/common.js); applyEdits' messages, closest-region snippet included,
