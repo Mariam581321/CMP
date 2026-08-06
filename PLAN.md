@@ -378,10 +378,40 @@ the spawn reports still leaked per-worker cost, removed since). Details and auto
       output to a file in the work dir and show a digest plus a pointer, letting the
       agent choose what to page in; (c) parse and summarize — dedupe repeated lint
       classes, rank by severity, keep every error and elide the 78th copy of a style
-      note. Why this is an **arm and not a harness fix**: it changes what every agent
+      note; (d) **cheapest of all — stop emitting the style noise.** What fills the
+      truncated checks is almost entirely default linters: `unusedSimpArgs` (6540
+      occurrences), `unnecessarySimpa` (2921), `unusedVariables` (825),
+      `unnecessarySeqFocus` (766). `prepare()` already injects `set_option
+      maxHeartbeats` into every submitted file, so it can inject
+      `set_option linter.unusedSimpArgs false` and friends the same way. None of them
+      can change a verdict — they are style advice, not errors — so this is pure signal
+      recovery. Note the cut itself is a blunt prefix slice
+      (`pretty.slice(0, 8000)`), not a sample: the tail is simply gone, and sorries
+      live in the tail. Why this is an **arm and not a harness fix**: it changes what every agent
       sees on every check, so landing it silently mid-grid would split a cell across two
       observation channels. It needs its own cell and a freeze re-cut, and it belongs
       after block A at the earliest.
+- [ ] **Solved high-water mark** (recording only — can land mid-grid). An attempt can
+      reach a verified solve and then wreck it: the agent decides to simplify or
+      refactor, and the budget SIGKILL catches the file mid-edit, so the FINAL file —
+      the only thing graded today — misjudges what the attempt achieved. Record it
+      instead of trusting the last write: when a `lean_check` passes the same gate the
+      supervisor's done-test uses (compiles, zero sorries, statement intact, axioms
+      clean — `extensions/supervisor.ts`), snapshot `problem.lean` beside the attempt
+      and stamp the record with the check index, turn, and cost_std at that moment.
+      **The headline metric does not move**: `solved` stays the verdict on the final
+      file, and the snapshot verdict is a SEPARATE field, so the gap between "ever had
+      a proof" and "ended with one" becomes measurable instead of invisible. Changing
+      the metric itself mid-grid would invalidate the cells already run; recording a new
+      field costs nothing and no agent can see it.
+      Measured before building it, so the expectation is honest: across both block-A
+      cells (174 attempts) **zero** agents destroyed a solve they had reached. The one
+      candidate, `fatex_19` in grep, reached a verified proof at check 131/138 ($0.9309
+      of $0.9636) and lost it to the RSS fuse, not to itself — and regraded `solved` on
+      2026-08-06. So this is insurance against a failure mode that has not yet cost a
+      solve, plus the by-product that matters for cost-vs-solve-rate: **cost at first
+      proof**, which is not the same number as cost at attempt end (fatex_19 spent its
+      last 3% silencing linters it did not need to silence).
 - [x] Block C machinery (2026-08-04, `SKELETON.md` has the arm designs of record):
       `spawn_subagents` as a blocking batch of parallel child-pi workers with
       child-usage roll-up (runner tails worker sessions; budget binds the sum; workers
