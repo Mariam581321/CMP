@@ -34,6 +34,14 @@ export default function (pi: ExtensionAPI) {
   const cfg = cmpConfig();
   const budget: number = cfg.budget_std ?? 0;
   const maxNudges: number = cfg.max_nudges ?? 3; // consecutive no-progress nudges; resets on non-read tool activity
+  // Consecutive errored agent_ends tolerated. An errored turn is not the model stalling —
+  // it is transport dying below the message layer — so it must not spend the nudge budget
+  // (0805 cells: three attempts ended with money unspent on error,error,NUDGE,... spirals).
+  // But an errored turn books ZERO usage, so the spend cap cannot see it either: this
+  // counter is then the ONLY bound on an error loop short of the 48 h wall backstop. 20 is
+  // ~2x the longest burst observed (9). run.js does not pass this knob — the constant IS
+  // the policy; cfg only exists so scripts/probe-supervisor.mjs can drive the give-up branch.
+  const maxErrorStreak: number = cfg.max_error_streak ?? 20;
   const problem: string = cfg.problem ?? "supervisor";
   const work = process.cwd(); // run.js spawns pi with cwd = the attempt's work dir
 
@@ -52,6 +60,7 @@ export default function (pi: ExtensionAPI) {
   let actions = 0;
   let actionsAtNudge = 0;
   let noProgress = 0;
+  let errorStreak = 0;
   let lastStopReason: string | null = null;
 
   // No configured toolset (adhoc run) => nothing counts and nudging self-limits at
@@ -79,22 +88,41 @@ export default function (pi: ExtensionAPI) {
   // this guard those invocations interleave and the nudge cap silently stops holding
   // (0729: 20 nudges under maxNudges = 3). One settle, one decision.
   let deciding = false;
-  pi.on("agent_end", async (_event: any) => {
+  pi.on("agent_end", async (event: any) => {
     if (deciding) { dbg("agent_end re-entered mid-decision, ignored"); return; }
     deciding = true;
-    try { await decide(); } finally { deciding = false; }
+    try { await decide(event); } finally { deciding = false; }
   });
 
-  async function decide() {
-    dbg("agent_end", { lastStopReason, actions, noProgress });
-    if (lastStopReason === "aborted") return;
-    // A turn that died in transport rather than in the model gets no special treatment:
-    // it is nudged on the same ledger as a stalled one. Bursts of them no longer reach
-    // here — pi-agent/settings.json retries inside the SDK, below the message layer — so
-    // only a drop mid-stream (which the SDK cannot retry) lands in this path, and the
-    // nudge is what keeps the session alive when pi's own retries are spent.
+  async function decide(event?: any) {
+    // The stop reason of THIS run's own last assistant message: agent_end carries the
+    // messages the run produced, and an errored message is always the last of its run.
+    // The attempt-wide lastStopReason only refreshes on a truthy stopReason, so on its
+    // own it would let a previous turn's verdict decide this one; it remains as the
+    // fallback for a pi build that ships agent_end without messages. (Not event.willRetry:
+    // pi sets that on session-listener events only, never on the extension event — and a
+    // wrong "will retry" prediction here would queue nothing and silently end the attempt.)
+    const last = [...(event?.messages ?? [])].reverse().find((m: any) => m?.role === "assistant");
+    const stopReason: string | null = last?.stopReason ?? lastStopReason;
+    const errored = stopReason === "error";
+    dbg("agent_end", { stopReason, actions, noProgress, errorStreak });
+    if (stopReason === "aborted") return;
     if (existsSync(join(work, "..", "STOP"))) return;
     if (budget > 0 && costStd(tokens) + workerSpend() >= budget) return;
+
+    // An errored turn (retry-exhausted transport, or a non-retryable 400) is not the model
+    // stalling: pi already spent its own retries below the message layer (pi-agent/
+    // settings.json), the message books no tokens and calls no tools, and it would look
+    // like "no progress" forever. Charging it to noProgress ended attempts at 4
+    // consecutive errors with the budget untouched (0805). It gets its own, much longer
+    // ledger instead — and the SAME nudge below, because once pi's retries ARE spent the
+    // queued message is the only thing keeping the session alive. Accepted side effect:
+    // those continuations still count in run.js's `nudges` stat (userMsgs - 1).
+    if (errored) {
+      if (++errorStreak > maxErrorStreak) { dbg("error streak past cap, ending"); return; }
+    } else {
+      errorStreak = 0;
+    }
 
     let content: string;
     try {
@@ -155,18 +183,27 @@ export default function (pi: ExtensionAPI) {
     // both block "done" exactly like a sorry — an axiom-closed file compiles sorry-free
     // with the statement intact, and without that the supervisor blessed as done a file
     // the grader fails as bad_axioms (spawn-fatex10-0804 fatex_99; three 0802 incidents).
-    const status = checkStatus(check ?? {});
+    // ok:false, not {}: checkStatus({}) reads "no errors, ok not false" as compiles ⇒
+    // done ⇒ the attempt would END silently exactly when nothing could be checked (server
+    // 500, parse failure, the 5-min deadline above expiring) — the opposite of the
+    // "nudging anyway" contract this block promises.
+    const status = checkStatus(check ?? { ok: false });
     dbg("check:", { compiles: status.compiles, sorries: status.sorries.length, stmtBad: status.stmtBad, axBad: status.axBad });
     if (status.done) return; // verified done — let the attempt end
 
-    noProgress = actions > actionsAtNudge ? 0 : noProgress + 1;
-    actionsAtNudge = actions;
-    if (noProgress > maxNudges) return; // wall-clock/budget still bound everything
+    // The progress ledger judges the model, so an errored turn is exempt: it neither
+    // spends the nudge budget nor moves actionsAtNudge (work done before the transport
+    // died still gets credited at the next real nudge).
+    if (!errored) {
+      noProgress = actions > actionsAtNudge ? 0 : noProgress + 1;
+      actionsAtNudge = actions;
+      if (noProgress > maxNudges) return; // wall-clock/budget still bound everything
+    }
 
     // Same paragraphs lean_check and plan_check use for the same faults (blockerNotes),
     // so the agent is never told two different things about what grading accepts.
     const nudge =
-      (lastStopReason === "length"
+      (stopReason === "length"
         ? `Your last message hit the output-token limit and was CUT OFF — everything after the cutoff is lost. Do not restart the derivation in chat. Write your current best attempt into problem.lean NOW (state intermediate facts as \`have\` steps closed by ring/linarith/norm_num etc.; leave hard parts as sorry'd steps) and run lean_check.\n\n`
         : `You are not done. `) +
       blockerNotes(status).map((n: string) => `IMPORTANT: ${n}\n\n`).join("") +

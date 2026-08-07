@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Block A (search) on FATE-X, run list problems-fatex/safe87.txt (n = 87).
 #
-#   ./scripts/blockA-fatex87.sh grep [cut]
+#   ./scripts/blockA-fatex87.sh grep [cut] [concurrency]
 #
 # `cut` tags the run id (default 0807, the current freeze) and exists because a
 # freeze re-cut means re-running cells that already have a run id: the 0805 cells
@@ -43,10 +43,13 @@ case "$ARM" in
   semantic) COMBO="lean-search" ;;
   grep)     COMBO="lean-grep" ;;
   loogle)   COMBO="lean-loogle" ;;
-  *) echo "usage: $0 {grep|base|semantic|loogle} [cut]   (cut defaults to 0807, the current freeze)"; exit 2 ;;
+  *) echo "usage: $0 {grep|base|semantic|loogle} [cut] [concurrency]   (cut defaults to 0807, the current freeze; concurrency to 25)"; exit 2 ;;
 esac
 
 CUT="${2:-0807}"
+# Purely a throughput knob under the deterministic heartbeat verdict (run.js says so),
+# but it is recorded in run.json, so deviations from the default are deliberate.
+CONC="${3:-25}"
 RUN_ID="${ARM}-fatex87-${CUT}"
 LOG="$ROOT/results/$RUN_ID.console.log"
 
@@ -95,7 +98,7 @@ if [ -z "${CMP_IN_TMUX_LAUNCH:-}" ]; then
   # readable — a session that vanished on its own is indistinguishable from one
   # that never started.
   tmux new-session -d -s "$RUN_ID" -c "$ROOT" \
-    "CMP_IN_TMUX_LAUNCH=1 '$ROOT/scripts/blockA-fatex87.sh' '$ARM' '$CUT' 2>&1 | tee -a '$LOG'; \
+    "CMP_IN_TMUX_LAUNCH=1 '$ROOT/scripts/blockA-fatex87.sh' '$ARM' '$CUT' '$CONC' 2>&1 | tee -a '$LOG'; \
      echo; echo \"=== $RUN_ID exited at \$(date -Is) — full console log: $LOG\"; \
      echo '=== pane kept open on purpose; tmux kill-session -t $RUN_ID when you are done with it'; \
      exec bash" || { echo "tmux refused to start the session"; exit 1; }
@@ -108,7 +111,7 @@ if [ -z "${CMP_IN_TMUX_LAUNCH:-}" ]; then
 fi
 
 # ---- the run itself (inside tmux) ----------------------------------------
-echo "=== $(date -Is) launching $RUN_ID (combo: ${COMBO:-baseline}) at $(git rev-parse --short HEAD)"
+echo "=== $(date -Is) launching $RUN_ID (combo: ${COMBO:-baseline}, concurrency: $CONC) at $(git rev-parse --short HEAD)"
 exec node runner/run.js --combo "$COMBO" \
   --problems problems-fatex/safe87.txt --problems-dir problems-fatex \
-  --budget-std 1.00 --concurrency 25 --run-id "$RUN_ID"
+  --budget-std 1.00 --concurrency "$CONC" --run-id "$RUN_ID"
