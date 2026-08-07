@@ -293,31 +293,67 @@ spontaneously built a 22-fact, 26 KB verified bank before dying at the cap — t
 block-D premise (per-problem theory-building that evaporates) enacted by the agent
 itself; and fatex_99 axiom-gamed in both spawn runs at ~$0.08 (pre-axiom-gate code;
 the in-loop gate closes that exit). Machinery validation, not grid cells (pre-freeze;
-the spawn reports still leaked per-worker cost, removed since). Details and autopsies: `drafts/DRAFT-experiment-notes-*.md`,
+the spawn reports still leaked per-worker cost, removed since).
+The 2026-08-05/06 block-A pair — grep 46/87 and semantic 44/87 on safe87, with 11
+attempts of base before it was stopped — ran clean end to end and is the corpus every
+harness fix of 08-07 was measured from (13,058 checks, 9,428 greps, 10,411 edits, 712
+nudges). It is **not** a grid pair: the 08-07 freeze re-cut moved both what compiles and
+what the agent sees, so those three cells are re-run against `f613554`. What they already
+answered, and what the re-run should reproduce or contradict, is that the two retrieval
+arms land within two problems of each other on this list while disagreeing about which
+problems: 40 solved by both, 6 by grep alone, 4 by semantic alone — 10 discordant pairs,
+which is the shape a list can separate arms on, unlike the 0804 pilot's zero. Details and autopsies: `drafts/DRAFT-experiment-notes-*.md`,
 `drafts/DRAFT-100fates-collected-0728.md`; per-run artifacts under `results/`.
 
 ## Next steps
 
-- [x] Remaining grader fixes; **grid freeze: `b6d312e` (re-cut 2026-08-05, before the
-      first block-A cell; same day's earlier cut `638f697` is superseded — the
-      class/structure statement check and the safe87 run list both landed after it;
-      previously `3084411`)** — the `harness_git_sha` of every
-      grid run must be that commit or a descendant. What the re-cut takes in, none of
-      which existed at `3084411`: the block-C machinery (`spawn_subagents` + the
+- [x] Remaining grader fixes; **grid freeze: `f613554` (re-cut 2026-08-07; supersedes
+      `b6d312e` of 08-05, itself superseding `638f697` and `3084411`)** — the
+      `harness_git_sha` of every grid run must be that commit or a descendant.
+
+      **This re-cut DOES invalidate grid cells, unlike every previous one.** The three
+      block-A cells that ran on 08-05/08-06 — `grep-fatex87-0805` (46/87, `134ee0f`),
+      `semantic-fatex87-0805` (44/87, `04b4489`) and the 11 attempts of
+      `base-fatex87-0805` (`187778c`, killed) — all sit on the old side and have to be
+      re-run. Two independent reasons, either of which alone would be enough: what
+      "compiles" means changed (`synthInstance.maxHeartbeats` now gets the declaration's
+      whole allowance instead of Lean's default 20 000 — instance synthesis was the most
+      common timeout site in those very cells, 1,448 of 4,049), and what the agent SEES
+      changed on every axis at once (the check header, style lints off at source, the
+      16 KB digest, grep's depth and ordering, the failed-edit region, LeanSearch retries).
+      They remain the measurement corpus this re-cut was designed from — every number in
+      the commits above is theirs — but they are not cells.
+
+      What the re-cut takes in, on top of `b6d312e`: the deterministic check channel
+      (`runner/render.js`, one renderer for every check tool, style lints off at source,
+      errors absorb the cap and the header never does), the solved high-water mark
+      (`runner/highwater.js`), the CPU fuse at 3600 s and the derived fuse/client-wait
+      chain, one typeclass budget, the single check verdict (`runner/verdict.js`, so the
+      header and the grader cannot disagree), `CHECK_SHA` (`runner/check-env.js`, so a
+      server from an older checkout cannot silently serve a run), grep at depth 25 with
+      name-matches-first ordering, and the agent-facing channel fixes in `f613554`.
+      From `b6d312e` it still carries the block-C machinery (`spawn_subagents` + the
       `add_fact` bank), the in-loop axiom gate, budget-blind spawn reports, the
       library-phase and triage plumbing, `grep_mathlib`'s Mathlib read access, the
-      class/structure-field statement check, and the safe87 run list. It invalidates
-      nothing that was a grid cell, because none of the runs on record are: the 0802
-      FATE-X pass and the 0804 pilot chain both predate it, and the ~08-02 model upgrade
-      cuts their comparability anyway.
+      class/structure-field statement check, and the safe87 run list.
+
+      Launching against this freeze requires a lean server started from it: `run.js`
+      refuses on a `check_sha` mismatch and names the fields that moved. Restart the
+      watchdog's server after pulling.
       Re-cutting before a grid cell runs means
       updating the SHA here; re-cutting mid-grid means re-freezing and saying so. What each
       re-cut invalidates is stated in the commit that makes it; the 2026-07-31 model
       boundary does not move the freeze but cuts run comparability the same way. The
       cost-calibration run predates every freeze, which is why it isn't a grid cell.
-      Settled here so they are not relitigated: `max_nudges` stays 3 (across 12 runs
-      and three benchmarks, 0 of 50 attempts that ever reached three consecutive
-      refusals went on to solve); grep returns exact qualified-name matches only, never
+      Settled here so they are not relitigated: `max_nudges` stays 3 — re-examined
+      2026-08-07 against the two block-A cells, where it is what ENDS ~20% of attempts
+      (15 grep, 22 semantic, every one of them with budget left, median ~$0.25 of $1.00),
+      and held anyway on the older and stronger evidence that across 12 runs and three
+      benchmarks, 0 of 50 attempts that ever reached three consecutive refusals went on
+      to solve; the per-problem budget stays $1.00 @std, with the tail it clips recorded
+      rather than removed (solved attempts p50 $0.14, p90 $0.63, max $1.001; 24-30% of
+      attempts hit the cap and they consume 52-61% of a cell's spend, so raising it is a
+      cost decision that can be taken later without changing any other number); grep returns exact qualified-name matches only, never
       near-miss leads; loogle results ARE filtered against our environment while
       semantic's are not — the same question priced at different measured skews (9.5%
       vs 0.2%), decided the same way both times, cheapest-validity-first
