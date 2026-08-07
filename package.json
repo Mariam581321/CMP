@@ -5,6 +5,6 @@
   "scripts": {
     "sanitize": "node runner/sanitize.js",
     "run": "node runner/run.js",
-    "test": "node scripts/probe-render.mjs && node scripts/probe-check-env.mjs && node scripts/probe-grep.mjs && node scripts/probe-edit.mjs && node scripts/probe-grade-agreement.mjs"
+    "test": "node scripts/probe-render.mjs && node scripts/probe-check-env.mjs && node scripts/probe-highwater.mjs && node scripts/probe-grep.mjs && node scripts/probe-edit.mjs && node scripts/probe-grade-agreement.mjs"
   }
 }

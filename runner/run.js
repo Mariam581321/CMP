@@ -25,7 +25,7 @@ import { grade } from "./grade.js";
 import { benchmarkDecls } from "./stmt.js";
 import { MATHLIB_SRC } from "./grep.js";
 import { tailSessions, newStats, applyEntry } from "./session-tail.js";
-import { readHighWater, FIRST_FILE, LAST_FILE } from "./highwater.js";
+import { gradeHighWater } from "./highwater.js";
 import { CHECK_SHA, checkEnvDiff, CPU_FUSE_MS, WALL_FUSE_MS } from "./check-env.js";
 import { costStd, LEAN_PORT, LEAN_URL, MAX_HEARTBEATS, green, red, yellow, dim, bold, cyan, money, secs } from "./common.js";
 
@@ -614,19 +614,8 @@ async function attempt(name, idx) {
   // final file. Failure here is recorded as null and never fails an attempt.
   let highWater = null;
   try {
-    const hw = readHighWater(probDir);
-    if (hw) {
-      const gradeSnap = async (file, stamp) => {
-        if (!stamp || !existsSync(join(probDir, file))) return null;
-        const r = await grade(name, join(probDir, file), join(PROBLEMS_DIR, `${name}.lean`), { end: "completed" });
-        return { ...stamp, solved: r.solved, reason: r.solved ? null : r.reason, detail: r.solved ? null : (r.detail ?? "").slice(0, 500) };
-      };
-      const first = await gradeSnap(FIRST_FILE, hw.first);
-      // One compile, not two, when the attempt only ever had one green check or never
-      // moved off it — the common case, and the md5 says so without asking Lean.
-      const last = hw.last?.md5 === hw.first?.md5 ? first : await gradeSnap(LAST_FILE, hw.last);
-      highWater = { greens: hw.greens ?? 0, ever_solved: !!(first?.solved || last?.solved), first, last };
-    }
+    highWater = await gradeHighWater(probDir, (file) =>
+      grade(name, file, join(PROBLEMS_DIR, `${name}.lean`), { end: "completed" }));
   } catch (e) {
     console.error(`  ${red("high-water grade error")} ${name}: ${e.message}`);
   }

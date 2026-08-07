@@ -76,8 +76,38 @@ export function recordHighWater(dir, code, at) {
   }
 }
 
-// Read side, for run.js. Returns null when the attempt never reached a green check —
-// which is the ordinary case, not an error.
+// Read side. Returns null when the attempt never reached a green check — which is the
+// ordinary case, not an error.
 export function readHighWater(dir) {
   try { return JSON.parse(readFileSync(join(dir, STAMP_FILE), "utf8")); } catch { return null; }
+}
+
+/**
+ * Grade the snapshots at the end of an attempt, turning "the agent's own tool said
+ * green" into a verdict from the same grader that judges the final file. Lives here
+ * rather than in run.js so it can be tested without a runner, a model or Lean.
+ *
+ * `grade(path)` is injected — run.js passes the real grader bound to the problem, with
+ * `end: "completed"`, deliberately: a snapshot is a file the agent produced and watched
+ * pass, so the statement checks apply straight to it, unlike a final file that a SIGKILL
+ * may have caught mid-edit.
+ *
+ * @returns the `high_water` record, or null when the attempt never held a proof.
+ */
+export async function gradeHighWater(dir, grade) {
+  const hw = readHighWater(dir);
+  if (!hw) return null;
+  const gradeSnap = async (file, stamp) => {
+    if (!stamp || !existsSync(join(dir, file))) return null;
+    const r = await grade(join(dir, file));
+    return { ...stamp, solved: r.solved, reason: r.solved ? null : r.reason, detail: r.solved ? null : (r.detail ?? "").slice(0, 500) };
+  };
+  const first = await gradeSnap(FIRST_FILE, hw.first);
+  // One compile, not two, when the attempt only ever had one green check or never moved
+  // off it — the common case, and the md5 says so without asking Lean. Guarded on `first`
+  // having actually produced a verdict: if the first snapshot is missing from disk while
+  // the last one is there, reusing a null would throw away a gradeable proof, and both
+  // `md5`s being undefined would make the two look equal.
+  const last = first && hw.last?.md5 === hw.first?.md5 ? first : await gradeSnap(LAST_FILE, hw.last);
+  return { greens: hw.greens ?? 0, ever_solved: !!(first?.solved || last?.solved), first, last };
 }
