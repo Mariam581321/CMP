@@ -78,7 +78,13 @@ export function closestRegion(content, oldText) {
   const from = Math.max(0, best.start - 1);
   const to = Math.min(lines.length, best.start + W + 1);
   let snippet = lines.slice(from, to).join("\n");
-  if (snippet.length > 600) snippet = snippet.slice(0, 600) + " …";
+  // 600 -> 4000 (2026-08-07). This snippet is the whole point of the failed-edit path —
+  // it is what lets the model fix its oldText in one turn instead of re-reading the file
+  // — and 600 chars cut it in 99 of the 212 failed edits in the grep cell (47%), i.e. on
+  // exactly the multi-line edits where copying the region verbatim matters most. A
+  // failed edit costs a turn; 3 KB more of the file the model is already holding costs
+  // nothing it will not immediately re-read anyway.
+  if (snippet.length > 4000) snippet = snippet.slice(0, 4000) + " …";
   return { fromLine: from + 1, toLine: to, snippet, score: best.score };
 }
 

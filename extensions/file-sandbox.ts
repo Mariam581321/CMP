@@ -6,7 +6,8 @@
 // into an immediate, self-explanatory error.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { resolve, sep, basename, join } from "node:path";
+import { resolve, sep, basename, join, relative } from "node:path";
+import { statSync } from "node:fs";
 import { cmpConfig } from "../runner/common.js";
 
 export default function (pi: ExtensionAPI) {
@@ -34,6 +35,26 @@ export default function (pi: ExtensionAPI) {
           `All your files live in ${root} — use a path relative to it (e.g. "problem.lean").`,
       };
     }
+    // A directory read came back as `EISDIR: illegal operation on a directory, read` —
+    // a raw Node errno, 91 times in the semantic cell alone, each costing a turn to
+    // decode. The capability is deliberately unchanged (no listing: `read`/`write`/`edit`
+    // and nothing else is the floor every arm shares, and a directory listing is an `ls`),
+    // but the errno is replaced by a sentence that says what happened and where the
+    // agent's own files are.
+    let dir = false;
+    try { dir = statSync(abs).isDirectory(); } catch {}
+    if (dir)
+      return {
+        block: true,
+        reason:
+          `blocked: ${path} is a directory, not a file — there is no directory listing in this ` +
+          `environment. The file you are asked to prove is problem.lean${
+            mathlibDir && (abs === mathlibDir || abs.startsWith(mathlibDir + sep))
+              ? `; under Mathlib/ you can only read a full file path, e.g. the one a search result names ` +
+                `(${relative(root, abs)}/<file>.lean)`
+              : ""
+          }.`,
+      };
     if (event.toolName === "read") return;
     if (libraryFile && abs === resolve(root, libraryFile)) {
       return {
