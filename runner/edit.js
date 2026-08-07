@@ -78,17 +78,20 @@ export function closestRegion(content, oldText) {
   const from = Math.max(0, best.start - 1);
   const to = Math.min(lines.length, best.start + W + 1);
   let snippet = lines.slice(from, to).join("\n");
-  // 600 -> 4000 (2026-08-07). This snippet is the whole point of the failed-edit path —
+  // 600 -> 2000 (2026-08-07). This snippet is the whole point of the failed-edit path —
   // it is what lets the model fix its oldText in one turn instead of re-reading the file
-  // — and 600 chars cut it on 99 of 212 failed edits in the grep cell and 101 of 242 in
-  // the semantic one, i.e. on exactly the multi-line edits where copying the region
-  // verbatim matters most. Note how close those two are: edit failure is 5.4% / 6.7% of
-  // calls across nearly identical volumes, so this cap binds on a property of editing
-  // Lean, not on anything either arm does — which is what makes raising it a fix rather
-  // than a treatment. A
-  // failed edit costs a turn; 3 KB more of the file the model is already holding costs
-  // nothing it will not immediately re-read anyway.
-  if (snippet.length > 4000) snippet = snippet.slice(0, 4000) + " …";
+  // — and 600 cut it on 99 of 212 failed edits in the grep cell and 101 of 242 in the
+  // semantic one, i.e. on exactly the multi-line edits where copying the region verbatim
+  // matters most. Note how close those two are: edit failure is 5.4% / 6.7% of calls
+  // across nearly identical volumes, so this cap binds on a property of editing Lean,
+  // not on anything either arm does — which is what makes moving it a fix rather than a
+  // treatment.
+  // 2000 and not more, sized from the region sizes those 454 failures would have
+  // produced (p50 749, p75 1465, p90 3477, max 14025 bytes): it covers p75 whole for
+  // ~1.15 KB per attempt of extra context, against 1.78 KB to reach p92. The regions
+  // past it are ones where the model sent an enormous oldText, and handing back 4 KB of
+  // file is not what fixes that — re-reading is, which the message already says.
+  if (snippet.length > 2000) snippet = snippet.slice(0, 2000) + " …";
   return { fromLine: from + 1, toLine: to, snippet, score: best.score };
 }
 

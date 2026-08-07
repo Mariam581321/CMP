@@ -313,7 +313,7 @@ end to end 2026-08-07; the ones that moved are marked.
 | `grep_mathlib` results | 25 **(was 10)** | 43% of calls truncated at 10 | median truncated query matched 38 declarations; see SEARCH.md for the ordering that decides which survive |
 | grep raw lines | 20,000 **(was 400)** | every broad query | an uncapped grep over all of Mathlib costs ~0.1 s — the cap bought nothing and lost the back half of the library |
 | grep declaration expansion | 24 lines / 1.6 KB **(was 10 / 600)** | 77 of 9,428 calls | a wrapped Mathlib signature cut in half defeats the expansion's whole purpose |
-| failed-edit closest region | 4 KB **(was 600 B)** | cut 99 of 212 failed edits (47%) | this snippet is what turns a failed edit into one turn instead of five |
+| failed-edit closest region | 2 KB **(was 600 B)** | cut 200 of 454 failed matches (44%), both arms alike | this snippet is what turns a failed edit into one turn instead of five; 2 KB covers p75 of the regions for ~1.15 KB/attempt, and past that the model sent an enormous `oldText` and needs to re-read, not to be handed more file |
 | `add_fact` compiler output | 16 KB **(was 6 KB)** | — | same budget as a check, and unlike a check there is no `last.txt` to fall back on |
 | worker report (`spawn`) | 30 KB | — | unchanged; the report is the only channel out of a worker |
 | per-problem budget | $1.00 @std | 24-30% of attempts | **held, deliberately.** p50 solve $0.14, p90 $0.63, max $1.001 — the cap does clip the tail of the solve distribution, and that is a recorded outcome (`budget_exceeded`), equal across arms |

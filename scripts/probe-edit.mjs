@@ -47,11 +47,16 @@ const fails = (fn) => { try { fn(); return null; } catch (e) { return e.message;
 }
 
 // The region snippet is what lets the model fix its oldText in one turn. 600 chars cut
-// it on 47% of the failed edits in the grep cell; 4000 is sized for a real Lean block.
+// it on 44% of the 454 failed matches across both block-A cells; 2000 is sized from what
+// those regions would have been (p50 749, p75 1465), so an ordinary multi-line Lean block
+// survives whole and only the pathological oldText is cut — where the answer is to
+// re-read the file, which the message says, not to be handed more of it.
 {
   const src = Array.from({ length: 60 }, (_, i) => `  have h${i} : some ${"long ".repeat(12)}fact ${i} := by positivity`).join("\n");
-  const near = closestRegion(src, Array.from({ length: 20 }, (_, i) => `  have h${i} : nope`).join("\n"));
-  check("a 20-line region survives whole", !near.snippet.endsWith(" …"), `${near.snippet.length} chars`);
+  const ordinary = closestRegion(src, Array.from({ length: 12 }, (_, i) => `  have h${i} : nope`).join("\n"));
+  check("an ordinary multi-line block survives whole", !ordinary.snippet.endsWith(" …"), `${ordinary.snippet.length} chars`);
+  const huge = closestRegion(src, Array.from({ length: 50 }, (_, i) => `  have h${i} : nope`).join("\n"));
+  check("a pathological oldText is still cut", huge.snippet.endsWith(" …") && huge.snippet.length <= 2010, `${huge.snippet.length} chars`);
 }
 
 // Ambiguity and overlap are errors, not guesses: a non-unique oldText edited in place
