@@ -178,9 +178,11 @@ module because every time two parts of this harness kept their own idea of green
 drifted, and the drift was only ever visible after a run: the agent's check vs the grader
 on what "compiles" means (0727), the axiom axis (0804, fatex_99), and the header itself —
 which was computed from the compiler's messages alone, so a file with a rewritten
-statement or a smuggled axiom opened with `CLEAN — no errors, no sorries` and then had a
-`CHECK FAILED: you modified the theorem statement` paragraph glued on above it. 683 checks
-across the two block-A cells carried that contradiction. `checkedCompile` now returns only
+statement or a smuggled axiom would open with `CLEAN — no errors, no sorries` and then
+have a `CHECK FAILED: you modified the theorem statement` paragraph glued on above it.
+That third one was caught before it ever ran (the header and this fix are the same day,
+and both postdate the block-A cells); 683 of those cells' 13,058 checks were statement- or
+axiom-tampered, which is the rate at which it would have fired. `checkedCompile` now returns only
 the FACTS (`ok`, `sorries`, `stmt`, `axiomsBad`) and every consumer derives the verdict
 from them — no cached verdict travels alongside the facts it was computed from.
 `scripts/probe-grade-agreement.mjs` compiles one file per fault class against real Lean and

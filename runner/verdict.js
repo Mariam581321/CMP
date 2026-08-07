@@ -9,12 +9,15 @@
 //   * agent-facing check vs grader on what "compiles" means (fixed 2026-07-27);
 //   * the axiom axis — lean_check said green on a file the grader failed as
 //     bad_axioms (2026-08-04, spawn-fatex10-0804 fatex_99 and three 0802 incidents);
-//   * the header itself (fixed here, 2026-08-07): it was computed from the compiler's
-//     messages alone, so a file with a rewritten statement or a smuggled axiom opened
-//     with `CLEAN — no errors, no sorries` and then had a `CHECK FAILED: you modified
-//     the theorem statement` paragraph glued on above it. The first 200 characters —
-//     the part of a check that is designed to be unmissable — said the opposite of the
-//     verdict. 683 checks across the two block-A cells carried that contradiction.
+//   * the header itself (introduced and fixed the same day, 2026-08-07): it was computed
+//     from the compiler's messages alone, so a file with a rewritten statement or a
+//     smuggled axiom would open with `CLEAN — no errors, no sorries` and then have a
+//     `CHECK FAILED: you modified the theorem statement` paragraph glued on above it —
+//     the first 200 characters, the part of a check designed to be unmissable, saying
+//     the opposite of the verdict. This one never reached a run (the header postdates
+//     both block-A cells), so the number below is a rate, not damage: 683 of the 13,058
+//     checks in those cells were statement-tampered or axiom-tampered, i.e. that is how
+//     often the contradiction would have fired in a cell.
 // So `done` here is the ONLY definition of a green file, and the header word is
 // derived from it rather than computed alongside it.
 
