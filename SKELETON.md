@@ -795,13 +795,40 @@ minimal treatment.
 API (natural language → Mathlib lemmas; no indexing infra on our side). It's someone
 else's public endpoint, so if it's flaky or rate-limits during a run, fall back to
 [LeanExplore](https://arxiv.org/abs/2506.11085), which is self-hostable — removing the
-external-uptime dependency. **429s are retried inside the tool** (2026-08-07): every one
-of the 69 search failures in semantic-fatex87-0805 was an HTTP 429, i.e. the runner's own
-25-way concurrency rate-limiting itself against a public endpoint, and each one cost the
-attempt a turn. That is a harness effect landing on exactly one side of the block-A
-comparison — grep is local and cannot rate-limit — so the arm was paying a tax the thing
-it is compared against does not. Waiting inside the tool costs zero tokens; a non-429 4xx
-is the query's own answer and is never retried.
+external-uptime dependency.
+
+**The 429s were bursts, and they are paced away at the source (2026-08-07).** Every one
+of the 69 search failures in semantic-fatex87-0805 was an HTTP 429 — the runner's own
+25-way concurrency rate-limiting itself against a public endpoint, each costing the
+attempt a turn, and landing on exactly one side of the block-A comparison since grep is
+local and cannot rate-limit. Bucketing that cell's 6,314 searches by minute says what
+kind of problem it is and what the limit is: 8.0/min average, p90 23/min, and all 69
+rejections inside **six minutes of 569** — the highest CLEAN minute is **50** requests and
+the lowest failing one **52**, so the rule is ~50/min per IP and we only ever break it in
+spikes, when many attempts search at the same moment.
+
+No per-process limiter can see that, so the token bucket lives in the one process every
+attempt already talks to: `runner/lean-server.js` hands out **rate slots** (`POST
+/search-slot`, 30/min with a burst of 8, round-robin across clients exactly like checks).
+It is a ticket dispenser, not a proxy — no search traffic passes through the daemon, so it
+gains a timer rather than a network dependency, and `extensions/lean-search.ts` proceeds
+unpaced if no dispenser answers, which is precisely the pre-2026-08-07 behaviour. The
+guarantee is a hard one that fixed-minute measurement cannot give: a token bucket bounds
+**any sliding 60 s window** at rate + burst = 38, against a limit of ~50 (30 requests
+either side of a minute boundary is 60 in a sliding window while both fixed buckets read
+30). Verified by replaying the worst measured minute — 99 simultaneous requests from 25
+clients come out at 38/sliding-minute, 8 immediately, fully drained in 182 s. Replayed
+against the cell, this pacing would have touched 16 of 563 clean minutes and all 6
+failing ones.
+
+Retries stay as the backstop, with **full jitter as the load-bearing part**: a fixed
+backoff would have every rejected caller sleep the same interval and fire together,
+reproducing the spike. A non-429 4xx is the query's own answer and is never retried.
+Both layers cost wall clock and never tokens or turns, so an absorbed 429 cannot move
+`cost_std` or a solve rate — which is what stops it biasing the arm. `/health`'s
+`search_slots` (granted / paced / queued / tokens) and the tool's own `retries` and
+`slot_ms` details are how the next run answers "did this work", which the last one could
+not.
 
 `grep_mathlib` (symbolic, PLAN.md block A) greps the local Mathlib checkout at
 `lean-env/.lake/packages/mathlib` — the exact source the REPL compiles against, so hits

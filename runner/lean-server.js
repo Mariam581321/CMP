@@ -604,6 +604,97 @@ async function runCheck(client, prep) {
   }
 }
 
+// ---------- shared rate slots for the external search API ----------
+// A pure ticket dispenser: a client asks for a slot, and the answer arrives when it is
+// that client's turn AND a token is available. No search traffic passes through here —
+// the caller makes its own request afterwards — so this daemon gains a timer, not a
+// network dependency, and an upstream that hangs or changes shape is still entirely the
+// extension's problem.
+//
+// Why it has to live in a shared process at all: the failures are BURSTS, not volume.
+// Measured over semantic-fatex87-0805 — 6,314 searches in 13.1 h, 8.0/min average, p90
+// 23/min — every one of the 69 HTTP 429s falls inside SIX minutes of 569, each carrying
+// 65-99 calls. Those spikes are 25 pi processes searching at the same moment, so no
+// per-process limiter can see them, and a retry (even a jittered one) only spreads a
+// burst that has already been sent and refused. This stops it being sent.
+//
+// Token bucket, not a fixed spacing, because the traffic is legitimately bursty and
+// mostly harmless: an idle pool banks SEARCH_BURST slots, so a handful of simultaneous
+// searches go straight through, and only sustained pressure is paced.
+//
+// The numbers are measured, not picked. Bucketing that cell's 6,314 searches by minute
+// brackets the endpoint's limit tightly: the highest CLEAN minute is 50 requests and the
+// lowest FAILING one is 52, over 563 clean minutes against 6 failing (52, 64, 65, 65,
+// 69, 99). So the rule is ~50/min per IP.
+// 30 + 8 leaves 24% of margin under that, and the margin is the point rather than
+// timidity: those per-minute buckets are FIXED windows, while a Cloudflare limiter
+// slides — 30 requests either side of a minute boundary is 60 in a sliding window while
+// both fixed buckets read 30, so the measurement understates the instantaneous rate. A
+// token bucket is what closes that gap: it paces emission continuously, so no sliding
+// 60 s window can ever contain more than SEARCH_RATE_PER_MIN + SEARCH_BURST = 38. The
+// price is small and bounded — replayed against the cell, a 30/min cap would have paced
+// 16 of 563 clean minutes (2.8%) and all 6 failing ones, and pacing costs wall clock
+// only.
+// Round-robin across clients for the same reason checks are: one search-happy attempt
+// must wait behind itself, not in front of the run.
+const SEARCH_RATE_PER_MIN = parseInt(process.env.CMP_SEARCH_RATE_PER_MIN ?? "30");
+const SEARCH_BURST = parseInt(process.env.CMP_SEARCH_BURST ?? "8");
+// A backstop on the queue, not a policy: past this the caller is told to go ahead
+// unpaced rather than be parked, because a stuck dispenser must never be able to hold
+// up a run. Sized far above anything the measured traffic can produce.
+const SEARCH_QUEUE_MAX = 500;
+let slotTokens = SEARCH_BURST;
+let slotLast = Date.now();
+const slotQueues = new Map();
+const slotRr = [];
+let slotTimer = null;
+let slotsGranted = 0, slotsPaced = 0;
+// Lazy refill: the bucket has no ticking clock of its own, it just accrues since the
+// last time anyone looked. Shared with /health so an operator (and the probe) can see
+// the live token count rather than a value stale since the last grant.
+function slotRefill() {
+  const now = Date.now();
+  slotTokens = Math.min(SEARCH_BURST, slotTokens + ((now - slotLast) / 60_000) * SEARCH_RATE_PER_MIN);
+  slotLast = now;
+  return slotTokens;
+}
+function slotPump() {
+  slotRefill();
+  while (slotTokens >= 1 && slotRr.length) {
+    slotTokens -= 1;
+    const client = slotRr.shift();
+    const q = slotQueues.get(client);
+    const grant = q.shift();
+    if (q.length) slotRr.push(client); else slotQueues.delete(client);
+    grant();
+  }
+  clearTimeout(slotTimer);
+  slotTimer = null;
+  if (slotRr.length) {
+    // Next token is due in (1 - tokens) / rate minutes; wake then, not on a poll.
+    slotTimer = setTimeout(slotPump, Math.max(50, Math.ceil(((1 - slotTokens) / SEARCH_RATE_PER_MIN) * 60_000)));
+    slotTimer.unref();
+  }
+}
+// `grant(waitedMs)` — the wait is measured here rather than inferred, because the only
+// question this telemetry has to answer after a run is "did pacing actually bind", and
+// counting queue ENTRIES answers a different one: every request enters the queue, even
+// the ones a full bucket releases in the same tick.
+function slotRequest(client, grant) {
+  const t0 = Date.now();
+  const done = () => {
+    const waited = Date.now() - t0;
+    slotsGranted++;
+    if (waited > 50) slotsPaced++;
+    grant(waited);
+  };
+  const queued = [...slotQueues.values()].reduce((n, q) => n + q.length, 0);
+  if (queued >= SEARCH_QUEUE_MAX) return done(); // backstop: never park a run
+  if (!slotQueues.has(client)) { slotQueues.set(client, []); slotRr.push(client); }
+  slotQueues.get(client).push(done);
+  slotPump();
+}
+
 // Requests are served round-robin across clients (body.client, e.g. the problem
 // name; the grader is just another client) — an attempt with many queued checks
 // waits behind itself, not in front of everyone else (seen: one check-spamming
@@ -654,9 +745,29 @@ const server = createServer((req, res) => {
       // expects, exactly like check_sha.
       library_sha256: LIB_SHA,
       cpu_fuse_s: CPU_FUSE_MS / 1000,
+      // The external-search rate slots (see slotPump). Informational, deliberately NOT
+      // in check_sha: pacing costs wall clock and nothing else — it cannot move a
+      // verdict or change one byte the agent sees — and a server without it degrades to
+      // the extension calling out directly, which is what happened before it existed.
+      search_slots: { rate_per_min: SEARCH_RATE_PER_MIN, burst: SEARCH_BURST, tokens: +slotRefill().toFixed(2), granted: slotsGranted, paced: slotsPaced, queued: [...slotQueues.values()].reduce((n, q) => n + q.length, 0) },
       queued: Object.fromEntries([...queues].map(([k, v]) => [k, v.length])),
       workers: workers.map((w) => ({ id: w.id, ready: w.ready, busy: w.busy })),
     });
+  }
+  // Wait here until this client may make one external search request. Answers
+  // {waited_ms}; the caller does its own HTTP afterwards. A client that dies while
+  // waiting just drops its callback — the token it was granted is spent, which is the
+  // conservative direction.
+  if (req.method === "POST" && req.url === "/search-slot") {
+    let data = "";
+    req.setEncoding("utf8");
+    req.on("data", (d) => (data += d));
+    req.on("end", () => {
+      let client = "anon";
+      try { client = String(JSON.parse(data || "{}").client ?? "anon"); } catch {}
+      slotRequest(client, (waited) => respond(200, { ok: true, waited_ms: waited }));
+    });
+    return;
   }
   if (req.method === "POST" && req.url === "/recycle") {
     if (recycling) return respond(409, { ok: false, error: "recycle already in progress" });

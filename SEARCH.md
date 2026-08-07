@@ -22,10 +22,26 @@ motivated each design choice, not claims about the current model.
 
 **Mechanism.** One POST to the public LeanSearch API (`https://leansearch.net/search`),
 `{query: [<text>], num_results: 6}`. Natural-language queries matched by meaning. No
-fallbacks, no retries; a 30 s abort.
+fallbacks; a 30 s abort per attempt.
+
+**Rate discipline (2026-08-07).** The endpoint is someone else's, behind Cloudflare, and
+it rate-limits at **~50 requests/min per IP** — bracketed from the 0805 semantic cell,
+where the highest clean minute carried 50 and the lowest failing one 52. All 69 of that
+cell's HTTP 429s fall inside six minutes of 569; the sustained rate (8.0/min average, p90
+23) was never a problem. The spikes are 25 concurrent attempts searching at the same
+moment, which no per-process limiter can see, so every call first takes a **rate slot**
+from the shared lean server (`POST /search-slot`, token bucket at 30/min with a burst of
+8, round-robin across clients). That bounds any *sliding* 60 s window at 38 — the bound
+fixed-minute counting cannot promise. The daemon dispenses tickets only; no search
+traffic passes through it, and a missing dispenser means proceed unpaced, so the
+mechanism can only improve on the behaviour it replaced. Jittered retry (5 attempts,
+~31 s expected) remains as a backstop for 429/5xx; a non-429 4xx is the query's own
+answer and is never retried. Both cost wall clock and never tokens or turns, so an
+absorbed 429 cannot move a solve rate or `cost_std`.
 
 **Returns.** Up to 6 lines, `• <name> : <signature> — <informal name>`. Zero hits →
-`"No results."` (a result, not an error). HTTP failure or timeout → tool failure.
+`"No results."` (a result, not an error). An HTTP failure that survives the retries, or a
+timeout → tool failure.
 
 **Properties that matter for the write-up.**
 - The index is **external and live**: it is not built from our checkout, it tracks its own
