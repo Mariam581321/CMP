@@ -347,6 +347,17 @@ which is the shape a list can separate arms on, unlike the 0804 pilot's zero. De
       re-cut invalidates is stated in the commit that makes it; the 2026-07-31 model
       boundary does not move the freeze but cuts run comparability the same way. The
       cost-calibration run predates every freeze, which is why it isn't a grid cell.
+      2026-08-08, mid-grid and deliberately NOT a re-freeze: the supervisor
+      error-ledger fix landed between `grep-fatex87-0807` finishing and
+      `semantic-fatex87-0807` launching (errored turns ride their own bound instead
+      of spending the nudge budget; a null check result nudges instead of reading as
+      done). Harness-side and agent-invisible — the continuation text is
+      byte-identical (probe-supervisor pins it) and `check_sha` does not move — so
+      cells on either side stay comparable; the change only touches attempts hit by
+      provider outages, which land on arms at random. grep-0807 ran without it; its
+      error->nudge casualties are flagged for rerun by the 0808 scan rather than by
+      moving the freeze. `semantic-fatex87-0807` runs at concurrency 40 (throughput
+      knob only under the deterministic verdict; recorded in run.json).
       Settled here so they are not relitigated: `max_nudges` stays 3 — re-examined
       2026-08-07 against the two block-A cells, where it is what ENDS ~20% of attempts
       (15 grep, 22 semantic, every one of them with budget left, median ~$0.25 of $1.00),
