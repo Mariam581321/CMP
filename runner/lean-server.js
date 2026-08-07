@@ -575,7 +575,13 @@ const unavailable = (r, kills) => ({
       ? `lean check unavailable: this file burned the ${Math.round(CPU_FUSE_MS / 1000)} CPU-second machine fuse ` +
         `${kills}x, each time on a different REPL instance. Nothing was recorded about your proof — but this ` +
         `machine cannot compile the file as written, so it has to get dramatically cheaper.`
-      : `lean check unavailable: the machine could not run this check (${r.bound} fuse)`,
+      // No fuse names here. `rss`/`wall`/`mem` are facts about our REPL pool, and an
+      // agent cannot act on any of them — naming them spends a turn teaching it about
+      // infrastructure. What it CAN act on is the two possibilities, so say both:
+      // retry, and if it keeps happening the file is the problem.
+      : `lean check unavailable: this machine could not run the check. Nothing was recorded about your ` +
+        `file — the check did not happen, so this says nothing about whether your proof is correct. Try ` +
+        `again; if it keeps happening, the file is too expensive to compile here and has to get much cheaper.`,
   messages: [], sorries: [],
   ...(r.wall_ms != null ? { wall_ms: r.wall_ms, cpu_ms: r.cpu_ms } : {}),
 });

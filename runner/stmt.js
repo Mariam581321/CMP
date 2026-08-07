@@ -239,6 +239,12 @@ export function serverCheck(code, client = "grader", force = false) {
 // in problems/stmt-types.json keyed by a hash of the original source (derived +
 // gitignored like the problem files; `grade.js --build-stmt-cache` rebuilds all, and
 // the sha key means a stale entry can only cause a recompute, never a wrong verdict).
+// The key does NOT include the compile environment, and that is safe only because of a
+// launch precondition rather than a mechanism: a baked library (block D) elaborates the
+// same statements in a richer env, and `runner/drift-check.js` requires ZERO drift in
+// canonical types and values before a library cell may run — so a cache entry written
+// under either env is by construction the same entry. If drift-check is ever skipped, a
+// library run would write library-env types under a bare-env key. Do not skip it.
 // Read-merge-write keeps concurrent
 // graders from clobbering each other's entries within a process; a cross-process race
 // at worst drops an entry, which is then recomputed.
