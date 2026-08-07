@@ -24,7 +24,11 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { checkedCompile, serverCheck } from "../runner/stmt.js";
 import { cmpConfig, costStd, workerSpendStd } from "../runner/common.js";
-import { verifiedDone } from "../runner/highwater.js";
+import { checkStatus, blockerNotes } from "../runner/verdict.js";
+
+// See the call site: a nudge is a user message, so it is re-sent on every subsequent
+// turn for the rest of the attempt, unlike a tool result the agent asked for.
+const NUDGE_CAP = 6000;
 
 export default function (pi: ExtensionAPI) {
   const cfg = cmpConfig();
@@ -122,13 +126,18 @@ export default function (pi: ExtensionAPI) {
     for (;;) {
       try {
         check = origPath && existsSync(origPath)
-          // Rendered at the nudge's own budget rather than sliced to 3000 after the fact:
-          // a prefix slice of a full-size check used to hand a nudged agent 3 KB that
-          // could be pure warning text, with the sorry list — the thing the nudge is
-          // about — past the cut. renderCheck keeps the header and the sorries and lets
-          // the errors absorb it. No workDir: the file this writes is lean_check's, and
-          // the supervisor must not overwrite it behind the agent's back.
-          ? await checkedCompile(content, { original: readFileSync(origPath, "utf8"), problemName: problem, client: problem, cap: 3000 })
+          // Rendered at the nudge's own budget, and deliberately smaller than
+          // lean_check's: this is a RE-statement of something the agent can fetch itself
+          // in one call, and unlike a tool result it is a user message that every later
+          // turn resends. Nudge counts reach 134 in one attempt, so a full 16 KB digest
+          // per nudge would put hundreds of KB of duplicated compiler output permanently
+          // in the window. NUDGE_CAP covers p99 of the nudges actually sent (3,152 chars
+          // over the two block-A cells) with room, and renderCheck protects the header —
+          // every sorry line, the statement and axiom verdicts — at any cap, which is
+          // what the old blunt 3000-char slice after the fact did not.
+          // No workDir: the file this would write is lean_check's, and the supervisor
+          // must not overwrite it behind the agent's back.
+          ? await checkedCompile(content, { original: readFileSync(origPath, "utf8"), problemName: problem, client: problem, cap: NUDGE_CAP })
           : await serverCheck(content, problem); // adhoc run without CMP_CONFIG
         break;
       } catch (e: any) {
@@ -140,34 +149,28 @@ export default function (pi: ExtensionAPI) {
         await new Promise((r) => setTimeout(r, 10_000));
       }
     }
-    const stmtBad = check?.stmt?.ok === false;
-    // Disallowed axioms block "done" exactly like a tampered statement (2026-08-04):
-    // an axiom-closed file compiles sorry-free with the statement intact, so without
-    // this the supervisor blessed as done a file the grader fails as bad_axioms
-    // (spawn-fatex10-0804 fatex_99; three 0802 incidents before it).
-    const axiomsBad: Record<string, string[]> = check?.axiomsBad ?? {};
-    const axBad = Object.keys(axiomsBad).length > 0;
-    dbg("check:", { ok: check?.ok, sorries: (check?.sorries ?? []).length, stmtBad, axBad });
-    // verifiedDone, not the same condition spelled out again: this test and the
-    // high-water watermark in lean-check.ts must never disagree about what a solved
-    // file looks like (runner/highwater.js).
-    if (verifiedDone(check)) return; // verified done — let the attempt end
+    // One reading of the result (runner/verdict.js), shared with the header the agent
+    // sees and with the high-water watermark in lean-check.ts: these must never disagree
+    // about what a solved file looks like. A tampered statement and a disallowed axiom
+    // both block "done" exactly like a sorry — an axiom-closed file compiles sorry-free
+    // with the statement intact, and without that the supervisor blessed as done a file
+    // the grader fails as bad_axioms (spawn-fatex10-0804 fatex_99; three 0802 incidents).
+    const status = checkStatus(check ?? {});
+    dbg("check:", { compiles: status.compiles, sorries: status.sorries.length, stmtBad: status.stmtBad, axBad: status.axBad });
+    if (status.done) return; // verified done — let the attempt end
 
     noProgress = actions > actionsAtNudge ? 0 : noProgress + 1;
     actionsAtNudge = actions;
     if (noProgress > maxNudges) return; // wall-clock/budget still bound everything
 
+    // Same paragraphs lean_check and plan_check use for the same faults (blockerNotes),
+    // so the agent is never told two different things about what grading accepts.
     const nudge =
       (lastStopReason === "length"
         ? `Your last message hit the output-token limit and was CUT OFF — everything after the cutoff is lost. Do not restart the derivation in chat. Write your current best attempt into problem.lean NOW (state intermediate facts as \`have\` steps closed by ring/linarith/norm_num etc.; leave hard parts as sorry'd steps) and run lean_check.\n\n`
         : `You are not done. `) +
-      (stmtBad
-        ? `IMPORTANT: you modified the theorem statement (${check.stmt.detail}). Proofs of a modified statement do not count — restore the original statement exactly; you may only fill sorries and add helper lemmas above it.\n\n`
-        : "") +
-      (axBad
-        ? `IMPORTANT: your proof depends on disallowed axioms (${Object.entries(axiomsBad).map(([d, a]) => `${d}: [${a.join(", ")}]`).join("; ")}). Grading accepts only propext, Classical.choice and Quot.sound, so this can never count. Remove the axiom declarations and prove those steps honestly.\n\n`
-        : "") +
-      `Checking your current problem.lean reports:\n\n${check?.pretty ?? "no check result available"}\n\nFix this and run lean_check; do not stop until it passes with no errors and no sorries.`;
+      blockerNotes(status).map((n: string) => `IMPORTANT: ${n}\n\n`).join("") +
+      `Checking your current problem.lean reports:\n\n${check?.pretty ?? "no check result available"}\n\nFix this and run lean_check; do not stop until it reports COMPLETE.`;
     try {
       // pi.sendUserMessage (ExtensionAPI, not the event ctx): messages queued by
       // agent_end handlers get a continuation inside the same headless prompt()

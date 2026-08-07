@@ -23,7 +23,9 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, rmdirSync, statSync } from "node:fs";
 import { postCheck, classifyLines } from "./common.js";
-import { CLIENT_WAIT_MS, bannedTactic } from "./stmt.js";
+import { CLIENT_WAIT_MS } from "./check-env.js";
+import { RENDER_CAP } from "./render.js";
+import { bannedTactic } from "./stmt.js";
 import { suspiciousKeywords, ALLOWED_AXIOMS } from "./grade.js";
 
 // What a candidate may declare: named lemma/theorem/def/abbrev/instance heads,
@@ -56,7 +58,11 @@ function scanDecls(code) {
 }
 
 const reject = (why) => ({ ok: false, pretty: `FACT REJECTED (bank unchanged): ${why}` });
-const cap = (s, n = 6000) => (s.length > n ? s.slice(0, n) + "\n... (truncated)" : s);
+// Same budget as a lean_check digest (runner/render.js RENDER_CAP): this is compiler
+// output about the agent's own candidate, so there is no reason for it to be a tighter
+// channel than the compiler output about its file. Unlike a check there is no `.check/
+// last.txt` to fall back on, which argues for more room here, not less.
+const cap = (s, n = RENDER_CAP) => (s.length > n ? s.slice(0, n) + "\n... (truncated)" : s);
 
 // Serialize [read bank, compile, append] across processes. The hold time is bounded by
 // one queued compile (CLIENT_WAIT_MS), so the steal threshold sits just above it: a

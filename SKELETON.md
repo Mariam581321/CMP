@@ -169,11 +169,34 @@ which narrowed the noise band but could not zero it — fateh_32 (0801, ~49 KB p
 line) was measured four times on the same bytes and flipped twice, recording
 `compile_error` on a proof the agent watched compile. Count, don't measure.
 
+**One definition of green (`runner/verdict.js`, 2026-08-07).** `checkStatus()` is the only
+place that reads a compile result and says whether anything is wrong with the file and
+whether it would grade solved. Four consumers share it: the header word the agent reads
+first, `lean_check`/`plan_check`'s failure paragraphs, the supervisor's stop-nudging test,
+and the high-water snapshot gate (`verifiedDone` is `checkStatus(...).done`). It is one
+module because every time two parts of this harness kept their own idea of green they
+drifted, and the drift was only ever visible after a run: the agent's check vs the grader
+on what "compiles" means (0727), the axiom axis (0804, fatex_99), and the header itself —
+which was computed from the compiler's messages alone, so a file with a rewritten
+statement or a smuggled axiom opened with `CLEAN — no errors, no sorries` and then had a
+`CHECK FAILED: you modified the theorem statement` paragraph glued on above it. 683 checks
+across the two block-A cells carried that contradiction. `checkedCompile` now returns only
+the FACTS (`ok`, `sorries`, `stmt`, `axiomsBad`) and every consumer derives the verdict
+from them — no cached verdict travels alongside the facts it was computed from.
+`scripts/probe-grade-agreement.mjs` compiles one file per fault class against real Lean and
+fails if the agent-visible verdict and `grade()` ever disagree.
+
 **What a check LOOKS like (2026-08-07 re-cut, `runner/render.js`).** One renderer serves
 lean_check, plan_check, check_snippet, the supervisor's nudge and the server's own
-`pretty`. Every result opens with a header line — `FAILED — 12 errors (5 distinct), 3
-sorries at line 44, 88, 120 · full output: .check/last.txt` — so the done-signal is the
-first 200 characters and no cap can reach it; then errors, then sorries, then warnings.
+`pretty`. Every result opens with a header line stating the whole verdict — `COMPLETE — no
+errors, no sorries, statement intact, axioms clean`, or `FAILED — 12 errors (5 distinct),
+3 sorries at line 44, 88, 120, STATEMENT MODIFIED · full output: .check/last.txt` — so the
+done-signal is the first 200 characters and no cap can reach it; then errors, then
+sorries, then warnings. The word is `checkStatus`'s, so it cannot disagree with the
+grader, and the statement/axiom facts appear only where they were actually checked: a
+`check_snippet` result says `COMPLETE — no errors, no sorries` and claims nothing about a
+statement a snippet does not have. The prompt tells the agent it is not done until
+lean_check reports COMPLETE.
 Identical message texts collapse to one plus their locator list, and the heartbeat note
 is emitted once per check rather than once per message. The cap is 16 KB, and when it
 binds it is the ERROR section that absorbs the cut (marked inline), never the sorries:
@@ -193,8 +216,27 @@ Replaying that corpus through the new renderer (`scripts/render-replay.mjs`): 0 
 0 lost goals, 39.2 MB → 25.1 MB of agent-visible text. Invariants are probed without Lean
 in `scripts/probe-render.mjs`.
 
-**No resource bound is ever a verdict.** CPU (600 s, `CMP_CPU_FUSE_MS`), wall (900 s),
-RSS and MemAvailable are machine fuses. A fuse kill is **never reported to the client at
+**The harness of record is the one that ran (`check_sha`, 2026-08-07).** The watchdog keeps
+one lean server alive for days, across git pulls, so the code on disk and the code deciding
+today's checks are not the same thing. `run.js` compared only `max_heartbeats` — the one
+number that has not moved since July — so a server started before the linter suppressions,
+the typeclass budget and the new fuses landed passed the launch check and would have served
+a whole grid cell with none of them. `runner/check-env.js` now holds everything the server
+decides (the injected `set_option` head, the clamp, the fuse chain), hashes it into
+`CHECK_SHA`, publishes it on `/health`, records it in `run.json`, and `run.js` refuses to
+launch on a mismatch — printing the diff field by field rather than two hashes. `regrade.js`
+warns instead of refusing: regrading a pre-freeze run against today's harness is what that
+tool is for, it just has to say which side moved.
+
+**No resource bound is ever a verdict.** CPU (3600 s, `CMP_CPU_FUSE_MS`), wall (5400 s),
+RSS and MemAvailable are machine fuses. **The four bounds are a chain, and it is derived
+rather than asserted** (`check-env.js`): CPU < wall < retry deadline < client wait, with
+the outer two computed from the inner ones. As three independent constants the chain did
+not actually hold — `RETRY_DEADLINE_MS` was documented as "under CLIENT_WAIT_MS", but the
+deadline is only tested BETWEEN attempts, so the last attempt could still run a full wall
+fuse past it (170 + 80 min against a 190 min client wait) and a `mem` kill, which never
+counts against `MAX_KILLS` by design, could ride that loop all the way there and blow the
+socket — converting a fuse the server hides into a connection error the agent sees. A fuse kill is **never reported to the client at
 all**: the server requeues the check and answers only once Lean itself has answered.
 Telling an agent "the machine faltered, try again" would teach it about our REPL and
 spend a whole turn, the growing context re-billed as input, on something it cannot act on
@@ -203,7 +245,8 @@ check always runs on a *different* REPL process (the kill marks its worker unrea
 the retry can be dispatched: with one worker it waits out the reimport, with several it
 goes to a sibling). Two non-`mem` kills, or the retry deadline (`mem` is never counted —
 the `MIN_AVAIL` fuse selects its victim by worker size, so its casualty is whichever
-check was in flight), end in `unavailable`: not a verdict, never memoized, nothing
+check was in flight — and it prefers an IDLE worker, which holds just as much memory and
+costs only a reimport), end in `unavailable`: not a verdict, never memoized, nothing
 recorded about the file — the machine could not run this check, and for the `cpu` fuse
 the wording tells the agent the file must get dramatically cheaper. The grader records
 `unavailable` as `grader_error`: visible and re-gradeable, never a silent fail. Each kill
@@ -246,12 +289,38 @@ elaboration under the cap and is then replayed by the kernel with no heartbeat c
 rare class cannot be bounded deterministically, so it is flagged, not verdicted: kernel
 work heavy enough to matter trips the CPU fuse and lands in `unavailable`. (In practice
 elaborator and kernel evaluate at comparable speed, so a cap-passing `decide` has kernel
-cost of the same order — the fuse at 600 s sits far above the ~165 CPU-s worst case
+cost of the same order — the fuse at 3600 s sits far above the ~165 CPU-s worst case
 measured for a single cap-exhausting declaration.)
 
 Error wording is harness design surface (the 406-check spam incident): the tool asserts
 the rule and the cache, both of which the harness enforces, and never predicts that Lean
 will behave the same way twice.
+
+## Every cap the agent can feel
+
+A truncation is a design decision about what the model is allowed to know, and the ones
+that hurt were all invisible: nothing in a result says "you were shown a quarter of the
+matches". So they are enumerated here, each with the measurement that sized it. Audited
+end to end 2026-08-07; the ones that moved are marked.
+
+| cap | value | binds how often | why this number |
+|---|---|---|---|
+| check digest (`RENDER_CAP`) | 16 KB | 0 of 13,058 replayed checks | errors absorb the cut, never sorries; the full text is in `.check/last.txt` on every check |
+| supervisor nudge digest | 6 KB **(was a 3 KB blunt slice)** | p99 of nudges sent is 3.2 KB | a nudge is a *user message*, re-sent every later turn, and nudge counts reach 134 in one attempt — so it is deliberately below a check's budget; what changed is that the header and every sorry line now survive the cut instead of a prefix slice landing mid-warning |
+| duplicate-message site list | 24 **(was 8)** | — | a site is ~6 chars; "+17 more" is a line number the agent has to go find by hand |
+| `grep_mathlib` results | 25 **(was 10)** | 43% of calls truncated at 10 | median truncated query matched 38 declarations; see SEARCH.md for the ordering that decides which survive |
+| grep raw lines | 20,000 **(was 400)** | every broad query | an uncapped grep over all of Mathlib costs ~0.1 s — the cap bought nothing and lost the back half of the library |
+| grep declaration expansion | 24 lines / 1.6 KB **(was 10 / 600)** | 77 of 9,428 calls | a wrapped Mathlib signature cut in half defeats the expansion's whole purpose |
+| failed-edit closest region | 4 KB **(was 600 B)** | cut 99 of 212 failed edits (47%) | this snippet is what turns a failed edit into one turn instead of five |
+| `add_fact` compiler output | 16 KB **(was 6 KB)** | — | same budget as a check, and unlike a check there is no `last.txt` to fall back on |
+| worker report (`spawn`) | 30 KB | — | unchanged; the report is the only channel out of a worker |
+| per-problem budget | $1.00 @std | 24-30% of attempts | **held, deliberately.** p50 solve $0.14, p90 $0.63, max $1.001 — the cap does clip the tail of the solve distribution, and that is a recorded outcome (`budget_exceeded`), equal across arms |
+| consecutive no-progress nudges | 3 | ends ~20% of attempts | **held, deliberately.** Every completed-but-unsolved attempt in both cells ran out of nudges with the budget only 9-86% spent (median ~$0.25 of $1.00) |
+| `search_mathlib` results | 6 | — | the semantic arm's natural depth; a ranked list degrades gracefully at the tail where a text search does not |
+
+Record-side truncations are separate and never reach the agent: `grade.detail` is cut to
+500 chars in the record and the grader's compiler output to 4,000 — both after the verdict
+is decided, so they can shorten a post-mortem but never a result.
 
 **`native_decide` pre-reject (agent-facing only).** The ban line is *kernel-checked
 or it doesn't count*: `decide`/`norm_num`/`omega` are kernel-verified computation and
@@ -310,8 +379,8 @@ see `runner/session-tail.js`).
 The file also exposes a liveness signal the pipe never did — a gap between entries is
 time since the last *completed* message — and a `--stale-min` fuse was built on it and
 then dropped the same day. Every single-operation hang is already bounded far below the
-48 h backstop: `lean_check` by the server's 900 s wall / 600 s CPU fuses under a 30 min
-client wait, loogle by a 30 s abort, a stalled provider stream by pi's 5 min HTTP idle
+48 h backstop: `lean_check` by the server's wall / CPU fuses under a client wait derived
+to sit outside them (`check-env.js`), loogle by a 30 s abort, a stalled provider stream by pi's 5 min HTTP idle
 timeout, and a retry storm not at all — pi persists each failed assistant message
 (`stopReason: "error"`) like any other, so retries keep the file moving. Meanwhile the
 fuse was sized against the then-default `--max-tokens` of 384k (~58 min of generation),
@@ -390,12 +459,25 @@ runner/stmt.js              statement-probe library + checkedCompile (the one ag
                             compile+statement client, shared by lean_check and plan_check)
 runner/grade.js             independent grading over the lean server
 runner/regrade.js           re-grade finished runs with the current grader (read-only)
-runner/highwater.js         the done-gate (verifiedDone) + solved high-water snapshots
+runner/verdict.js           THE reading of a check result: what is wrong with this file and
+                            would it grade solved (checkStatus / verifiedDone), plus the
+                            agent-facing wording for the faults that are not compiler
+                            output — shared by render, lean_check, plan_check, supervisor
+runner/check-env.js         what every check gets injected (heartbeat cap, typeclass
+                            budget, linter suppressions, the clamp), the derived
+                            fuse/client-wait chain, and CHECK_SHA — the fingerprint run.js
+                            refuses to launch against a server that does not match
+runner/highwater.js         solved high-water snapshots (gate = verdict.js verifiedDone)
 scripts/highwater-scan.mjs  reconstruct the high-water mark for pre-0807 runs from the
                             session files (read-only; md5-checked edit replay)
 runner/render.js            the one agent-facing rendering of a compile result (header,
                             error/sorry/warning order, dedupe, 16 KB cap) — shared by
                             lean_check, plan_check, check_snippet and the server itself
+scripts/probe-*.mjs         `npm test` — the invariants of the agent-facing channel as
+                            assertions: verdict/render, check-env (clamp, injected head,
+                            bound chain, fingerprint), grep ordering, edit, and
+                            probe-grade-agreement.mjs, which compiles one file per fault
+                            class and fails if agent and grader ever disagree
 runner/lean-server.js       persistent Lean REPL HTTP daemon (round-robin across clients)
 runner/plan.js              plan_check core logic
 extensions/lean-check.ts    always-on agent-facing compile tool
@@ -711,7 +793,13 @@ minimal treatment.
 API (natural language → Mathlib lemmas; no indexing infra on our side). It's someone
 else's public endpoint, so if it's flaky or rate-limits during a run, fall back to
 [LeanExplore](https://arxiv.org/abs/2506.11085), which is self-hostable — removing the
-external-uptime dependency.
+external-uptime dependency. **429s are retried inside the tool** (2026-08-07): every one
+of the 69 search failures in semantic-fatex87-0805 was an HTTP 429, i.e. the runner's own
+25-way concurrency rate-limiting itself against a public endpoint, and each one cost the
+attempt a turn. That is a harness effect landing on exactly one side of the block-A
+comparison — grep is local and cannot rate-limit — so the arm was paying a tax the thing
+it is compared against does not. Waiting inside the tool costs zero tokens; a non-429 4xx
+is the query's own answer and is never retried.
 
 `grep_mathlib` (symbolic, PLAN.md block A) greps the local Mathlib checkout at
 `lean-env/.lake/packages/mathlib` — the exact source the REPL compiles against, so hits

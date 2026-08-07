@@ -11,6 +11,7 @@ import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { grade } from "./grade.js";
+import { CHECK_SHA, checkEnvDiff } from "./check-env.js";
 import { LEAN_URL, green, red, yellow, dim, bold } from "./common.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -23,8 +24,18 @@ if (!dirs.length) {
 // The env identity gate (block D): regrading a run against a server with a different
 // library baked in (or none, when the run had one) would flip verdicts for reasons that
 // have nothing to do with the grader — silently. Same refusal as run.js's launch check.
-const serverLib = (await fetch(`${LEAN_URL}/health`, { signal: AbortSignal.timeout(3000) })
-  .then((r) => r.json()).catch(() => null))?.library_sha256 ?? null;
+const health = await fetch(`${LEAN_URL}/health`, { signal: AbortSignal.timeout(3000) })
+  .then((r) => r.json()).catch(() => null);
+const serverLib = health?.library_sha256 ?? null;
+// The check environment is the other half of that identity. Unlike the library this is a
+// WARNING, not a refusal: regrading a pre-freeze run against today's harness is exactly
+// what this tool is for, and the flips it prints are the answer. It just has to say so,
+// or a re-cut check environment reads as the grader changing its mind.
+if (health && health.check_sha !== CHECK_SHA)
+  console.error(
+    yellow(`note: the lean server's check environment is ${health.check_sha ?? "(pre-fingerprint)"}, this checkout is ${CHECK_SHA}`) +
+      dim(" — flips below may come from the check environment, not the grader\n") + checkEnvDiff(health.check_env).join("\n") + "\n",
+  );
 
 for (const runDir of dirs) {
   const runMeta = JSON.parse(readFileSync(join(runDir, "run.json"), "utf8"));

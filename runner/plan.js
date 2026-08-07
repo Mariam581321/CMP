@@ -15,12 +15,9 @@
 // post-hoc analysis.
 
 import { postCheck } from "./common.js";
+import { CLIENT_WAIT_MS } from "./check-env.js";
 import { checkedCompile, benchmarkDecls } from "./stmt.js";
-
-// Own copy rather than an import from stmt.js, but it must track it: this is the
-// outermost bound of the check chain (see lean-server.js at CPU_FUSE_MS). Raised with
-// the fuses, 30 -> 190 min (2026-08-06).
-const CLIENT_WAIT_MS = 190 * 60_000; // server queue is serialized; be patient
+import { checkStatus, blockerNotes } from "./verdict.js";
 
 // Crude goal similarity: Jaccard over the token sets of the pretty-printed goals.
 // A helper that restates the theorem reproduces its sorry goal almost verbatim.
@@ -46,29 +43,21 @@ export async function planCheck(original, solution, problemName = "adhoc") {
   if (check.error)
     return { ok: false, text: check.pretty || `lean server error: ${check.error}`, details: { ok: false, reason: "server_error" }, isError: true };
 
-  if (!check.stmt.ok)
+  // Statement and axiom faults, in the wording lean_check and the supervisor use for
+  // exactly the same faults (runner/verdict.js blockerNotes) plus the one plan-specific
+  // sentence: a "plan" resting on a smuggled axiom is not a reduction the compiler
+  // verified, it is the conclusion assumed.
+  const status = checkStatus(check);
+  if (status.stmtBad || status.axBad)
     return {
       ok: false,
       text:
-        `PLAN CHECK FAILED: you modified the theorem statement (${check.stmt.detail}). ` +
-        `Restore the original statement exactly; helper lemmas go above it.`,
-      details: { ok: false, reason: "statement_changed" },
+        blockerNotes(status).map((n) => `PLAN CHECK FAILED: ${n}`).join("\n\n") +
+        (status.axBad ? "\n\nIn a plan, unknown steps belong in sorry'd helper lemmas — that is what a plan is." : ""),
+      details: { ok: false, reason: status.stmtBad ? "statement_changed" : "bad_axioms" },
     };
 
-  // Same axiom gate as lean_check (2026-08-04): a "plan" resting on a smuggled axiom
-  // is not a reduction the compiler verified, it is the conclusion assumed.
-  if (check.axiomsBad && Object.keys(check.axiomsBad).length > 0)
-    return {
-      ok: false,
-      text:
-        `PLAN CHECK FAILED: the file depends on disallowed axioms ` +
-        `(${Object.entries(check.axiomsBad).map(([d, a]) => `${d}: [${a.join(", ")}]`).join("; ")}). ` +
-        `Grading accepts only propext, Classical.choice and Quot.sound. Remove the axiom ` +
-        `declarations — unknown steps belong in sorry'd helper lemmas, that is what a plan is.`,
-      details: { ok: false, reason: "bad_axioms" },
-    };
-
-  if (!check.ok)
+  if (!status.compiles)
     return {
       ok: false,
       text: `PLAN CHECK FAILED: the file does not compile. A plan must compile (helper bodies may be \`sorry\`).\n\n${check.pretty}`,

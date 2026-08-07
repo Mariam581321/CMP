@@ -5,7 +5,8 @@
 // lean_check).
 
 import { postCheck, MAX_HEARTBEATS } from "./common.js";
-import { CLIENT_WAIT_MS, bannedTactic } from "./stmt.js";
+import { CLIENT_WAIT_MS } from "./check-env.js";
+import { bannedTactic } from "./stmt.js";
 import { renderCheck } from "./render.js";
 
 // The server renders message positions as `problem.lean:line:col` (historically its

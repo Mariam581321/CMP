@@ -22,24 +22,11 @@ export const FIRST_FILE = "highwater-first.lean";
 export const LAST_FILE = "highwater-last.lean";
 export const STAMP_FILE = "highwater.json";
 
-// THE done-gate, in one place. `checkedCompile` (runner/stmt.js) computes every
-// component; this is the reading of them that means "this file would grade solved".
-// The supervisor's stop-nudging test and this watermark MUST be the same predicate:
-// they answer the same question about the same result object, and the last time two
-// parts of the harness each kept their own idea of "compiles" the agent-facing check
-// and the grader drifted apart (fixed 2026-07-27, and again on the axiom axis 0804).
-//
-// Note what `ok` alone does NOT cover: `ok` is "no error-severity messages", so a file
-// full of sorries has ok:true. Sorries, the statement verdict and the axiom verdict are
-// each separate fields, and all four have to hold.
-export function verifiedDone(check) {
-  return (
-    check?.ok === true &&
-    (check.sorries ?? []).length === 0 &&
-    check.stmt?.ok !== false &&
-    Object.keys(check.axiomsBad ?? {}).length === 0
-  );
-}
+// The done-gate itself lives in runner/verdict.js — the same predicate that decides the
+// word at the front of every check the agent reads and the supervisor's stop-nudging
+// test. Re-exported here because "the watermark's gate" is how the rest of the harness
+// refers to it.
+export { verifiedDone } from "./verdict.js";
 
 // Atomic within the filesystem: a run reading these files (or a scan, or the next
 // attempt's grader) sees either the whole previous snapshot or the whole new one.

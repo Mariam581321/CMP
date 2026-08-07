@@ -23,7 +23,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { classifyLines, withConnRetry, ALLOWED_AXIOMS } from "./common.js";
-import { benchmarkDecls, stmtProbe, parseStmtProbe, originalStmtTypes, serverCheck, renderWithoutProbe } from "./stmt.js";
+import { benchmarkDecls, axiomProbe, axiomReports, parseStmtProbe, originalStmtTypes, serverCheck, renderWithoutProbe } from "./stmt.js";
 
 export { serverCheck } from "./stmt.js";
 
@@ -93,7 +93,10 @@ export async function grade(problemName, solutionPath, originalPath, opts = {}) 
     return fail("grader_error", `original stmt types: ${e.message}`);
   }
 
-  const probes = `${stmtProbe(decls)}\n${decls.map((d) => `#print axioms ${d}`).join("\n")}\n`;
+  // The same probe body checkedCompile appends, from the same function: agent-facing
+  // checks and the grading request compile identical bytes, so nothing the grader will
+  // decide is invisible in the agent's own loop.
+  const probes = axiomProbe(decls);
   let r;
   try {
     // force: the official verdict always comes from a fresh compile, not the memo —
@@ -158,26 +161,14 @@ export async function grade(problemName, solutionPath, originalPath, opts = {}) 
   }
   if (!r.ok) return fail("compile_error", pretty.slice(0, 4000));
 
-  // Axiom reports are parsed ONLY from messages the probe itself emitted — those with
-  // a line number past the solution's end, where the appended `#print axioms` commands
-  // live. Parsing the whole stream let the agent's own file spoof the verdict: a
-  // `trace "'decl' depends on axioms: []"` inside the solution precedes the real
-  // report, and the old first-match parse took it, turning a sorry'd proof into
-  // `solved` with zero tripwire (same attack class parseStmtProbe's last-wins guard
-  // exists for; a line-number gate is stronger than last-wins because it does not
-  // assume message ordering). Agent-emitted messages always carry positions inside
-  // the solution, so they cannot cross this line.
-  const solLines = solution.split("\n").length;
-  const probeText = (r.messages ?? []).filter((m) => (m.line ?? 0) > solLines).map((m) => m.text).join("\n");
+  // Axiom reports, read with the shared line-gated parser (stmt.js axiomReports) — the
+  // same one the agent's lean_check uses, so a green check and a solved grade are the
+  // same computation over the same bytes. The grader keeps sorryAx: an env-level sorry
+  // is `uses_sorry` here, while in-loop it is redundant with the sorries list.
   const allText = (r.messages ?? []).map((m) => m.text).join("\n");
-  const axioms = {};
+  const axioms = axiomReports(r.messages, solution.split("\n").length, decls);
   for (const d of decls) {
-    const esc = d.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const m =
-      probeText.match(new RegExp(`'${esc}' depends on axioms: \\[([^\\]]*)\\]`)) ??
-      (probeText.match(new RegExp(`'${esc}' does not depend on any axioms`)) ? [null, ""] : null);
-    if (!m) return fail("grader_error", `no axiom report for ${d}\n${allText.slice(0, 2000)}`);
-    axioms[d] = m[1] === "" ? [] : m[1].split(",").map((s) => s.trim());
+    if (axioms[d] == null) return fail("grader_error", `no axiom report for ${d}\n${allText.slice(0, 2000)}`);
     const bad = axioms[d].filter((a) => !ALLOWED_AXIOMS.has(a));
     if (bad.length > 0) {
       const reason = bad.includes("sorryAx") ? "uses_sorry" : "bad_axioms";

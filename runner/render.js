@@ -4,7 +4,8 @@
 // speaks one format and a fix lands everywhere at once.
 //
 // Why this file exists at all — measured over the 13,058 lean_checks of the first two
-// block-A cells (grep + semantic, both complete, `drafts/DRAFT-check-output-0807.md`):
+// block-A cells (grep + semantic, both complete; `scripts/render-replay.mjs` reproduces
+// every number below from the recorded session files):
 // the old renderer emitted warnings first and sorries LAST, then took a blunt 8000-char
 // prefix slice, so the cap ate the one thing that answers "am I done" first. 1,495
 // checks (11.4%) truncated; in 178 of them the file HAD sorries and not one goal
@@ -12,10 +13,11 @@
 // in half of all output, not just in the truncated tail.
 //
 // Three rules replace it, in this order of importance:
-//   1. a header line that states the whole verdict — error count, and EVERY sorry's line
-//      number — so the done-signal lives in the first 200 chars and no cap can reach it;
+//   1. a header line that states the whole verdict — computed by runner/verdict.js, the
+//      one place that decides what a green file is, so the word at the front of a check
+//      agrees with the watermark, the supervisor and the grader by construction;
 //   2. errors, then sorries, then warnings (style lints are off at source now: see
-//      prepare() in lean-server.js — a `set_option linter.* false` per class, which is
+//      PREPARE_HEAD in check-env.js — a `set_option linter.* false` per class, which is
 //      why the warning section is small enough to sit last);
 //   3. if the result still exceeds the cap, the ERROR section absorbs the cut and says
 //      so. Sorries and warnings are never what gets dropped, because the errors are the
@@ -23,6 +25,8 @@
 //      check, against p90 835 for a goal and at most 14 sorries in any check on record).
 // Nothing is ever lost either way: the caller writes `full` — the uncapped text — beside
 // the attempt, and the header points at it.
+import { checkStatus, headerFacts } from "./verdict.js";
+
 export const RENDER_CAP = 16000;
 
 // Lean's advice when a declaration runs out of heartbeats is "use `set_option
@@ -47,7 +51,9 @@ export const heartbeatNote = (maxHeartbeats) =>
 // Identical message text at many positions is one fact, not N (2.1 MB of the 39.2 was
 // exact duplicates). Collapse to the first site plus a locator list, which keeps every
 // line number the agent needs to act — that is the part it cannot reconstruct.
-const SITE_LIST_MAX = 8;
+// 24, not 8: a site is ~6 characters, so the whole list costs less than one line of a
+// goal, and "+17 more" is a line number the agent has to go and find by hand.
+const SITE_LIST_MAX = 24;
 function dedupe(msgs, label) {
   const groups = new Map();
   for (const m of msgs) {
@@ -64,20 +70,14 @@ function dedupe(msgs, label) {
   });
 }
 
-// Every sorry line, always, however many there are: this list IS the done-signal, and at
-// ~4 chars a number it costs nothing to be complete.
-const sorryLines = (sorries) => sorries.map((s) => s.line).join(", ");
-
-function headerLine(errCount, errDistinct, sorries, warnCount) {
-  const bits = [];
-  if (errCount) bits.push(errDistinct < errCount ? `${errCount} errors (${errDistinct} distinct)` : `${errCount} error${errCount === 1 ? "" : "s"}`);
-  else bits.push("no errors");
-  bits.push(sorries.length ? `${sorries.length} sorr${sorries.length === 1 ? "y" : "ies"} at line ${sorryLines(sorries)}` : "no sorries");
-  if (warnCount) bits.push(`${warnCount} warning${warnCount === 1 ? "" : "s"}`);
-  const verdict = errCount ? "FAILED" : sorries.length ? "INCOMPLETE" : "CLEAN";
-  return `${verdict} — ${bits.join(", ")}`;
-}
-
+/**
+ * `ok`, `stmt` and `axiomsBad` are the rest of the verdict, passed in by the caller that
+ * has them (runner/stmt.js checkedCompile). They are what makes the header word mean
+ * "this file would grade solved" rather than "the compiler printed no errors" — see
+ * runner/verdict.js for why that distinction cost 683 self-contradicting checks.
+ * check_snippet and the server's own `pretty` omit them, and then the header simply does
+ * not claim anything about a statement a snippet does not have.
+ */
 export function renderCheck({
   messages = [],
   sorries = [],
@@ -85,12 +85,15 @@ export function renderCheck({
   cap = RENDER_CAP,
   outputName = null,
   maxHeartbeats = null,
+  ok = undefined,
+  stmt = undefined,
+  axiomsBad = undefined,
 }) {
   const msgs = messages ?? [];
   const srs = sorries ?? [];
   const errs = msgs.filter((m) => m.severity === "error");
   const warns = msgs.filter((m) => m.severity !== "error");
-  const ok = errs.length === 0;
+  const status = checkStatus({ ok, messages: msgs, sorries: srs, stmt, axiomsBad });
 
   const errParts = dedupe(errs, label);
   const sorryParts = srs.map((s) => `sorry at line ${s.line}, goal:\n  ${s.goal}`);
@@ -98,7 +101,7 @@ export function renderCheck({
   if (maxHeartbeats != null && msgs.some((m) => HEARTBEAT_TIMEOUT.test(m.text ?? "")))
     warnParts.push(heartbeatNote(maxHeartbeats));
 
-  const head = headerLine(errs.length, errParts.length, srs, warns.length);
+  const head = `${status.label} — ${headerFacts(status, errParts.length).join(", ")}`;
   // The pointer rides on the header, so it is present on every check whether or not
   // anything was cut: a channel an agent meets only in the rare squeezed check is one it
   // never learns to use. `full` carries no pointer — it IS the thing pointed at.
@@ -119,5 +122,5 @@ export function renderCheck({
           // The header still carries every sorry line and the file still has everything.
           join(headPretty, errText, tailText).slice(0, cap - marker.length - 1) + `\n${marker}`;
   }
-  return { ok, pretty, full: join(head, errText, tailText) };
+  return { ok: status.compiles, status, pretty, full: join(head, errText, tailText) };
 }

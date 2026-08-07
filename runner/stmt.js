@@ -13,7 +13,10 @@ import { createHash } from "node:crypto";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { postCheck, classifyLines, ALLOWED_AXIOMS, MAX_HEARTBEATS } from "./common.js";
+import { CLIENT_WAIT_MS } from "./check-env.js";
 import { renderCheck } from "./render.js";
+
+export { CLIENT_WAIT_MS };
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const STMT_CACHE = join(ROOT, "problems", "stmt-types.json");
@@ -26,12 +29,9 @@ const STMT_CACHE = join(ROOT, "problems", "stmt-types.json");
 // the file, so agent, supervisor, grader and any later regrade necessarily agree on it
 // whoever compiles first. What used to differ between them — a measured CPU budget
 // passed per request — is gone: CPU is a machine fuse the server owns.
-// Outermost bound of the check chain: CPU fuse < wall fuse < retry deadline < this
-// (lean-server.js states the invariant). postCheck() sets it as a hard socket timeout and
-// destroys the request when it expires, so a client that gives up first converts a fuse
-// kill — which the server hides and retries — into a connection error the agent DOES see.
-// Raised 30 -> 190 min with the fuses (2026-08-06); the queue is serialized, be patient.
-export const CLIENT_WAIT_MS = 190 * 60_000;
+// The outermost bound of the check chain lives in runner/check-env.js, derived from the
+// fuses rather than written down next to them, and is re-exported here for the clients
+// that have always imported it from this module.
 
 // Names of the declarations the benchmark expects (theorem + setup defs/abbrevs),
 // FULLY QUALIFIED: FATE-X wraps every file in `namespace ProblemN`, so the environment
@@ -165,6 +165,20 @@ run_cmd do
 `;
 }
 
+// The probe body the grader and every agent-facing check append, byte-identical: the
+// statement probe plus one `#print axioms` per benchmark declaration.
+//
+// `_root_.` on every name (2026-08-07). `#print axioms` takes an identifier and RESOLVES
+// it against whatever namespace and `open`s the submitted file left in scope, unlike the
+// statement probe, whose `` `Name `` literals are absolute by construction. A solution
+// that leaves a namespace open, or opens one that happens to contain a matching prefix,
+// would make the report resolve elsewhere or fail as an unknown constant — and an
+// unknown-constant ERROR in the probe region reads as the agent's file failing to
+// compile. `_root_.` anchors the lookup at the root, and Lean prints the resolved name
+// without the prefix, so the report line the parsers match on is unchanged.
+export const axiomProbe = (decls) =>
+  `${stmtProbe(decls)}\n${decls.map((d) => `#print axioms _root_.${d}`).join("\n")}\n`;
+
 export function parseStmtProbe(messages) {
   const out = {};
   for (const m of messages ?? []) {
@@ -182,6 +196,32 @@ export function parseStmtProbe(messages) {
     if (mm[2] === "missing") { out[mm[1]] = { missing: true }; continue; }
     const p = /^(\w+)\|(\w+)\|(\w+)\|([\s\S]*)$/.exec(mm[2]);
     if (p) out[mm[1]] = { kind: p[1], safety: p[2], direct_sorry: p[3] === "sorry", type: p[4] };
+  }
+  return out;
+}
+
+// Read `#print axioms` back, for one declaration each. ONE parser, used by the grader
+// and by every agent-facing check, so the axiom verdict the agent watches is literally
+// the one grading will reach.
+//
+// Reports are taken ONLY from messages past the end of the submitted code, where the
+// appended `#print axioms` commands live. Parsing the whole stream let the agent's own
+// file spoof the verdict: a `trace "'decl' depends on axioms: []"` inside the solution
+// precedes the real report, and a first-match parse took it — turning a sorry'd proof
+// into `solved` with zero tripwire. A line-number gate is stronger than last-wins
+// because it does not assume message ordering; agent-emitted messages always carry
+// positions inside the solution, so they cannot cross the line.
+// `null` for a declaration means no report was printed at all — the decl is missing, and
+// the statement verdict is what says so.
+export function axiomReports(messages, solLines, decls) {
+  const text = (messages ?? []).filter((m) => (m.line ?? 0) > solLines).map((m) => m.text).join("\n");
+  const out = {};
+  for (const d of decls) {
+    const esc = d.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const m =
+      text.match(new RegExp(`'${esc}' depends on axioms: \\[([^\\]]*)\\]`)) ??
+      (text.match(new RegExp(`'${esc}' does not depend on any axioms`)) ? [null, ""] : null);
+    out[d] = m ? (m[1] === "" ? [] : m[1].split(",").map((s) => s.trim())) : null;
   }
   return out;
 }
@@ -294,9 +334,11 @@ export async function verifyStatement(problemName, originalSource, messages) {
 // byte-identical file, spending a turn to re-ask a question already answered. It also
 // left the statement-changed message quoting an empty "Compiler output:".
 // Shape and cap live in runner/render.js, shared with lean-server's render() and
-// snippet.js's renderSnippet(), so one error format is used everywhere; `ok` is
-// recomputed from the visible messages, which is the same verdict since the probe only
-// ever emits info.
+// snippet.js's renderSnippet(), so one error format is used everywhere. The verdict the
+// header states is computed by runner/verdict.js from the WHOLE result — the server's
+// own `ok` and the statement and axiom verdicts included, which the caller passes in via
+// `opts` — so the first line of a check cannot say CLEAN about a file whose statement
+// was rewritten.
 const PROBE_LINE = /^\s*CMP(?:STMT|VAL)\|/;
 // `#print axioms` reports are probe internals too (since 2026-08-04 they ride on every
 // checkedCompile, not only the grader's request): the verdict is parsed line-gated and
@@ -369,35 +411,34 @@ export async function checkedCompile(code, { original, problemName, client, work
   // class, on the one axis the heartbeat work didn't cover (spawn-fatex10-0804
   // fatex_99, and the 0802 audit's three axiom-gaming incidents before it).
   const decls = benchmarkDecls(original);
-  const probes = `${stmtProbe(decls)}\n${decls.map((d) => `#print axioms ${d}`).join("\n")}\n`;
+  const probes = axiomProbe(decls);
   const r = await postCheck({ code: `${code}\n${probes}`, client }, CLIENT_WAIT_MS);
   if (r.error) return r; // { ok:false, error, kind, pretty, ... } — caller words it for the agent
   const probe = parseStmtProbe(r.messages);
   const stmt = await verifyStatement(problemName, original, r.messages);
-  // Axiom verdict, same mechanics and same line gate as the grader: reports are read
-  // only from messages past the end of the submitted code, so printed text inside the
-  // file cannot spoof them. sorryAx is excluded here — sorries already reach the agent
-  // through the sorries list and warnings, and error-recovery turns every failed proof
-  // into sorryAx, which would make this report pure noise on non-compiling files.
-  const solLines = code.split("\n").length;
-  const probeText = (r.messages ?? []).filter((m) => (m.line ?? 0) > solLines).map((m) => m.text).join("\n");
+  // Axiom verdict, the grader's own parser (axiomReports). sorryAx is excluded HERE and
+  // only here — sorries already reach the agent through the sorries list and the header,
+  // and error recovery turns every failed proof into sorryAx, which would make this
+  // report pure noise on every non-compiling file.
+  const reports = axiomReports(r.messages, code.split("\n").length, decls);
   const axiomsBad = {};
   for (const d of decls) {
-    const esc = d.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const m =
-      probeText.match(new RegExp(`'${esc}' depends on axioms: \\[([^\\]]*)\\]`)) ??
-      (probeText.match(new RegExp(`'${esc}' does not depend on any axioms`)) ? [null, ""] : null);
-    if (!m) continue; // decl missing — the statement verdict reports that on its own
-    const bad = (m[1] === "" ? [] : m[1].split(",").map((s) => s.trim()))
-      .filter((a) => !ALLOWED_AXIOMS.has(a) && a !== "sorryAx");
+    if (reports[d] == null) continue; // decl missing — the statement verdict says so
+    const bad = reports[d].filter((a) => !ALLOWED_AXIOMS.has(a) && a !== "sorryAx");
     if (bad.length) axiomsBad[d] = bad;
   }
   // Render twice over the same structured messages: once uncapped for the file, once as
   // the digest the agent reads. The digest only advertises the file if the write landed.
-  const bare = renderWithoutProbe(r.messages, r.sorries, { cap });
+  const verdict = { ok: r.ok, stmt, axiomsBad };
+  const bare = renderWithoutProbe(r.messages, r.sorries, { cap, ...verdict });
   const wrote = workDir ? writeFullOutput(workDir, CHECK_OUTPUT_FILE, bare.full) : false;
   const shown = wrote
-    ? renderWithoutProbe(r.messages, r.sorries, { cap, outputName: `${CHECK_OUTPUT_DIR}/${CHECK_OUTPUT_FILE}` })
+    ? renderWithoutProbe(r.messages, r.sorries, { cap, ...verdict, outputName: `${CHECK_OUTPUT_DIR}/${CHECK_OUTPUT_FILE}` })
     : bare;
+  // No `status` field on the way out, deliberately: the result carries the FACTS
+  // (ok, sorries, stmt, axiomsBad) and every consumer reads them through
+  // checkStatus()/verifiedDone(). A cached verdict travelling alongside the facts it was
+  // computed from is a second copy that can go stale, which is the whole bug class this
+  // change exists to close.
   return { ...r, pretty: shown.pretty, full: bare.full, probe, stmt, axiomsBad };
 }

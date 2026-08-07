@@ -26,6 +26,7 @@ import { benchmarkDecls } from "./stmt.js";
 import { MATHLIB_SRC } from "./grep.js";
 import { tailSessions, newStats, applyEntry } from "./session-tail.js";
 import { readHighWater, FIRST_FILE, LAST_FILE } from "./highwater.js";
+import { CHECK_SHA, checkEnvDiff, CPU_FUSE_MS, WALL_FUSE_MS } from "./check-env.js";
 import { costStd, LEAN_PORT, LEAN_URL, MAX_HEARTBEATS, green, red, yellow, dim, bold, cyan, money, secs } from "./common.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -220,18 +221,23 @@ async function ensureLeanServer(logPath) {
 }
 
 // What "compiles" means for this run is whatever the SERVER enforces, and the watchdog
-// keeps one server alive across runs — and across checkouts. So the cap on disk is not
+// keeps one server alive across runs — and across checkouts. So the code on disk is not
 // evidence about today's checks: ask the process that will decide them, and refuse to
-// launch on a mismatch rather than record a run.json whose `max_heartbeats` is fiction.
+// launch on a mismatch rather than record a run.json that describes a different harness.
+//
+// This compared only `max_heartbeats` until 2026-08-07, which is the ONE number that has
+// not moved since July — so a server started before the linter suppressions, the
+// typeclass budget and the new fuses landed passed the check and would have served a
+// whole grid cell with none of them. CHECK_SHA covers everything the server decides.
 async function verifyCheckVerdict() {
   const h = await fetch(`${LEAN_URL}/health`, { signal: AbortSignal.timeout(5000) })
     .then((r) => r.json()).catch(() => null);
   if (!h) throw new Error("lean server health unreadable — cannot confirm the check verdict this run would use");
-  if (h.max_heartbeats !== MAX_HEARTBEATS)
+  if (h.check_sha !== CHECK_SHA)
     throw new Error(
-      `check verdict mismatch: the running lean server enforces maxHeartbeats ` +
-        `${h.max_heartbeats ?? "(none — it predates the heartbeat verdict)"}, this checkout defines ${MAX_HEARTBEATS}. ` +
-        `Restart the server (scripts/lean-server-watchdog.sh) before launching.`,
+      `check environment mismatch: the running lean server is ${h.check_sha ?? "(pre-fingerprint)"}, ` +
+        `this checkout is ${CHECK_SHA}. Restart the server (scripts/lean-server-watchdog.sh) before launching.\n` +
+        checkEnvDiff(h.check_env).join("\n"),
     );
   // The env identity is the verdict's other half (block D): a library cell against a
   // bare server would grade every library-using proof compile_error, and a plain cell
@@ -347,7 +353,7 @@ async function deepseekBalance() {
 }
 const balanceBefore = await deepseekBalance();
 const RUN_STARTED = Date.now();
-writeFileSync(join(runDir, "run.json"), JSON.stringify({ run_id: RUN_ID, combo: COMBO, model: MODEL, thinking: THINKING, max_tokens: MAX_TOKENS || null, budget_std: BUDGET_STD || null, timeout_s: TIMEOUT_S, max_heartbeats: MAX_HEARTBEATS, library_sha: LIBRARY?.sha ?? null, library_run: LIBRARY?.run_id ?? null, concurrency: CONCURRENCY, problems, problems_dir: PROBLEMS_DIR, git_sha: gitSha, pi_version: piVersion, balance_before: balanceBefore, started_at: new Date(RUN_STARTED).toISOString() }, null, 2));
+writeFileSync(join(runDir, "run.json"), JSON.stringify({ run_id: RUN_ID, combo: COMBO, model: MODEL, thinking: THINKING, max_tokens: MAX_TOKENS || null, budget_std: BUDGET_STD || null, timeout_s: TIMEOUT_S, max_heartbeats: MAX_HEARTBEATS, check_sha: CHECK_SHA, library_sha: LIBRARY?.sha ?? null, library_run: LIBRARY?.run_id ?? null, concurrency: CONCURRENCY, problems, problems_dir: PROBLEMS_DIR, git_sha: gitSha, pi_version: piVersion, balance_before: balanceBefore, started_at: new Date(RUN_STARTED).toISOString() }, null, 2));
 
 // Benchmark-neutral by design: no "competition" framing, since the problem source
 // changes between blocks (Putnam -> FATE -> whatever is next) and the prompt must not
@@ -363,7 +369,7 @@ Rules:
 - NEVER modify the theorem statement, imports, or \`open\` lines. Only replace what comes after \`:=\` / fill in sorries. You may add helper lemmas ABOVE the theorem.
 - No new \`axiom\` declarations. No \`native_decide\`.
 - There is no shell in this environment: bash, grep, and similar commands do not exist. Your only file operations are read, write, and edit.
-- Use the lean_check tool to compile and verify your work. It returns the Lean compiler output: a first line stating the error count and the line number of every remaining \`sorry\`, then the errors, then the goal state at each \`sorry\`, then any warnings. If that output was too long to return in full it says so, and the complete untruncated output of your last check is always in .check/last.txt, which you can read. lean_check compiles exactly one file — problem.lean; no other file you create is ever compiled, checked, or graded, so scratch .lean files are inert text. You are NOT done until lean_check reports no errors and no sorries.
+- Use the lean_check tool to compile and verify your work. It returns the Lean compiler output: a first line stating the verdict — COMPLETE, INCOMPLETE or FAILED — followed by the error count, the line number of every remaining \`sorry\`, and whether the theorem statement is intact and the axioms are clean; then the errors, then the goal state at each \`sorry\`, then any warnings. If that output was too long to return in full it says so, and the complete untruncated output of your last check is always in .check/last.txt, which you can read. lean_check compiles exactly one file — problem.lean; no other file you create is ever compiled, checked, or graded, so scratch .lean files are inert text. You are NOT done until lean_check reports COMPLETE.
 - NEVER end your response without a tool call unless lean_check has passed. Analysis alone is not an answer — put your reasoning into the proof and verify it.`;
 
 // Per-arm prompt addenda: extensions/<name>.prompt.md is appended to the system prompt
@@ -381,7 +387,7 @@ if (LIBRARY)
   );
 const FULL_SYSTEM_PROMPT = [SYSTEM_PROMPT, ...addenda].join("\n\n");
 
-const PROMPT = "Prove the theorem in problem.lean. Read it first, then work until lean_check passes with no errors and no sorry warnings.";
+const PROMPT = "Prove the theorem in problem.lean. Read it first, then work until lean_check reports COMPLETE.";
 // Continuation policy (nudges) lives in extensions/supervisor.ts, in-process; the
 // runner only passes the knob through CMP_CONFIG and keeps hard enforcement (budget
 // SIGKILL, wall-clock backstop).
@@ -395,8 +401,9 @@ console.log(dim(`  budget:      ${BUDGET_STD > 0 ? `$${BUDGET_STD.toFixed(2)} @s
 console.log(dim(`  results:     results/${RUN_ID}/\n`));
 
 const leanServer = await ensureLeanServer(join(runDir, "lean-server.log"));
-const serverHealth = await verifyCheckVerdict();
-console.log(dim(`  check:       maxHeartbeats ${MAX_HEARTBEATS}/decl (the verdict)   cpu fuse: ${serverHealth.cpu_fuse_s}s (machine protection, never a verdict)`));
+await verifyCheckVerdict();
+console.log(dim(`  check:       ${CHECK_SHA} — maxHeartbeats ${MAX_HEARTBEATS}/decl (the verdict)`));
+console.log(dim(`  fuses:       ${CPU_FUSE_MS / 1000}s CPU, ${WALL_FUSE_MS / 1000}s wall (machine protection, never a verdict)`));
 leanServer?.unref(); // don't let the child keep the event loop alive after the summary is written
 const stopServer = () => { try { leanServer?.kill("SIGTERM"); } catch {} };
 process.on("exit", stopServer);

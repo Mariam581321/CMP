@@ -12,7 +12,8 @@ import { readFileSync, existsSync } from "node:fs";
 import { join, basename } from "node:path";
 import { checkedCompile } from "../runner/stmt.js";
 import { cmpConfig, costStd, workerSpendStd, ToolFailure } from "../runner/common.js";
-import { verifiedDone, recordHighWater } from "../runner/highwater.js";
+import { checkStatus, blockerNotes } from "../runner/verdict.js";
+import { recordHighWater } from "../runner/highwater.js";
 
 export default function (pi: ExtensionAPI) {
   // Hash of problem.lean at the last check that returned a result. Lets the tool
@@ -121,30 +122,15 @@ export default function (pi: ExtensionAPI) {
           return { content: [{ type: "text", text: r.pretty }], details: { ok: false, rejected: r.rejected }, isError: false };
         }
 
-        // A tampered statement is reported as a FAILED check, not a footnote after
-        // "compiled successfully" — weak models skim past appended warnings.
+        // The header already carries STATEMENT MODIFIED / DISALLOWED AXIOMS (the header
+        // and this verdict are the same computation — runner/verdict.js), but the header
+        // states the fact and these paragraphs state what it MEANS: that such a proof can
+        // never count, and what to do instead. They lead, rather than trailing the
+        // compiler output as a footnote, because weak models skim past appended warnings.
+        const status = checkStatus(r);
+        const notes = blockerNotes(status).map((n: string) => `CHECK FAILED: ${n}`);
         let text = r.pretty || "no output";
-        let ok = r.ok;
-        if (!r.stmt.ok) {
-          ok = false;
-          text =
-            `CHECK FAILED: you modified the theorem statement (${r.stmt.detail}). ` +
-            `Proofs of a modified statement do not count. Restore the original statement — ` +
-            `you may only add helper lemmas above it and fill in sorries.\n\nCompiler output:\n${text}`;
-        }
-        // Same for disallowed axioms (2026-08-04): the grader's #print axioms verdict
-        // now rides on this very check, so a proof that will grade bad_axioms is a
-        // FAILED check the agent sees immediately, not a surprise after the attempt.
-        const axiomsBad: Record<string, string[]> = r.axiomsBad ?? {};
-        if (Object.keys(axiomsBad).length > 0) {
-          ok = false;
-          const list = Object.entries(axiomsBad).map(([d, a]) => `${d}: [${(a as string[]).join(", ")}]`).join("; ");
-          text =
-            `CHECK FAILED: the proof depends on disallowed axioms (${list}). ` +
-            `Grading accepts only propext, Classical.choice and Quot.sound — a proof that declares or uses ` +
-            `any other axiom can NEVER count, however it is constructed. Remove the axiom declarations and ` +
-            `prove those steps honestly.\n\nCompiler output:\n${text}`;
-        }
+        if (notes.length) text = `${notes.join("\n\n")}\n\nCompiler output:\n${text}`;
         // Identify exactly what was graded, so a path mixup (agent editing a file
         // this tool never sees) can't survive: the header pins the file, and the
         // unchanged note fires when the agent re-checks without touching it.
@@ -158,9 +144,9 @@ export default function (pi: ExtensionAPI) {
         text = `${header}\n\n${text}`;
 
         // Watermark: this file would grade solved, whatever the attempt submits later.
-        // `ok` above is the same verdict minus the sorry test, so verifiedDone is asked
-        // about the full result — one predicate, shared with the supervisor's done-gate.
-        if (!isWorker && verifiedDone(r)) {
+        // `status.done` is the same predicate the header word and the supervisor's
+        // stop-nudging test read — one gate, one definition (runner/verdict.js).
+        if (!isWorker && status.done) {
           recordHighWater(join(ctx.cwd, ".."), code, {
             check_index: checkIndex,
             turn: turns,
@@ -173,7 +159,18 @@ export default function (pi: ExtensionAPI) {
         // recorded nowhere, so every count of what the cap destroyed was a lower bound.
         return {
           content: [{ type: "text", text }],
-          details: { ok, cached: r.cached, full_bytes: r.full?.length ?? null, cut: (r.pretty ?? "").includes("[... errors truncated") },
+          details: {
+            // `ok` = nothing is WRONG with the file (compiles, statement intact, axioms
+            // clean); `done` = it would also grade solved, i.e. `ok` and no sorries left.
+            // Both recorded because the gap between them is what an attempt spends its
+            // budget closing.
+            ok: status.compiles && !status.stmtBad && !status.axBad,
+            done: status.done,
+            sorries: status.sorries.length,
+            cached: r.cached,
+            full_bytes: r.full?.length ?? null,
+            cut: (r.pretty ?? "").includes("[... errors truncated"),
+          },
           isError: false,
         };
       } catch (e: any) {

@@ -19,11 +19,14 @@
 // the kernel picks a victim). Results are memoized by code hash — only real verdicts,
 // never a resource outcome. Memo hits skip the queue.
 //
-//   GET  /health           -> {ready, recycling, max_heartbeats, cpu_fuse_s,
+//   GET  /health           -> {ready, recycling, check_sha, check_env, max_heartbeats,
+//                              library_sha256, cpu_fuse_s,
 //                              queued: {client: n}, workers: [{id, ready, busy}]}
-//        max_heartbeats: the cap this server ENFORCES. run.js records it and refuses to
-//        launch against a server whose cap differs from the checkout's, so the number of
-//        record is always the one that decided the verdicts.
+//        check_sha/check_env: everything this server ENFORCES — the heartbeat cap, the
+//        `set_option` head injected into every file, and the fuses (runner/check-env.js).
+//        run.js records it and refuses to launch against a server whose fingerprint
+//        differs from the checkout's, so the harness of record is always the one that
+//        decided the verdicts.
 //   POST /check {code, client?, force?}
 //        -> {ok, pretty, messages, sorries, wall_ms, cpu_ms, error?, kind?, bound?}
 //           kind:  unavailable | crash | error | bad_request
@@ -86,6 +89,11 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { LEAN_PORT, MAX_HEARTBEATS } from "./common.js";
+// What a check IS — the injected `set_option` head, the clamp, and the bound chain —
+// lives in check-env.js because run.js has to verify that the server it is about to
+// launch a run against is enforcing THIS checkout's version of it. CHECK_SHA is that
+// verification; see the module header.
+import { prepare, CPU_FUSE_MS, WALL_FUSE_MS, MAX_KILLS, RETRY_DEADLINE_MS, CHECK_SHA, checkEnv } from "./check-env.js";
 import { renderCheck } from "./render.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -95,42 +103,6 @@ const PORT = parseInt(LEAN_PORT);
 const WORKERS = Math.max(1, parseInt(process.env.CMP_REPL_WORKERS ?? "8"));
 const MAX_RSS_MB = parseInt(process.env.CMP_REPL_MAX_RSS_MB ?? "13000");
 const MIN_AVAIL_MB = parseInt(process.env.CMP_MIN_AVAIL_MB ?? "6000");
-// CPU fuse — machine protection, NOT a budget and never a verdict (2026-08-01). It was
-// THE check budget (120 CPU-s) until the fateh_32 incident: any verdict defined by a
-// measured quantity has a noise band around its threshold, and the same 49 KB file
-// measured four times landed on both sides twice. Deciding is now the heartbeat cap's
-// job (MAX_HEARTBEATS), so this exists only to stop one check from occupying a worker
-// indefinitely — set far from the action, where tripping it says "this file cannot be
-// compiled on this machine at all", not "this file fails".
-//
-// 600 s was NOT far from the action (raised to 3600 s, 2026-08-06). A real 2113-line
-// FATE-X proof compiles in ~250 s, so 600 sat at 2.4x a legitimate large file, and it
-// showed: 43 kills in one day, every one landing between 600 and 605 s — i.e. files
-// pressed right against the line, not runaways. semantic/fatex_10 was killed at 605 s,
-// requeued, and PASSED on the retry: the same bytes on both sides of the bound, which is
-// the fateh_32 coin flip resurfacing. It can no longer flip a verdict — but it flips
-// "verdict" vs "no verdict", and that is how fatex_19 lost its grade twice.
-// The rate is also arm-dependent, which makes it a confound and not just a nuisance:
-// 0 kills across the whole grep cell, 19 across semantic, 24 in base's first two hours
-// (11 distinct problems). An arm with no search guesses and hammers, so it writes the
-// expensive files — the fuse was quietly taxing the arm it was most important to measure
-// cleanly. At 3600 s a check may hold a worker for an hour; that is the intended trade,
-// because a worker hour is cheap and a lost verdict is not.
-//
-// THE FOUR BOUNDS ARE A CHAIN AND MUST STAY ORDERED:
-//   CPU fuse  <  wall fuse  <  retry deadline  <  CLIENT_WAIT_MS (stmt.js, plan.js)
-// Break the order and raising the CPU fuse makes things WORSE, not better: the client
-// hangs up before the fuse fires and the agent gets a connection error — a harsher
-// failure than the `unavailable` it replaced, and one that says even less. Anything that
-// moves one of these has to move the ones outside it.
-const CPU_FUSE_MS = parseInt(process.env.CMP_CPU_FUSE_MS ?? "3600000");
-// Wall-clock backstop. A check consuming no CPU at all (true hang, or .olean page-fault
-// thrash under memory pressure) can never reach the CPU fuse, so something has to break
-// it. Kept ABOVE the CPU fuse so that a CPU-bound check trips the bound that describes
-// it: on a busy box wall ≥ cpu always, and a wall kill on a file that was in fact
-// burning CPU would log the less informative of the two. Moved with the CPU fuse
-// (900 -> 4800 s, 2026-08-06) to keep that ordering; it has never fired, in any run.
-const WALL_FUSE_MS = parseInt(process.env.CMP_WALL_FUSE_MS ?? "4800000");
 // CPU fuse and memory fuses share one /proc sweep. The sweep period is also the fuse's
 // granularity — a check can overshoot by up to one tick — which no longer matters to any
 // verdict now that no measured bound decides anything.
@@ -444,8 +416,11 @@ function killCheck(w, bound, why, msg) {
 setInterval(() => {
   const live = workers.filter((w) => w.repl && !w.restarting);
   const stats = sweepGroups(live.map((w) => w.repl.pid));
+  // Zero defaults, not undefined: a worker whose process exited between `live` and the
+  // sweep has no entry, and NaN sizes make the sort order arbitrary and the comparisons
+  // below silently false.
   const sized = live
-    .map((w) => ({ w, ...stats.get(w.repl.pid) }))
+    .map((w) => ({ w, rssMB: 0, cpuMs: 0, ...(stats.get(w.repl.pid) ?? {}) }))
     .sort((a, b) => b.rssMB - a.rssMB);
   for (const { w, cpuMs } of sized) {
     const c = w.check;
@@ -460,105 +435,24 @@ setInterval(() => {
       if (!w.restarting && rssMB > MAX_RSS_MB)
         killCheck(w, "rss", `rss cap (${rssMB}MB > ${MAX_RSS_MB}MB)`,
           `REPL exceeded the ${MAX_RSS_MB}MB memory cap while this check was running`);
-  // System fuse: fire before the kernel OOM-killer picks a victim for us. Kill
-  // only the FATTEST worker per tick — availability usually recovers immediately.
+  // System fuse: fire before the kernel OOM-killer picks a victim for us. One worker per
+  // tick — availability usually recovers immediately — and an IDLE one by preference:
+  // this fuse selects by size, not by blame, so its casualty used to be whichever check
+  // happened to be in flight on the fattest worker. A parked worker holds just as much
+  // memory and costs only a reimport to release, so it is strictly the better victim;
+  // only when every worker is mid-check does a check have to pay.
   if (MIN_AVAIL_MB > 0 && sized.length) {
     const avail = memAvailableMB();
-    if (avail < MIN_AVAIL_MB && !sized[0].w.restarting)
-      killCheck(sized[0].w, "mem",
-        `system memory low (${avail}MB available < ${MIN_AVAIL_MB}MB floor, this worker largest at ${sized[0].rssMB}MB)`,
-        `REPL killed: the machine ran low on memory while this check was running`);
-  }
-}, MONITOR_MS).unref();
-
-// A file that could set its own `maxHeartbeats` would be writing its own verdict, so any
-// value it asks for is clamped to the harness cap (0 means "no limit" in Lean and is the
-// obvious way out, hence the explicit case). LOWERING is left alone: it can only make the
-// file fail sooner, which is the file's business, and `set_option maxHeartbeats 200 in`
-// is a legitimate way to keep a `decide` honest. The rewrite is textual and per line, so
-// error line numbers stay aligned with the file the agent is looking at; it therefore
-// also rewrites the option inside comments and strings, which is the harmless direction.
-// `synthInstance.maxHeartbeats` and friends match too — same argument, same clamp.
-// Not covered: setting the option from metaprogramming (`run_cmd modifyEnv ...`). Nothing
-// lexical can be; that is what the grader's axiom check and the suspicious-keyword
-// tripwire are for, and an honest proof contains no metaprogramming at all.
-// The numeral matches every form Lean accepts — plain, `_` separators, 0x/0b/0o — or the
-// clamp is a lexical gate an agent can walk around with `400_000_000`. Number() parses
-// all of those once the underscores are stripped; anything it cannot parse is clamped
-// too (a numeral we cannot read must not be one we wave through).
-const HEARTBEAT_OPTION = /(\bset_option\s+(?:\w+\.)*maxHeartbeats\s+)((?:0[xXbBoO])?[0-9a-fA-F_]+)/g;
-const clampHeartbeats = (line) =>
-  line.replace(HEARTBEAT_OPTION, (whole, head, n) => {
-    const v = Number(n.replace(/_/g, ""));
-    return Number.isFinite(v) && v > 0 && v <= MAX_HEARTBEATS ? whole : `${head}${MAX_HEARTBEATS}`;
-  });
-
-// Style linters, off at source. They are advice about tidiness — none of them can change
-// a verdict (the grade is compiles / sorry-free / statement intact / axioms clean) — and
-// they were 25% of every byte the check channel spent in the first two block-A cells:
-// 20,652 `unusedSimpArgs`, 13,546 `unnecessarySimpa`, 3,794 `unusedVariables` and the
-// rest, 9.8 MB of the 39.2. Suppressing them recovers 92%/83% of the truncated checks in
-// those cells without touching one bit of what Lean decides.
-// Deliberately NOT in the list:
-//   * `linter.deprecated` — `Use \`map_add\` instead` is free retrieval, the compiler
-//     handing the agent the modern name (~1,180 occurrences across the two cells);
-//   * `linter.dupNamespace` — the only lint here that flags a GRADER-visible fault: a
-//     file that nests `Problem1` inside `Problem1` compiles fine and grades as
-//     "declaration missing", because the grader looks declarations up by qualified name;
-//   * anything blanket (`linter.all`) — it would take both of the above with it.
-// Every name is a registered option in the v4.27.0 pin (core, Batteries, Mathlib); an
-// unknown option is an ERROR, so a typo here reds every check in a run.
-const LINTERS_OFF = [
-  "unusedSimpArgs", "unnecessarySimpa", "unusedVariables", "unnecessarySeqFocus",
-  "unusedTactic", "unreachableTactic", "unusedSectionVars", "unusedRCasesPattern",
-].map((l) => `set_option linter.${l} false`).join(" ");
-
-// Typeclass synthesis gets the same budget as everything else (2026-08-07). Lean's
-// default is 20 000 heartbeats per instance problem — 20x below our elaboration cap and,
-// on this benchmark, the tightest limit in the harness: instance synthesis was the most
-// common timeout site in the two block-A cells (1,448 of 4,049), ahead of `whnf`, and
-// the ONLY budget agents ever asked to raise (99 writes in 29 attempts, against 2 writes
-// of the bare option, both lowering it). FATE-X is PhD algebra — quotients,
-// localizations, algebra towers — so those searches are deep, and a limit nobody chose
-// was deciding what compiles.
-// One number now governs both: a search may use up to the whole declaration's allowance,
-// and `clampHeartbeats` still lets a file LOWER either (`set_option
-// synthInstance.maxHeartbeats 5000 in` to keep one search honest is a legitimate move and
-// costs the agent nothing to make). Raising above the cap stays a no-op.
-// The cost, stated so the reruns can check it: an instance that does NOT exist now fails
-// after up to 400 000 heartbeats instead of 20 000, spending the declaration's budget to
-// reach the same "failed to synthesize". Where that used to be a fast, informative error
-// it can now be a timeout at the outer cap. If the block-A reruns show that trade going
-// the wrong way, this constant is the one line to change.
-const SYNTH_INSTANCE_BUDGET = `set_option synthInstance.maxHeartbeats ${MAX_HEARTBEATS}`;
-
-// Replace import lines (Mathlib is already in the env); the first one becomes the
-// heartbeat cap so line numbers in errors stay aligned with the agent's file. The cap is
-// a file-level `set_option`, so it applies to every declaration BELOW it and each one
-// gets the full allowance — the bound is per declaration, not per file (a file with many
-// expensive declarations can still cost arbitrarily much CPU in total; that is the CPU
-// fuse's business, and no longer any verdict's).
-// The linter suppressions ride on that SAME physical line: Lean parses commands
-// whitespace-separated, so several `set_option`s share a line happily, and one line in
-// means `shifted` bookkeeping stays as it was. Spending an extra line here would shift
-// every reported line number by one against the file the agent is editing.
-const PREPARE_HEAD = `set_option maxHeartbeats ${MAX_HEARTBEATS} ${SYNTH_INSTANCE_BUDGET} ${LINTERS_OFF}`;
-function prepare(code) {
-  const lines = code.split("\n").map(clampHeartbeats);
-  let capPlaced = false;
-  for (let i = 0; i < lines.length; i++) {
-    if (/^\s*import\s/.test(lines[i])) {
-      lines[i] = capPlaced ? "" : PREPARE_HEAD;
-      capPlaced = true;
+    if (avail < MIN_AVAIL_MB) {
+      const live = sized.filter((s) => !s.w.restarting);
+      const victim = live.find((s) => !s.w.pending) ?? live[0];
+      if (victim)
+        killCheck(victim.w, "mem",
+          `system memory low (${avail}MB available < ${MIN_AVAIL_MB}MB floor, killing ${victim.w.pending ? "busy" : "idle"} worker at ${victim.rssMB}MB)`,
+          `REPL killed: the machine ran low on memory while this check was running`);
     }
   }
-  let shifted = 0;
-  if (!capPlaced) {
-    lines.unshift(PREPARE_HEAD);
-    shifted = 1;
-  }
-  return { text: lines.join("\n"), shifted };
-}
+}, MONITOR_MS).unref();
 
 // The heartbeat NOTE used to be appended to every timeout MESSAGE here, so that the
 // server's `pretty` and the agent-facing rebuild (stmt.js) would say the same thing.
@@ -576,7 +470,7 @@ function render(resp, shifted) {
   return { ok, pretty, messages, sorries };
 }
 
-// `pretty` is capped at 8 KB by render(), but `messages` and `sorries` are not, and a
+// `pretty` is capped by render(), but `messages` and `sorries` are not, and a
 // sorry goal in a big context pretty-prints to a lot of text. The watchdog keeps this
 // server alive for days across runs, so MEMO_MAX entries of unbounded size is a slow
 // leak with no ceiling. Skip memoizing the outliers rather than truncating them: a
@@ -663,29 +557,17 @@ async function handleCheck(w, prep) {
 // informative — not that the REPL is pristine (with siblings it is warm and carrying its
 // own heap).
 //
-// Retries are capped because a check that really IS the balloon would otherwise re-kill a
-// worker on every attempt, the exact starvation the fuses exist to stop; two also keeps
-// the worst case (fuse + restart + fuse) inside the client's CLIENT_WAIT_MS socket
-// budget. `mem` is not counted — the MIN_AVAIL fuse picks its victim by worker SIZE, so
-// its casualty is whatever check happened to be in flight and the kill implicates nobody;
-// the deadline is what bounds a box stuck under its memory floor.
+// `mem` kills are not counted against MAX_KILLS — the MIN_AVAIL fuse picks its victim by
+// worker SIZE, so its casualty is whatever check happened to be in flight and the kill
+// implicates nobody; RETRY_DEADLINE_MS is what bounds a box stuck under its memory floor.
 //
 // Past either limit the answer is `unavailable`: not a verdict, never memoized, nothing
 // recorded about the file. Until 2026-08-01 a second cpu/wall/rss kill was instead
 // "accepted as the file's own cost" and became a charged, memoized failure — a verdict
-// decided by a measurement, which is exactly the coin-flip this change removes. What a
+// decided by a measurement, which is exactly the coin-flip that change removed. What a
 // file costs is now unjudged; what it elaborates to is judged by the heartbeat cap.
-// MAX_KILLS stays 2 even though the fuses grew (2026-08-06). Retrying is worth it when a
-// kill is a machine event — load, memory pressure, a worker that had been leaking for
-// twenty minutes. It is worth nothing when the cost is a property of the file: something
-// that burns 3600 CPU-seconds once burns them again, so a third attempt buys another hour
-// of wall clock and the same answer. The fuse's SIZE is what keeps kills away from the
-// agent now; the retry count only decides how long we take to admit one.
-const MAX_KILLS = 2;
-// Must exceed MAX_KILLS x WALL_FUSE_MS (the per-attempt worst case, since wall >= cpu),
-// or the deadline silently cancels the retry the kill budget promised. 2 x 4800 s + queue
-// slack. And it must stay under CLIENT_WAIT_MS — see the chain at CPU_FUSE_MS.
-const RETRY_DEADLINE_MS = parseInt(process.env.CMP_RETRY_DEADLINE_MS ?? "10200000"); // < CLIENT_WAIT_MS
+// MAX_KILLS and the deadline live in check-env.js, where the whole bound chain is
+// derived so the retry can never outlast the client that is waiting for it.
 const unavailable = (r, kills) => ({
   ok: false, kind: "unavailable", bound: r.bound, error: r.error,
   pretty:
@@ -751,14 +633,19 @@ const server = createServer((req, res) => {
     return respond(200, {
       ready: workers.some((w) => w.ready),
       recycling,
-      // The verdict this server enforces, so a client can check it is the one it thinks
-      // it is: the watchdog keeps a server alive across runs, so the code on disk and the
-      // code deciding today's checks are not necessarily the same (run.js refuses to
-      // launch on a mismatch).
+      // EVERYTHING this server decides, so a client can check it is the one it thinks it
+      // is. The watchdog keeps a server alive for days, across git pulls, so the code on
+      // disk and the code deciding today's checks are not necessarily the same — and
+      // `max_heartbeats` alone did not notice, because it is the one number that has not
+      // moved since July. check_sha covers the injected `set_option` head (linters,
+      // typeclass budget) and the fuses too; run.js refuses to launch on a mismatch and
+      // prints check_env field by field to say what moved.
+      check_sha: CHECK_SHA,
+      check_env: checkEnv(),
       max_heartbeats: MAX_HEARTBEATS,
       // Which library (if any) is baked into the env — the other half of the verdict's
       // identity. run.js refuses to launch when this does not match what the run
-      // expects, exactly like max_heartbeats.
+      // expects, exactly like check_sha.
       library_sha256: LIB_SHA,
       cpu_fuse_s: CPU_FUSE_MS / 1000,
       queued: Object.fromEntries([...queues].map(([k, v]) => [k, v.length])),
@@ -815,7 +702,7 @@ const server = createServer((req, res) => {
 process.on("exit", () => workers.forEach(killRepl));
 for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => process.exit(0));
 
-server.listen(PORT, "127.0.0.1", () => log(`lean server on 127.0.0.1:${PORT} (${WORKERS} worker${WORKERS > 1 ? "s" : ""}, verdict: maxHeartbeats ${MAX_HEARTBEATS}/decl${LIB_SHA ? `, library ${LIB_SHA.slice(0, 12)}…` : ""}; fuses: ${CPU_FUSE_MS / 1000}s CPU, ${WALL_FUSE_MS / 1000}s wall, rss cap ${MAX_RSS_MB > 0 ? `${MAX_RSS_MB}MB` : "off"}, avail floor ${MIN_AVAIL_MB > 0 ? `${MIN_AVAIL_MB}MB` : "off"})`));
+server.listen(PORT, "127.0.0.1", () => log(`lean server on 127.0.0.1:${PORT} (${WORKERS} worker${WORKERS > 1 ? "s" : ""}, check ${CHECK_SHA}: maxHeartbeats ${MAX_HEARTBEATS}/decl${LIB_SHA ? `, library ${LIB_SHA.slice(0, 12)}…` : ""}; fuses: ${CPU_FUSE_MS / 1000}s CPU, ${WALL_FUSE_MS / 1000}s wall, ${MAX_KILLS} kills / ${Math.round(RETRY_DEADLINE_MS / 60000)}min retry, rss cap ${MAX_RSS_MB > 0 ? `${MAX_RSS_MB}MB` : "off"}, avail floor ${MIN_AVAIL_MB > 0 ? `${MIN_AVAIL_MB}MB` : "off"})`));
 // Sequential imports: worker 0 pays the cold import; later workers reuse its warm
 // page cache. The pool starts serving as soon as the FIRST worker is ready.
 (async () => {

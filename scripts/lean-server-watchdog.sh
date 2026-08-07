@@ -5,11 +5,17 @@
 # Polls /health; only starts a server if none is responding, so it can be left
 # running alongside an existing server without ever creating a second one.
 #
-# Memory fuses (rss cap 9000MB/worker, avail floor 4000MB) are ON by default in
+# Memory fuses (rss cap 13000MB/worker, avail floor 6000MB) are ON by default in
 # lean-server.js. The REPL pool defaults to 8 workers, sized for the 64 GB Ryzen
 # 3600 server (see CMP_REPL_WORKERS in lean-server.js for the arithmetic; takes
 # effect on the next server start). To run smaller, e.g. on a laptop:
 #   CMP_REPL_WORKERS=1 ~/CMP/scripts/lean-server-watchdog.sh
+#
+# RESTART THIS AFTER PULLING. The server bakes in what a check IS — the injected
+# `set_option` head and the fuses (runner/check-env.js) — so a server left running
+# across a pull is serving the old harness. run.js refuses to launch on the mismatch
+# and names the fields that moved, but the cheap move is to restart here first:
+#   pkill -f 'runner/lean-server\.js'    # this loop brings up a fresh one in ~10 s
 cd "$(dirname "$0")/.." || exit 1
 export PATH="$HOME/.local/node/bin:$HOME/.elan/bin:$PATH"
 echo "$(date -Is) watchdog up — polling /health every 10s; silence means the server is healthy"
