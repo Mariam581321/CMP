@@ -1,13 +1,20 @@
 #!/usr/bin/env bash
 # Block A (search) on FATE-X, run list problems-fatex/safe87.txt (n = 87).
 #
-#   ./scripts/blockA-fatex87-0805.sh grep
+#   ./scripts/blockA-fatex87.sh grep [cut]
+#
+# `cut` tags the run id (default 0807, the current freeze) and exists because a
+# freeze re-cut means re-running cells that already have a run id: the 0805 cells
+# are on the old side of the 0807 re-cut (PLAN.md, Next steps) and their dirs and
+# tmux sessions still exist, so a fresh cut needs a name of its own rather than a
+# rename of theirs. The file used to carry the date instead, which made it wrong
+# the moment the freeze moved.
 #
 # Launches into its OWN detached tmux session named after the run id, so the run
 # outlives the ssh connection that started it, the terminal it was typed in, and
 # the Claude session that may have typed it. Nothing to remember at launch time:
 # run it from anywhere and it detaches itself. Attach with
-#   tmux attach -t grep-fatex87-0805      (detach again with ctrl-b d)
+#   tmux attach -t grep-fatex87-0807      (detach again with ctrl-b d)
 # and read the console log at results/<run-id>.console.log either way.
 #
 # ONE ARM PER INVOCATION, and never two at once: billed_usd comes from the
@@ -36,10 +43,11 @@ case "$ARM" in
   semantic) COMBO="lean-search" ;;
   grep)     COMBO="lean-grep" ;;
   loogle)   COMBO="lean-loogle" ;;
-  *) echo "usage: $0 {grep|base|semantic|loogle}"; exit 2 ;;
+  *) echo "usage: $0 {grep|base|semantic|loogle} [cut]   (cut defaults to 0807, the current freeze)"; exit 2 ;;
 esac
 
-RUN_ID="${ARM}-fatex87-0805"
+CUT="${2:-0807}"
+RUN_ID="${ARM}-fatex87-${CUT}"
 LOG="$ROOT/results/$RUN_ID.console.log"
 
 # ---- prerequisites -------------------------------------------------------
@@ -60,6 +68,25 @@ if [ -z "${CMP_IN_TMUX_LAUNCH:-}" ]; then
   echo "$health" | grep -q '"library_sha256":null' || { echo "server has a library baked in (or predates library baking) — block A needs a plain, current env"; exit 1; }
   git diff --quiet && git diff --cached --quiet || { echo "working tree dirty — harness_git_sha would not describe what ran"; exit 1; }
 
+  # The server decides the checks; the watchdog keeps one alive for days, across git
+  # pulls. run.js refuses on a check_sha mismatch too, but only AFTER detaching — the
+  # refusal would land in a tmux pane nobody is watching, which is exactly what this
+  # outer block exists to prevent. (Added 2026-08-07 with the fingerprint: before it,
+  # only `max_heartbeats` was compared, and that number has not moved since July.)
+  want_sha=$(node -e 'import("./runner/check-env.js").then(m=>console.log(m.CHECK_SHA))' 2>/dev/null)
+  echo "$health" | grep -q "\"check_sha\":\"$want_sha\"" || {
+    echo "lean server is not running this checkout's check environment (want $want_sha)."
+    echo "it is serving: $(echo "$health" | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>console.log(JSON.parse(d).check_sha??"(pre-fingerprint)"))')"
+    echo "restart it:  pkill -f 'runner/lean-server\\.js'   # the watchdog brings up a fresh pool in ~10s"
+    exit 1; }
+
+  # Search pacing is deliberately NOT in check_sha (it costs wall clock, never a verdict
+  # or a byte the agent sees), so nothing else would catch a server predating it — and a
+  # semantic cell without it walks back into the 429s. Warn rather than refuse: an
+  # unpaced run is slower and noisier, not wrong.
+  echo "$health" | grep -q '"search_slots"' || \
+    echo "NOTE: this server has no search-slot dispenser — a semantic cell would run unpaced (restart it to get pacing)"
+
   # ---- detach --------------------------------------------------------------
   # A session of its own, named for the run: `tmux ls` becomes a live inventory
   # of what is running, and killing a run can never touch the watchdog or the
@@ -68,7 +95,7 @@ if [ -z "${CMP_IN_TMUX_LAUNCH:-}" ]; then
   # readable — a session that vanished on its own is indistinguishable from one
   # that never started.
   tmux new-session -d -s "$RUN_ID" -c "$ROOT" \
-    "CMP_IN_TMUX_LAUNCH=1 '$ROOT/scripts/blockA-fatex87-0805.sh' '$ARM' 2>&1 | tee -a '$LOG'; \
+    "CMP_IN_TMUX_LAUNCH=1 '$ROOT/scripts/blockA-fatex87.sh' '$ARM' '$CUT' 2>&1 | tee -a '$LOG'; \
      echo; echo \"=== $RUN_ID exited at \$(date -Is) — full console log: $LOG\"; \
      echo '=== pane kept open on purpose; tmux kill-session -t $RUN_ID when you are done with it'; \
      exec bash" || { echo "tmux refused to start the session"; exit 1; }

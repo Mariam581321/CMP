@@ -376,7 +376,7 @@ which is the shape a list can separate arms on, unlike the 0804 pilot's zero. De
       post-upgrade pilot rates (~$0.21–0.39/problem/run).
 - [ ] **Block A runs** (FATE-X, `problems-fatex/safe87.txt`, n = 87): base, semantic,
       grep, loogle → repeat the winner (noise floor). Launcher:
-      `scripts/blockA-fatex87-0805.sh <arm>` — one arm per invocation, sequential, so
+      `scripts/blockA-fatex87.sh <arm> [cut]` — one arm per invocation, sequential, so
       the account-wide `billed_usd` delta stays attributable to a single cell; it
       detaches into its own tmux session, so a cell never depends on the terminal or the
       Claude session that launched it. Launcher and `COSTS.md` retargeted to safe87

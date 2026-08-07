@@ -79,7 +79,7 @@ if [ -z "$bal" ]; then
 fi
 say "balance: \$$bal (floor for launching a cell: \$$MIN_BALANCE)"
 if [ "$(python3 -c "print(1 if float('$bal') < $MIN_BALANCE else 0)")" = "1" ]; then
-  say "STOP: balance below \$$MIN_BALANCE — top up, then run: ./scripts/blockA-fatex87-0805.sh $NEXT_ARM"
+  say "STOP: balance below \$$MIN_BALANCE — top up, then run: ./scripts/blockA-fatex87.sh $NEXT_ARM"
   exit 1
 fi
 
@@ -90,5 +90,5 @@ say "launching $NEXT_ARM"
 # and skip the prerequisites" — so an inherited copy makes the next cell run
 # inside the chain's pane with every guard skipped, under a session named for
 # the chain rather than the run. (Observed on the semantic cell, 2026-08-06.)
-env -u CMP_IN_TMUX_LAUNCH "$ROOT/scripts/blockA-fatex87-0805.sh" "$NEXT_ARM" 2>&1 | tee -a "$LOG"
+env -u CMP_IN_TMUX_LAUNCH "$ROOT/scripts/blockA-fatex87.sh" "$NEXT_ARM" 2>&1 | tee -a "$LOG"
 say "chain done (the cell now runs in its own tmux session)"
