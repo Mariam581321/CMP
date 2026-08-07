@@ -307,7 +307,7 @@ which is the shape a list can separate arms on, unlike the 0804 pilot's zero. De
 
 ## Next steps
 
-- [x] Remaining grader fixes; **grid freeze: `e4a9913` (re-cut 2026-08-07; supersedes
+- [x] Remaining grader fixes; **grid freeze: `92e73a5` (re-cut 2026-08-07; supersedes
       `b6d312e` of 08-05, itself superseding `638f697` and `3084411`)** — the
       `harness_git_sha` of every grid run must be that commit or a descendant, and the
       lean server must report its `check_sha` (`79102c77840650c7`).
