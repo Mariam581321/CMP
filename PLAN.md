@@ -307,9 +307,10 @@ which is the shape a list can separate arms on, unlike the 0804 pilot's zero. De
 
 ## Next steps
 
-- [x] Remaining grader fixes; **grid freeze: `f613554` (re-cut 2026-08-07; supersedes
+- [x] Remaining grader fixes; **grid freeze: `e4a9913` (re-cut 2026-08-07; supersedes
       `b6d312e` of 08-05, itself superseding `638f697` and `3084411`)** — the
-      `harness_git_sha` of every grid run must be that commit or a descendant.
+      `harness_git_sha` of every grid run must be that commit or a descendant, and the
+      lean server must report its `check_sha` (`79102c77840650c7`).
 
       **This re-cut DOES invalidate grid cells, unlike every previous one.** The three
       block-A cells that ran on 08-05/08-06 — `grep-fatex87-0805` (46/87, `134ee0f`),
@@ -331,7 +332,8 @@ which is the shape a list can separate arms on, unlike the 0804 pilot's zero. De
       chain, one typeclass budget, the single check verdict (`runner/verdict.js`, so the
       header and the grader cannot disagree), `CHECK_SHA` (`runner/check-env.js`, so a
       server from an older checkout cannot silently serve a run), grep at depth 25 with
-      name-matches-first ordering, and the agent-facing channel fixes in `f613554`.
+      name-matches-first ordering, and the agent-facing channel fixes in `f613554` and
+      `e4a9913`.
       From `b6d312e` it still carries the block-C machinery (`spawn_subagents` + the
       `add_fact` bank), the in-loop axiom gate, budget-blind spawn reports, the
       library-phase and triage plumbing, `grep_mathlib`'s Mathlib read access, the
