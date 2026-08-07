@@ -28,11 +28,25 @@ const displayPath = (file) => (file === process.env.CMP_LIB_FILE ? "library.lean
 const HEAD_RE =
   /^(?:@\[|(?:protected\s+|private\s+|noncomputable\s+|nonrec\s+|unsafe\s+|partial\s+|scoped\s+)*(?:theorem|lemma|def|abbrev|instance|structure|class|inductive|axiom|opaque)\b)/;
 
-const RAW_LINE_CAP = 400; // enough raw hits to fill any maxResults after dedup; bounds memory on patterns like "e"
-const ANCHOR_LINE_CAP = 4000; // the cross-line pass filters after grep, so it needs a wider net
-const GREP_TIMEOUT_MS = 15_000;
-const DECL_MAX_LINES = 10;
-const DECL_MAX_CHARS = 600;
+// Raw grep lines to collect before SIGKILLing grep. This is the FIRST of the three cuts
+// in this file and the one nobody could see: grep streams in directory-traversal order,
+// so a cap here silently answers a query with the alphabetical prefix of Mathlib. It sat
+// at 400 on the assumption that grep is expensive; measured 2026-08-07, an uncapped grep
+// over the whole checkout costs ~0.1 s even for `Ideal` (11,916 matching lines), so the
+// cap was buying nothing and losing the back half of the library.
+// There are now TWO cuts in this file instead of three, and both are visible: grep stops
+// at RAW_LINE_CAP, and the display stops at maxResults. The middle one — collection
+// stopped at `maxResults * 3` = 30 declarations — is gone, because it meant the tool
+// never even LOOKED at a 31st candidate, so ranking them would have been ranking the
+// alphabet. Everything grep returns is now expanded, deduped and ranked; the pool is
+// bounded by RAW_LINE_CAP alone, and dedup can only shrink it.
+const RAW_LINE_CAP = 20_000;
+const ANCHOR_LINE_CAP = 20_000; // the cross-line pass filters after grep, so it needs the same net
+const GREP_TIMEOUT_MS = 30_000;
+// One declaration's expanded signature. Mathlib wraps long signatures across many lines,
+// and a signature cut in half is the one thing this expansion exists to prevent.
+const DECL_MAX_LINES = 24;
+const DECL_MAX_CHARS = 1600;
 
 function runGrep(pattern, { regex, ci, cap = RAW_LINE_CAP }, signal) {
   return new Promise((resolve, reject) => {
@@ -88,6 +102,13 @@ function expandDecl(fileLines, hitLine) {
   if (head === -1) return { headLine: hitLine, text: fileLines[i] ?? "" };
   const parts = [];
   for (let k = head; k < fileLines.length && parts.length < DECL_MAX_LINES; k++) {
+    // Stop at the blank line that ends the declaration, BEFORE consuming it. Mathlib
+    // never puts a blank line inside a signature and always puts one between
+    // declarations, so this is where the declaration ends — and with the line cap raised
+    // to 24 it is what keeps an `inductive` with no `:=` from running on into the
+    // `namespace`/`variable`/next-declaration block underneath it (measured on
+    // `QuaternionGroup`). The cap alone used to hide that by stopping at 10 lines.
+    if (k > head && fileLines[k].trim() === "") break;
     parts.push(fileLines[k]);
     if (fileLines[k].includes(":=") || / by$/.test(fileLines[k])) break;
   }
@@ -105,7 +126,34 @@ function expandDecl(fileLines, hitLine) {
 // name returned only baffling-looking lemmas that merely *used* it).
 // declOnly drops anything that is not a matching declaration — the cross-line pass
 // uses it, because there grep matched an anchor fragment, not the query.
-function collectHits(rawLines, { inText, maxResults, truncatedRaw, declOnly = false }) {
+// Ranking inside the declaration bucket. Minimal and derived from the query itself, not
+// from a similarity score: the only claim it makes is that a declaration whose NAME the
+// query names should come before one that merely mentions the query somewhere in its
+// signature. Everything else keeps grep's order.
+//
+//   0  the assembled name IS the query          (`IntermediateField.inv_mem`)
+//   1  the query is the name's last segment     (`inv_mem` -> IntermediateField.inv_mem)
+//   2  the query matches somewhere in the name  (`inv_mem` -> Foo.inv_mem_of_bar)
+//   3  the query matches only the signature
+//
+// Why it exists: results were emitted in `grep -rnI` order, i.e. alphabetical by path,
+// so the display cut kept whatever happened to live earliest in the tree. Measured over
+// the grep cell (2026-08-07), 43% of calls truncated and the median truncated query
+// matched 38 declarations — so on nearly half of all retrievals the arm was answering
+// with an alphabetical prefix, and an exact-name hit in `Mathlib/RingTheory/…` could be
+// crowded out by `Mathlib/Algebra/…` lemmas that merely mention the token.
+// Ties keep traversal order (the index tiebreak below), so this only ever moves an exact
+// answer UP; it never invents an order among equals.
+function nameTier(name, { pattern, ci, inName }) {
+  if (!name) return 3;
+  const fold = (s) => (ci ? s.toLowerCase() : s);
+  const q = fold(pattern);
+  if (fold(name) === q) return 0;
+  if (fold(name.split(".").pop()) === q) return 1;
+  return inName(name) ? 2 : 3;
+}
+
+function collectHits(rawLines, { inText, inName, pattern, ci, maxResults, truncatedRaw, declOnly = false }) {
   const fileCache = new Map();
   const seen = new Set();
   const declHits = [];
@@ -125,7 +173,6 @@ function collectHits(rawLines, { inText, maxResults, truncatedRaw, declOnly = fa
     const key = `${file}:${headLine}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    if (declHits.length + usageHits.length >= maxResults * 3) { truncated = true; break; }
     const path = displayPath(file);
     // Resolved from the ORIGINAL block, before the usage branch below appends its `↳`
     // note — the note is commentary, not part of the declaration the name belongs to.
@@ -146,7 +193,15 @@ function collectHits(rawLines, { inText, maxResults, truncatedRaw, declOnly = fa
       usageHits.push({ ...loc, text: `${text}\n  ↳ matches inside its proof, line ${lineStr}: ${matched}` });
     }
   }
-  const hits = [...declHits, ...usageHits].slice(0, maxResults);
+  // Rank the declaration bucket, then the usage bucket after it (a usage site answers a
+  // different question and is annotated as such). Stable within a tier: the explicit
+  // index tiebreak keeps grep's traversal order rather than relying on sort stability.
+  const rank = { pattern, ci, inName };
+  const ranked = declHits
+    .map((h, i) => ({ h, tier: nameTier(h.name, rank), i }))
+    .sort((a, b) => a.tier - b.tier || a.i - b.i)
+    .map((x) => x.h);
+  const hits = [...ranked, ...usageHits].slice(0, maxResults);
   if (declHits.length + usageHits.length > maxResults) truncated = true;
   return { hits, truncated };
 }
@@ -451,7 +506,13 @@ export async function grepMathlib(pattern, { maxResults = 10 } = {}, signal) {
     }
     if (r.lines.length === 0) continue;
     const got = collectHits(r.lines, {
+      // Same matcher against the declaration's TEXT (does this hit answer the query at
+      // all) and against its NAME (does the query name it) — one definition of matching
+      // per rung, so the ranking cannot disagree with the search that produced the hits.
       inText: matcherFor(pattern, rung.ci, rung.regex),
+      inName: matcherFor(pattern, rung.ci, rung.regex),
+      pattern,
+      ci: rung.ci,
       maxResults,
       truncatedRaw: r.truncatedRaw,
     });
@@ -471,6 +532,12 @@ export async function grepMathlib(pattern, { maxResults = 10 } = {}, signal) {
       if (r.lines.length === 0) continue;
       const got = collectHits(r.lines, {
         inText: (text) => match(flatten(text)),
+        // A cross-line query is several fragments spanning a wrapped signature, so it
+        // never matches a bare name; the tiers collapse to "signature match" for all of
+        // them and the bucket keeps traversal order, which is the honest ordering here.
+        inName: () => false,
+        pattern,
+        ci: true,
         maxResults,
         truncatedRaw: r.truncatedRaw,
         declOnly: true,

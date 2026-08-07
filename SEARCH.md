@@ -9,6 +9,8 @@ citable definition of each; design rationale is in `PLAN.md`, implementation in
 
 Result depth is fixed per arm and deliberately not a tool parameter: with the knob exposed
 the agent set it on 91% of calls, so the arm measured a mix of depths rather than one.
+Each arm runs at its own mechanism's natural depth — 6 for the semantic API, 25 for grep —
+because a ranked semantic list degrades gracefully at the tail and a text search does not.
 
 Behavioural figures quoted below come from runs on the **pre-0731 `deepseek-v4-flash`
 preview weights** (see the model boundary in `PLAN.md`). They are the evidence that
@@ -90,8 +92,9 @@ the longest literal fragment of the pattern (then the second longest), expands e
 candidate to its full declaration, flattens the whitespace, and tests the whole pattern
 against that. Declarations only.
 
-**Result shape.** Up to 10 hits, each `• <fully-qualified name>` plus the declaration
-expanded from the matched line up to its `:=` (≤10 lines / 600 chars). The heading is the
+**Result shape.** Up to 25 hits (10 until 2026-08-07 — see Ordering below for the
+measurement that moved it), each `• <fully-qualified name>` plus the declaration
+expanded from the matched line up to its `:=` (≤24 lines / 1,600 chars). The heading is the
 name Lean assembles, not the name the source writes — `DihedralGroup.r_zero` for a source
 line reading `theorem r_zero` — carrying the source's own `«»` quoting so it can be written
 into a proof as it stands; every emitted name in an 80-name sample resolved under `#check`.
@@ -118,13 +121,46 @@ log details. Consequence stated rather than discovered later: block A's grep arm
 thereby a "repo access" arm — symbolic search plus source browsing — versus the
 semantic API; the comparison is retrieval *modality*, no longer retrieval mechanism
 alone.
-Declarations whose own text
-matches rank above *usage sites* — matches inside a proof body — which are annotated
-`↳ matches inside its proof, line N`. Zero hits → a "no matches" message (a result, not an
-error). Bad patterns and a missing checkout → tool failure.
+**Ordering (2026-08-07).** Results used to be emitted in `grep -rnI` order, which is
+alphabetical by path and says nothing about relevance — so with a cap on the list, the
+tool answered a query with whatever happened to live earliest in the tree. Measured over
+grep-fatex87-0805: **4,088 of 9,428 calls truncated (43%)**, and re-running those queries
+with the cap lifted showed a median of **38 matching declarations** (p25 18, p75 83, p90
+≥ 200). On nearly half of all retrievals the arm was returning an alphabetical prefix of
+roughly a quarter of what matched, and an exact-name hit in `Mathlib/RingTheory/…` could
+be crowded out by `Mathlib/Algebra/…` lemmas that merely mention the token — `Ideal`
+itself was not in its own result list.
 
-**Bounds.** 400 raw grep lines per pass (4,000 for the anchor passes, which filter
-afterwards), 15 s per grep, ~1.5 s worst case for a full ladder descent.
+The ordering is now, in tiers, ties keeping traversal order:
+
+| tier | the hit's assembled name | example for query `inv_mem` |
+|---|---|---|
+| 0 | IS the query | — |
+| 1 | ends with the query | `IntermediateField.inv_mem` |
+| 2 | contains the query | `Foo.inv_mem_of_bar` |
+| 3 | does not — the query matched only the signature | a lemma *about* `inv_mem` |
+
+then *usage sites* — matches inside a proof body, annotated `↳ matches inside its proof,
+line N` — which rank after every declaration, as before. Each tier uses the SAME matcher
+as the rung that produced the hits (literal / literal-ci / regex / regex-ci), so the
+ranking cannot disagree with the search; a cross-line query spans a wrapped signature and
+never matches a bare name, so all its hits sit in tier 3 and keep traversal order. This is
+deliberately not a relevance *score*: the only claim it makes is that a declaration the
+query NAMES comes before one that merely mentions it. Pinned by
+`scripts/probe-grep.mjs`. Zero hits → a "no matches" message (a result, not an error).
+Bad patterns and a missing checkout → tool failure.
+
+**Bounds (all raised 2026-08-07).** 20,000 raw grep lines per pass, 30 s per grep, ~0.8 s
+worst case for a full ladder descent on the broadest patterns in Mathlib. There are now
+exactly TWO cuts and both are visible in the output: grep stops at the raw-line cap, and
+the display stops at the arm's result count. The middle one — candidate collection stopped
+at `maxResults × 3` = 30 declarations — is gone, because it meant the tool never LOOKED at
+a 31st candidate, so ranking them would have been ranking the alphabet. The raw-line cap
+sat at 400 on the assumption that grep is expensive; measured, an uncapped grep over the
+whole checkout costs ~0.1 s even for `Ideal` (11,916 matching lines), so it was buying
+nothing and losing the back half of the library. Declaration expansion is 24 lines /
+1,600 chars (was 10 / 600), sized so a wrapped Mathlib signature is not cut in half —
+which is the only thing the expansion exists for.
 
 **What it cannot do.** Names that are never written in source: 13,872 `@[to_additive]`
 declarations and 2,329 `alias`es. Those resolve only in the compiled environment

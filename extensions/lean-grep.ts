@@ -12,10 +12,18 @@ import { ToolFailure, cmpConfig } from "../runner/common.js";
 
 // Fixed result count, deliberately not a tool parameter — same reasoning as
 // lean-search's NUM_RESULTS: retrieval depth is a property of the arm, not a
-// decision for the agent. Higher than semantic's 6 on purpose: grep results are
-// file-order, not relevance-ranked, so a low cap can drop the right hit
-// arbitrarily; each tool runs at its mechanism's natural depth (decided 0729).
-const MAX_RESULTS = 10;
+// decision for the agent. Higher than semantic's 6 on purpose: each tool runs at its
+// mechanism's natural depth (decided 0729), and a text search's natural depth is not a
+// semantic search's.
+// 10 -> 25 (2026-08-07), measured rather than argued: 4,088 of the grep cell's 9,428
+// calls truncated, and re-running those queries with the cap lifted showed a median of
+// 38 matching declarations (p75 83, p90 ≥ 200). At 10 the arm was answering nearly half
+// of all retrievals with roughly a quarter of what matched, selected by filename —
+// results are ordered by grep's directory traversal. runner/grep.js now ranks
+// name matches above signature matches first, so the cut at least falls in the right
+// place; 25 is what keeps it from falling at all on the median query. Cost is ~2.6 KB
+// per call against lean_check's measured 3.2 KB average.
+const MAX_RESULTS = 25;
 
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
