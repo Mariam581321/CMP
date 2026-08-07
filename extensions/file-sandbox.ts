@@ -36,8 +36,12 @@ export default function (pi: ExtensionAPI) {
       };
     }
     // A directory read came back as `EISDIR: illegal operation on a directory, read` —
-    // a raw Node errno, 91 times in the semantic cell alone, each costing a turn to
-    // decode. The capability is deliberately unchanged (no listing: `read`/`write`/`edit`
+    // a raw Node errno, 91 times across the two block-A cells (39 grep, 52 semantic),
+    // each costing a turn to decode. Both arms do it, but the semantic one does it more
+    // per read (2.4% vs 0.9%) for the same reason its reads fail four times as often
+    // overall: it is handed no file paths and no tree, so it guesses at a filesystem
+    // that is not there. The capability is deliberately unchanged (no listing:
+    // `read`/`write`/`edit`
     // and nothing else is the floor every arm shares, and a directory listing is an `ls`),
     // but the errno is replaced by a sentence that says what happened and where the
     // agent's own files are.

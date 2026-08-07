@@ -80,8 +80,12 @@ export function closestRegion(content, oldText) {
   let snippet = lines.slice(from, to).join("\n");
   // 600 -> 4000 (2026-08-07). This snippet is the whole point of the failed-edit path —
   // it is what lets the model fix its oldText in one turn instead of re-reading the file
-  // — and 600 chars cut it in 99 of the 212 failed edits in the grep cell (47%), i.e. on
-  // exactly the multi-line edits where copying the region verbatim matters most. A
+  // — and 600 chars cut it on 99 of 212 failed edits in the grep cell and 101 of 242 in
+  // the semantic one, i.e. on exactly the multi-line edits where copying the region
+  // verbatim matters most. Note how close those two are: edit failure is 5.4% / 6.7% of
+  // calls across nearly identical volumes, so this cap binds on a property of editing
+  // Lean, not on anything either arm does — which is what makes raising it a fix rather
+  // than a treatment. A
   // failed edit costs a turn; 3 KB more of the file the model is already holding costs
   // nothing it will not immediately re-read anyway.
   if (snippet.length > 4000) snippet = snippet.slice(0, 4000) + " …";
