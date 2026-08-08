@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
 # Block B (scratch verification) on FATE-X, run list problems-fatex/safe87.txt (n = 87).
 #
-#   ./scripts/blockB-fatex87.sh snippet [cut] [concurrency]
+#   ./scripts/blockB-fatex87.sh {snippet|snippetonly} [cut] [concurrency]
 #
 # snippet = the block-A winning search + lean-snippet (stateless check_snippet(code):
 # compile any scratch snippet, no files involved — PLAN.md, Block B). The winner is
 # grep: it clinched on solves before semantic even closed (grep 47/87 final vs
 # semantic's reachable maximum of 46 on 2026-08-09), so the combo is
 # lean-grep,lean-snippet.
+#
+# snippetonly = lean-snippet with NO search — PLAN.md's contingent guess-and-compile
+# arm, promoted to run FIRST (user decision 2026-08-09, inverting the written order):
+# block A showed search's entire margin over base was 8 rescued problems against 1
+# given back, so whether scratch compilation alone suffices became the live question
+# before the canonical cell ran.
 #
 # Same launch discipline as blockA-fatex87.sh (own detached tmux session, same
 # preconditions), with ONE deliberate difference: block A's "never two arms at once"
@@ -22,8 +28,9 @@ export PATH="$HOME/.local/node/bin:$HOME/.elan/bin:$PATH"
 
 ARM="${1:-}"
 case "$ARM" in
-  snippet) COMBO="lean-grep,lean-snippet" ;;
-  *) echo "usage: $0 {snippet} [cut] [concurrency]   (cut defaults to 0807, the current freeze; concurrency to 15)"; exit 2 ;;
+  snippet)     COMBO="lean-grep,lean-snippet" ;;
+  snippetonly) COMBO="lean-snippet" ;;
+  *) echo "usage: $0 {snippet|snippetonly} [cut] [concurrency]   (cut defaults to 0807, the current freeze; concurrency to 15)"; exit 2 ;;
 esac
 
 CUT="${2:-0807}"
