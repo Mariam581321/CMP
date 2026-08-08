@@ -60,6 +60,16 @@ at a time and isolate what moved the needle.
   every within-block McNemar, the denominator of every grid solve rate, and the library
   and triage populations too; 92 survives only as the scoring rule and in pre-grid
   numbers (the 0802 51/95, which is 43/87 on this list). Eval-only; dev iteration happens on FATE-M + Putnam mid-problems.
+  **easy3 supplement (2026-08-08, user decision):** fatex_35/46/70 come back after all —
+  not into the cells, but as per-arm supplement runs (`<arm>-fatex87-0807-easy3`, 3
+  problems, concurrency 3, `scripts/easy3-supplement.sh`) glued into a sibling
+  `<arm>-fatex87-0807-plus-easy3.results.jsonl` so absolute rates can be quoted at
+  n=90. Statistically free: they were excluded as unable to carry an arm effect, which
+  is exactly why re-adding them cannot move a paired test (concordant pairs drop out of
+  McNemar). The 87 stays the paired unit and the recorded denominators stand; the n=90
+  view is presentation. Supplement billed_usd is annotated meaningless (they overlap
+  the base cell on the same key). When the loogle cell runs, give it the same
+  supplement so the n=90 view exists for every arm.
   FATE-X replaced FATE-H as the grid benchmark on 2026-08-04: the ~08-02 silent model
   upgrade saturates FATE-H — an informal post-upgrade check solved everything it could
   actually attempt (the remainder died to infra, not difficulty) — so arm effects have
