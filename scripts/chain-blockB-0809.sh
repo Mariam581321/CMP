@@ -34,22 +34,22 @@ balance_floor() { # stop the chain if the DeepSeek balance is unreadable or unde
   [ -n "$bal" ] || { say "STOP: could not read the DeepSeek balance — not launching blind."; exit 1; }
   say "balance: \$$bal (floor: \$45)"
   [ "$(python3 -c "print(1 if float('$bal') < 45 else 0)")" = "1" ] && {
-    say "STOP: balance below \$45 — top up, then run: ./scripts/blockB-fatex87.sh $1"; exit 1; }
+    say "STOP: balance below \$45 — top up, then run: ./scripts/blockB-fatex90.sh $1"; exit 1; }
   return 0
 }
 
 say "chain armed: semantic -> snippetonly -> snippet"
 wait_for_run semantic-fatex87-0807
 
-if [ ! -f "$ROOT/results/snippetonly-fatex87-0807/summary.json" ]; then
+if [ ! -f "$ROOT/results/snippetonly-fatex90-0807/summary.json" ]; then
   balance_floor snippetonly
   say "launching snippetonly (lean-snippet, no search)"
-  env -u CMP_IN_TMUX_LAUNCH "$ROOT/scripts/blockB-fatex87.sh" snippetonly 0807 15 2>&1 | tee -a "$LOG"
+  env -u CMP_IN_TMUX_LAUNCH "$ROOT/scripts/blockB-fatex90.sh" snippetonly 0807 15 2>&1 | tee -a "$LOG"
   sleep 30
-  wait_for_run snippetonly-fatex87-0807
+  wait_for_run snippetonly-fatex90-0807
 fi
 
 balance_floor snippet
 say "launching snippet (lean-grep,lean-snippet)"
-env -u CMP_IN_TMUX_LAUNCH "$ROOT/scripts/blockB-fatex87.sh" snippet 0807 15 2>&1 | tee -a "$LOG"
+env -u CMP_IN_TMUX_LAUNCH "$ROOT/scripts/blockB-fatex90.sh" snippet 0807 15 2>&1 | tee -a "$LOG"
 say "chain done (snippet now runs in its own tmux session)"

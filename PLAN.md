@@ -68,8 +68,13 @@ at a time and isolate what moved the needle.
   is exactly why re-adding them cannot move a paired test (concordant pairs drop out of
   McNemar). The 87 stays the paired unit and the recorded denominators stand; the n=90
   view is presentation. Supplement billed_usd is annotated meaningless (they overlap
-  the base cell on the same key). When the loogle cell runs, give it the same
-  supplement so the n=90 view exists for every arm.
+  the base cell on the same key). Superseded in part 2026-08-09 (user decision): no
+  more separation — `problems-fatex/safe90.txt` (= safe87 + the three) is THE run
+  list from block B onward (`scripts/blockB-fatex90.sh`, run ids `<arm>-fatex90-<cut>`),
+  so loogle and every later cell runs the 90 directly and needs no supplement. Block A
+  cells reach the same 90 via their glued `*-plus-easy3` files; cross-block pairing
+  uses the common 90 problems, and the addition stays statistically free for the same
+  concordance reason.
   FATE-X replaced FATE-H as the grid benchmark on 2026-08-04: the ~08-02 silent model
   upgrade saturates FATE-H — an informal post-upgrade check solved everything it could
   actually attempt (the remainder died to infra, not difficulty) — so arm effects have

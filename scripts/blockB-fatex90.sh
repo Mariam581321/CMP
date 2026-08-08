@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Block B (scratch verification) on FATE-X, run list problems-fatex/safe87.txt (n = 87).
+# Block B (scratch verification) on FATE-X, run list problems-fatex/safe90.txt (n = 90).
 #
-#   ./scripts/blockB-fatex87.sh {snippet|snippetonly} [cut] [concurrency]
+#   ./scripts/blockB-fatex90.sh {snippet|snippetonly} [cut] [concurrency]
 #
 # snippet = the block-A winning search + lean-snippet (stateless check_snippet(code):
 # compile any scratch snippet, no files involved — PLAN.md, Block B). The winner is
@@ -20,6 +20,9 @@
 # rule is about billed_usd, and this cell was explicitly allowed (user decision,
 # 2026-08-08/09) to overlap the base-fatex87-0807 tail — its billed_usd is annotated
 # meaningless at summary time; cost_std, the headline metric, is unaffected.
+# n = 90, not 87 (user decision 2026-08-09): fatex_35/46/70 are IN the list from
+# block B onward — no more supplement runs. Block A reaches the same 90 via its
+# glued easy3 supplements; cross-block pairing uses the common 90 problems.
 set -u
 cd "$(dirname "$0")/.." || exit 1
 ROOT="$PWD"
@@ -35,7 +38,7 @@ esac
 
 CUT="${2:-0807}"
 CONC="${3:-15}"
-RUN_ID="${ARM}-fatex87-${CUT}"
+RUN_ID="${ARM}-fatex90-${CUT}"
 LOG="$ROOT/results/$RUN_ID.console.log"
 
 if [ -z "${CMP_IN_TMUX_LAUNCH:-}" ]; then
@@ -57,7 +60,7 @@ if [ -z "${CMP_IN_TMUX_LAUNCH:-}" ]; then
     exit 1; }
 
   tmux new-session -d -s "$RUN_ID" -c "$ROOT" \
-    "CMP_IN_TMUX_LAUNCH=1 '$ROOT/scripts/blockB-fatex87.sh' '$ARM' '$CUT' '$CONC' 2>&1 | tee -a '$LOG'; \
+    "CMP_IN_TMUX_LAUNCH=1 '$ROOT/scripts/blockB-fatex90.sh' '$ARM' '$CUT' '$CONC' 2>&1 | tee -a '$LOG'; \
      echo; echo \"=== $RUN_ID exited at \$(date -Is) — full console log: $LOG\"; \
      echo '=== pane kept open on purpose; tmux kill-session -t $RUN_ID when you are done with it'; \
      exec bash" || { echo "tmux refused to start the session"; exit 1; }
@@ -71,5 +74,5 @@ fi
 
 echo "=== $(date -Is) launching $RUN_ID (combo: $COMBO, concurrency: $CONC) at $(git rev-parse --short HEAD)"
 exec node runner/run.js --combo "$COMBO" \
-  --problems problems-fatex/safe87.txt --problems-dir problems-fatex \
+  --problems problems-fatex/safe90.txt --problems-dir problems-fatex \
   --budget-std 1.00 --concurrency "$CONC" --run-id "$RUN_ID"
