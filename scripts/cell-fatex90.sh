@@ -55,6 +55,24 @@ if [ -z "${CMP_IN_TMUX_LAUNCH:-}" ]; then
   [ -e "$ROOT/results/$RUN_ID" ] && {
     echo "results/$RUN_ID already exists — pick another suffix rather than writing into a finished cell"; exit 1; }
 
+  # run.js recycles the whole REPL pool when it reuses a server, and the recycle is for
+  # the gap BETWEEN runs: it kills every worker. The server's 409 guard ("any worker
+  # mid-check") is an instantaneous test, so a cell launched while another is live can
+  # slip through a momentary idle gap and drop the in-flight checks of the running cell.
+  # That happened on 2026-08-10: launching base-fatex90-0807-r2 at 11:07:34 left
+  # grep-fatex90-0807-r2's last two attempts (fatex_91, fatex_95) blocked on a lean_check
+  # whose REPL no longer existed, for the full 5.5 h client wait. Concurrent cells are
+  # still fine -- what is not fine is STARTING one while another is mid-flight.
+  live=$(pgrep -af "run\.js .*--run-id" | grep -oP '(?<=--run-id )\S+' | grep -v "^$RUN_ID$" || true)
+  if [ -n "$live" ]; then
+    echo "another cell is already in flight:"
+    echo "$live" | sed 's/^/  /'
+    echo "launching now would recycle the REPL pool under it and strand its in-flight checks."
+    echo "wait for it to finish, or set CMP_ALLOW_CONCURRENT_LAUNCH=1 to override."
+    [ -n "${CMP_ALLOW_CONCURRENT_LAUNCH:-}" ] || exit 1
+    echo "CMP_ALLOW_CONCURRENT_LAUNCH set — proceeding anyway."
+  fi
+
   health=$(curl -sf --max-time 5 "http://127.0.0.1:${CMP_LEAN_PORT:-8787}/health" 2>/dev/null)
   echo "$health" | grep -q '"ready":true' || { echo "lean server not ready — check the watchdog (tmux attach -t watchdog)"; exit 1; }
   echo "$health" | grep -q '"library_sha256":null' || { echo "server has a library baked in — a plain cell needs a plain, current env"; exit 1; }
