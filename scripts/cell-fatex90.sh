@@ -36,7 +36,16 @@ case "$ARM" in
   loogle)      COMBO="lean-loogle" ;;
   snippet)     COMBO="lean-grep,lean-snippet" ;;
   snippetonly) COMBO="lean-snippet" ;;
-  *) echo "usage: $0 {base|semantic|grep|loogle|snippet|snippetonly} [cut] [conc] [suffix]"
+  # Block C. The base here is the block-B winner, written as grep+snippet on the
+  # assumption snippet carries it -- revisit if it does not. Worth saying out loud:
+  # with F = 10 the hill-climb's "winner" is not resolvable when arms land within a
+  # few problems of each other, so the carried-forward config is a stated choice, not
+  # a measured one, and block C results are conditional on it (PLAN says to report
+  # cross-block attributions that way).
+  spawn)       COMBO="lean-grep,lean-snippet,lean-spawn" ;;
+  spawnfacts)  COMBO="lean-grep,lean-snippet,lean-spawn,lean-facts" ;;
+  spawnplan)   COMBO="lean-grep,lean-snippet,lean-spawn,lean-plan" ;;
+  *) echo "usage: $0 {base|semantic|grep|loogle|snippet|snippetonly|spawn|spawnfacts|spawnplan} [cut] [conc] [suffix]"
      echo "       cut defaults to 0807 (the current freeze), conc to 15, suffix to empty"; exit 2 ;;
 esac
 
