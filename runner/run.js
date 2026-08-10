@@ -197,7 +197,21 @@ async function ensureLeanServer(logPath) {
   const health = () =>
     fetch(`${LEAN_URL}/health`, { signal: AbortSignal.timeout(2000) })
       .then((r) => r.json()).then((j) => j.ready).catch(() => null);
-  if (await health()) { await recycleWorkers(); return null; }
+  // CMP_NO_RECYCLE: launch onto a live server WITHOUT restarting its workers. The
+  // recycle is hygiene for the gap between runs (heap, .olean page sharing) and the
+  // server's 409 guard is supposed to stop it landing on a busy pool — but that guard
+  // is one instantaneous test, so a launch that arrives while the running cell is down
+  // to its last attempts can slip through an idle gap and kill ITS in-flight checks.
+  // That happened 2026-08-10: base-fatex90-0807-r2 stranded grep-fatex90-0807-r2's
+  // fatex_91 and fatex_95 for the full 5.5 h client wait. Skipping the recycle costs
+  // only the hygiene — accumulated heap, worse page sharing, so a slower cell — and
+  // cannot touch a verdict, which is the heartbeat cap's job and lives in check_sha.
+  // Agent-invisible and check_sha-invariant, so it does not move the freeze.
+  if (await health()) {
+    if (process.env.CMP_NO_RECYCLE) console.log(dim("  reusing lean server — recycle skipped (CMP_NO_RECYCLE; another cell is live)"));
+    else await recycleWorkers();
+    return null;
+  }
   const fd = openSync(logPath, "a");
   const child = spawn("node", [join(ROOT, "runner/lean-server.js")], { env: process.env, stdio: ["ignore", fd, fd] });
   // Register the kill BEFORE anything below can throw. Both throws here abort the whole

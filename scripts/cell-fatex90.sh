@@ -70,7 +70,10 @@ if [ -z "${CMP_IN_TMUX_LAUNCH:-}" ]; then
     echo "launching now would recycle the REPL pool under it and strand its in-flight checks."
     echo "wait for it to finish, or set CMP_ALLOW_CONCURRENT_LAUNCH=1 to override."
     [ -n "${CMP_ALLOW_CONCURRENT_LAUNCH:-}" ] || exit 1
-    echo "CMP_ALLOW_CONCURRENT_LAUNCH set — proceeding anyway."
+    # The override is only safe with the recycle disabled — that is the thing that
+    # strands the running cell, not the concurrency itself.
+    export CMP_NO_RECYCLE=1
+    echo "CMP_ALLOW_CONCURRENT_LAUNCH set — proceeding with CMP_NO_RECYCLE=1."
   fi
 
   health=$(curl -sf --max-time 5 "http://127.0.0.1:${CMP_LEAN_PORT:-8787}/health" 2>/dev/null)
@@ -84,8 +87,10 @@ if [ -z "${CMP_IN_TMUX_LAUNCH:-}" ]; then
     echo "restart it:  pkill -f 'runner/lean-server\\.js'   # the watchdog brings up a fresh pool in ~10s"
     exit 1; }
 
+  # CMP_NO_RECYCLE has to travel in the command string: the re-exec inside tmux skips
+  # the guard block above, so an export out here would never reach run.js.
   tmux new-session -d -s "$RUN_ID" -c "$ROOT" \
-    "CMP_IN_TMUX_LAUNCH=1 '$ROOT/scripts/cell-fatex90.sh' '$ARM' '$CUT' '$CONC' '$SUFFIX' 2>&1 | tee -a '$LOG'; \
+    "CMP_IN_TMUX_LAUNCH=1 ${CMP_NO_RECYCLE:+CMP_NO_RECYCLE=1 }'$ROOT/scripts/cell-fatex90.sh' '$ARM' '$CUT' '$CONC' '$SUFFIX' 2>&1 | tee -a '$LOG'; \
      echo; echo \"=== $RUN_ID exited at \$(date -Is) — full console log: $LOG\"; \
      echo '=== pane kept open on purpose; tmux kill-session -t $RUN_ID when you are done with it'; \
      exec bash" || { echo "tmux refused to start the session"; exit 1; }
