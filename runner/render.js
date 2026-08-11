@@ -71,7 +71,7 @@ function dedupe(msgs, label) {
 }
 
 /**
- * `ok`, `stmt` and `axiomsBad` are the rest of the verdict, passed in by the caller that
+ * `ok`, `stmt`, `axiomsBad` and `axSorries` are the rest of the verdict, passed in by the caller that
  * has them (runner/stmt.js checkedCompile). They are what makes the header word mean
  * "this file would grade solved" rather than "the compiler printed no errors" — see
  * runner/verdict.js for why that distinction cost 683 self-contradicting checks.
@@ -88,12 +88,13 @@ export function renderCheck({
   ok = undefined,
   stmt = undefined,
   axiomsBad = undefined,
+  axSorries = undefined,
 }) {
   const msgs = messages ?? [];
   const srs = sorries ?? [];
   const errs = msgs.filter((m) => m.severity === "error");
   const warns = msgs.filter((m) => m.severity !== "error");
-  const status = checkStatus({ ok, messages: msgs, sorries: srs, stmt, axiomsBad });
+  const status = checkStatus({ ok, messages: msgs, sorries: srs, stmt, axiomsBad, axSorries });
 
   const errParts = dedupe(errs, label);
   const sorryParts = srs.map((s) => `sorry at line ${s.line}, goal:\n  ${s.goal}`);

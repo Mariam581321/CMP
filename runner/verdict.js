@@ -9,6 +9,11 @@
 //   * agent-facing check vs grader on what "compiles" means (fixed 2026-07-27);
 //   * the axiom axis — lean_check said green on a file the grader failed as
 //     bad_axioms (2026-08-04, spawn-fatex10-0804 fatex_99 and three 0802 incidents);
+//   * the sorry axis (found 2026-08-11, live in every 0807-freeze cell): the in-loop
+//     axiom parse dropped sorryAx entirely, so a proof that reached sorryAx WITHOUT a
+//     listable `sorry` — apply?/exact? admit the goal silently; `exact sorryAx ...`
+//     written out — passed this gate while the grader failed it as uses_sorry.
+//     14 attempts across 6 cells watched a green check on an unsolvable file;
 //   * the header itself (introduced and fixed the same day, 2026-08-07): it was computed
 //     from the compiler's messages alone, so a file with a rewritten statement or a
 //     smuggled axiom would open with `CLEAN — no errors, no sorries` and then have a
@@ -27,10 +32,11 @@ const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
 
 /**
  * @param {object} check  a lean-server result or a `checkedCompile` result:
- *   `{ok?, messages, sorries, stmt?, axiomsBad?}`. `stmt` and `axiomsBad` are present
- *   only where the question exists — problem.lean has a statement to preserve and
- *   benchmark declarations to axiom-check, a scratch snippet has neither — and their
- *   absence is carried through to the header rather than guessed at.
+ *   `{ok?, messages, sorries, stmt?, axiomsBad?, axSorries?}`. `stmt`, `axiomsBad` and
+ *   `axSorries` are present only where the question exists — problem.lean has a
+ *   statement to preserve and benchmark declarations to axiom-check, a scratch snippet
+ *   has neither — and their absence is carried through to the header rather than
+ *   guessed at.
  */
 export function checkStatus(check = {}) {
   const messages = check.messages ?? [];
@@ -39,6 +45,7 @@ export function checkStatus(check = {}) {
   const sorries = check.sorries ?? [];
   const stmt = check.stmt ?? null;
   const axiomsBad = check.axiomsBad ?? null;
+  const axSorries = check.axSorries ?? [];
   const stmtBad = stmt?.ok === false;
   const axBad = axiomsBad != null && Object.keys(axiomsBad).length > 0;
   // `check.ok` is the SERVER's verdict over the WHOLE submitted body — the agent's file
@@ -46,7 +53,15 @@ export function checkStatus(check = {}) {
   // differ exactly when the probe itself failed to elaborate (e.g. `#print axioms` on a
   // declaration the file deleted), which is never a green file, so both are required.
   const compiles = errors.length === 0 && check.ok !== false;
-  const done = compiles && sorries.length === 0 && !stmtBad && !axBad;
+  // sorryAx reached without a `sorry` the server could list: apply?/exact? admit the
+  // goal silently, `exact sorryAx ...` does it in a term. The grader fails these as
+  // uses_sorry, so `done` must too (the 2026-08-11 false-green class above). Surfaced
+  // only when it is the ONLY sorry signal — with errors present, recovery turns every
+  // failed proof into sorryAx and the report is noise; with a listed sorry the header
+  // already says sorry. `done` is already false in both of those cases, so gating the
+  // flag on them changes no verdict, only keeps the header honest.
+  const hiddenSorry = compiles && sorries.length === 0 && axSorries.length > 0;
+  const done = compiles && sorries.length === 0 && !stmtBad && !axBad && !hiddenSorry;
   return {
     errors: errors.length,
     warnings,
@@ -57,6 +72,8 @@ export function checkStatus(check = {}) {
     stmtDetail: stmt?.detail ?? null,
     axiomsBad: axiomsBad ?? {},
     axBad,
+    axSorries,
+    hiddenSorry,
     compiles,
     done,
     label: done ? "COMPLETE" : compiles && !stmtBad && !axBad ? "INCOMPLETE" : "FAILED",
@@ -83,7 +100,9 @@ export function headerFacts(status, errDistinct = status.errors) {
   facts.push(
     status.sorries.length
       ? `${status.sorries.length} sorr${status.sorries.length === 1 ? "y" : "ies"} at line ${status.sorries.map((s) => s.line).join(", ")}`
-      : "no sorries",
+      : status.hiddenSorry
+        ? "PROOF USES sorry (admitted goal — no `sorry` token in the file)"
+        : "no sorries",
   );
   // Only claimed where it was actually checked: a snippet has no statement to preserve,
   // so saying "statement intact" about one would be an invented guarantee.
@@ -113,6 +132,14 @@ export function blockerNotes(status) {
       `the proof depends on disallowed axioms (${axiomList(status)}). Grading accepts only ` +
         `${[...ALLOWED_AXIOMS].join(", ")} — a proof that declares or uses any other axiom can NEVER count, ` +
         `however it is constructed. Remove the axiom declarations and prove those steps honestly.`,
+    );
+  if (status.hiddenSorry)
+    notes.push(
+      `the proof of ${status.axSorries.join(", ")} depends on \`sorryAx\` even though no \`sorry\` appears ` +
+        `in the file. Search tactics like \`apply?\`/\`exact?\` do this: they print a suggestion but close ` +
+        `the goal by ADMITTING it, and a term like \`sorryAx ..\` is a sorry spelled differently. Grading ` +
+        `rejects the file as unsolved either way. Replace the search tactic with the proof it suggested, ` +
+        `or prove the goal directly.`,
     );
   return notes;
 }

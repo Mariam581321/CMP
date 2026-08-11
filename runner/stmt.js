@@ -422,20 +422,27 @@ export async function checkedCompile(code, { original, problemName, client, work
   if (r.error) return r; // { ok:false, error, kind, pretty, ... } — caller words it for the agent
   const probe = parseStmtProbe(r.messages);
   const stmt = await verifyStatement(problemName, original, r.messages);
-  // Axiom verdict, the grader's own parser (axiomReports). sorryAx is excluded HERE and
-  // only here — sorries already reach the agent through the sorries list and the header,
-  // and error recovery turns every failed proof into sorryAx, which would make this
-  // report pure noise on every non-compiling file.
+  // Axiom verdict, the grader's own parser (axiomReports). sorryAx is kept OUT of
+  // axiomsBad — it is a sorry, not a smuggled axiom, and the axiom-channel wording
+  // ("can NEVER count") would be wrong for it — but it is NOT dropped: it feeds
+  // `axSorries`, which the verdict (runner/verdict.js) requires empty for `done`.
+  // Dropping it entirely was the apply? false green (audit 2026-08-11: 14 attempts in
+  // 6 grid cells watched a green check on a proof the grader failed as uses_sorry) —
+  // a suggestion tactic admits the goal via sorryAx with no `sorry` the server can
+  // list, and `exact sorryAx ...` written out does the same. The grader has always
+  // caught these (grade.js keeps sorryAx); the gate now reads the same report.
   const reports = axiomReports(r.messages, code.split("\n").length, decls);
   const axiomsBad = {};
+  const axSorries = [];
   for (const d of decls) {
     if (reports[d] == null) continue; // decl missing — the statement verdict says so
+    if (reports[d].includes("sorryAx")) axSorries.push(d);
     const bad = reports[d].filter((a) => !ALLOWED_AXIOMS.has(a) && a !== "sorryAx");
     if (bad.length) axiomsBad[d] = bad;
   }
   // Render twice over the same structured messages: once uncapped for the file, once as
   // the digest the agent reads. The digest only advertises the file if the write landed.
-  const verdict = { ok: r.ok, stmt, axiomsBad };
+  const verdict = { ok: r.ok, stmt, axiomsBad, axSorries };
   const bare = renderWithoutProbe(r.messages, r.sorries, { cap, ...verdict });
   const wrote = workDir ? writeFullOutput(workDir, CHECK_OUTPUT_FILE, bare.full) : false;
   const shown = wrote
@@ -446,5 +453,5 @@ export async function checkedCompile(code, { original, problemName, client, work
   // checkStatus()/verifiedDone(). A cached verdict travelling alongside the facts it was
   // computed from is a second copy that can go stale, which is the whole bug class this
   // change exists to close.
-  return { ...r, pretty: shown.pretty, full: bare.full, probe, stmt, axiomsBad };
+  return { ...r, pretty: shown.pretty, full: bare.full, probe, stmt, axiomsBad, axSorries };
 }
