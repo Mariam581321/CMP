@@ -46,6 +46,7 @@ export function checkStatus(check = {}) {
   const stmt = check.stmt ?? null;
   const axiomsBad = check.axiomsBad ?? null;
   const axSorries = check.axSorries ?? [];
+  const stmtOriginal = check.stmtOriginal ?? null;
   const stmtBad = stmt?.ok === false;
   const axBad = axiomsBad != null && Object.keys(axiomsBad).length > 0;
   // `check.ok` is the SERVER's verdict over the WHOLE submitted body — the agent's file
@@ -74,6 +75,7 @@ export function checkStatus(check = {}) {
     axBad,
     axSorries,
     hiddenSorry,
+    stmtOriginal,
     compiles,
     done,
     label: done ? "COMPLETE" : compiles && !stmtBad && !axBad ? "INCOMPLETE" : "FAILED",
@@ -121,12 +123,25 @@ export const axiomList = (status) =>
 // could drift in what they claimed grading does.
 export function blockerNotes(status) {
   const notes = [];
-  if (status.stmtBad)
+  if (status.stmtBad) {
+    // Quote the file to restore, not just the instruction to restore it. Agents that
+    // trip this have usually overwritten their only copy of the original; without the
+    // quote they re-guess the line from memory — measured at 2,745 flagged checks
+    // across the 0807-freeze grid, worst case 159 rounds on one attempt, and one
+    // attempt (snippet fatex_33) that never recovered a one-token universe change.
+    const quote = status.stmtOriginal
+      ? `\n\nThe ORIGINAL file was, byte-exact (restore every declaration to this, keeping your ` +
+        `helper lemmas above the statement and your proof in place of the sorry):\n` +
+        "```\n" + (status.stmtOriginal.length > 3000
+          ? status.stmtOriginal.slice(0, 3000) + "\n[... truncated]"
+          : status.stmtOriginal) + "\n```"
+      : "";
     notes.push(
       `you modified the theorem statement (${status.stmtDetail}). Proofs of a modified statement ` +
         `do not count. Restore the original statement exactly — you may only fill in sorries and add ` +
-        `helper lemmas above it.`,
+        `helper lemmas above it.${quote}`,
     );
+  }
   if (status.axBad)
     notes.push(
       `the proof depends on disallowed axioms (${axiomList(status)}). Grading accepts only ` +
