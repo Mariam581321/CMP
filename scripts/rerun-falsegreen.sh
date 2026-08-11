@@ -95,4 +95,54 @@ print(f"=== {out}: {solved}/{len(kept)} solved after patching {replaced} records
       + (f" (WARNING: rerun problems not in base: {missing})" if missing else ""))
 PYEOF
 done
+# --- snippet fatex_20 regrade -------------------------------------------------
+# The one grader_error in the grid: the REPL hit its 13 GB RSS cap while grading the
+# final file, so "unsolved, grader_error" is a non-verdict (the attempt itself was
+# never told green — high_water null — so unlike the reruns above, the process is
+# untainted and ONE honest compile settles it). Graded against a throwaway
+# single-worker server on port 8788 with the cap raised to 28 GB (box is 64 GB and
+# block C is done by now; the shared server on 8787 is not touched, so its fuses
+# keep protecting whatever else runs). If the verdict is definitive it is patched
+# into the snippet fgrerun-patched file with a `regraded` flag; the original
+# results.jsonl is never edited (regrade.js convention).
+if [ -f results/snippet-fatex90-0807-fgrerun-patched.results.jsonl ] \
+   && ! grep -q '"regraded"' results/snippet-fatex90-0807-fgrerun-patched.results.jsonl; then
+  echo "=== $(date -Is) regrading snippet fatex_20 on a raised-memory temp server"
+  CMP_LEAN_PORT=8788 CMP_REPL_WORKERS=1 CMP_REPL_MAX_RSS_MB=28000 \
+    node runner/lean-server.js >> results/regrade-fatex20-server.log 2>&1 &
+  TMP_SRV=$!
+  trap '[ -n "${TMP_SRV:-}" ] && kill $TMP_SRV 2>/dev/null' EXIT
+  for i in $(seq 1 120); do
+    curl -sf -m 3 http://127.0.0.1:8788/health | grep -q '"ready":true' && break
+    sleep 10
+  done
+  CMP_LEAN_PORT=8788 node --input-type=module -e '
+    import { grade } from "./runner/grade.js";
+    const r = await grade("fatex_20",
+      "results/snippet-fatex90-0807/fatex_20/work/problem.lean",
+      "problems-fatex/fatex_20.lean", { end: "budget_exceeded" });
+    console.log(JSON.stringify(r));
+  ' > results/snippet-fatex90-0807-fatex20-regrade.json 2>> results/regrade-fatex20-server.log
+  kill $TMP_SRV 2>/dev/null; trap - EXIT
+  python3 - <<'PYEOF'
+import json
+try:
+    g = json.load(open("results/snippet-fatex90-0807-fatex20-regrade.json"))
+except Exception as e:
+    print(f"=== fatex_20 regrade produced no verdict ({e}) — record left as grader_error"); raise SystemExit
+print(f"=== fatex_20 regrade: solved={g.get('solved')} reason={g.get('reason')}")
+if g.get("reason") == "grader_error":
+    print("=== still grader_error (even at 28 GB) — record left as-is, escalate to a human"); raise SystemExit
+p = "results/snippet-fatex90-0807-fgrerun-patched.results.jsonl"
+rows = [json.loads(l) for l in open(p) if l.strip()]
+for r in rows:
+    if r["problem"] == "fatex_20":
+        r["grade"] = g; r["solved"] = bool(g.get("solved")); r["regraded"] = True
+with open(p, "w") as f:
+    for r in rows: f.write(json.dumps(r) + "\n")
+solved = sum(1 for r in rows if r.get("solved"))
+print(f"=== patched into {p}: snippet now {solved}/{len(rows)}")
+PYEOF
+fi
+
 echo "=== $(date -Is) false-green rerun chain complete — regenerate RUNS.md tables from the *-fgrerun-patched files (scripts/run-report.py) and mark patched cells in the write-up"
