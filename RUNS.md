@@ -15,11 +15,8 @@ Cells reach n=90 by gluing the easy3 supplement onto the safe87 run; `grep r2` a
 | base | 43 | 90 | $43.84 | $1.019 | 23 | 32.3 | complete |
 | grep | 50 | 90 | $41.15 | $0.823 | 23 | 38.1 | complete |
 | semantic | 49 | 90 | $44.03 | $0.899 | 29 | 38.9 | complete |
-| snippetonly | 48 | 89 | $44.62 | $0.930 | 25 | 34.2 | **running 89/90** |
-| grep r2 | 49 | 79 | $32.45 | $0.662 | 18 | 38.4 | **running 79/90** |
-
-> Rows marked running are partial and **not comparable** — runs process the list in
-> order and the head of FATE-X is the cheap end, so partial solve rates read high.
+| snippetonly | 48 | 90 | $45.28 | $0.943 | 25 | 34.2 | complete |
+| grep r2 | 50 | 90 | $41.73 | $0.835 | 25 | 38.5 | complete |
 
 ## Solve rate vs budget (simulated cutoffs)
 
@@ -29,13 +26,13 @@ verified proof still grades solved (high-water scan: 213/213).
 
 | cap | base | grep | semantic | snippetonly | grep r2 | spread |
 |---|---|---|---|---|---|---|
-| $0.10 | 13 / $7.17 | 23 / $6.68 | 24 / $6.56 | 20 / $6.77 | 22 / $6.85 | 11 |
-| $0.25 | 30 / $14.87 | 34 / $13.58 | 39 / $13.25 | 31 / $14.11 | 37 / $13.47 | 9 |
-| $0.50 | 33 / $24.03 | 41 / $22.08 | 43 / $21.64 | 36 / $22.83 | 42 / $20.82 | 10 |
-| $0.75 | 40 / $30.34 | 46 / $28.60 | 46 / $28.23 | 41 / $29.87 | 46 / $26.63 | 6 |
-| $1.00 | 42 / $35.13 | 49 / $33.68 | 48 / $33.38 | 48 / $34.96 | 47 / $31.64 | 7 |
+| $0.10 | 13 / $8.37 | 23 / $7.88 | 24 / $7.76 | 20 / $7.97 | 22 / $8.05 | 11 |
+| $0.25 | 30 / $17.87 | 34 / $16.50 | 39 / $16.25 | 31 / $17.11 | 37 / $16.47 | 9 |
+| $0.50 | 34 / $29.58 | 42 / $26.94 | 43 / $27.29 | 36 / $28.61 | 42 / $26.54 | 9 |
+| $0.75 | 41 / $37.58 | 47 / $34.96 | 46 / $36.38 | 41 / $38.07 | 47 / $34.57 | 6 |
+| $1.00 | 43 / $43.74 | 50 / $41.11 | 49 / $43.99 | 48 / $45.16 | 49 / $41.59 | 7 |
 
-On the 78 problems all arms have finished.
+On the 90 problems all arms have finished.
 
 ## The noise floor — grep run 1 vs run 2
 
@@ -43,10 +40,16 @@ Same arm, same freeze, same list. Every flip here is a problem whose outcome is 
 coin, and it is the denominator of every comparison in the grid:
 **Var(difference in solve counts) = F / k** for k replicates per arm.
 
-- **9 flips on 79 problems** (70 agree)
+- **10 flips on 90 problems** (80 agree)
 - r1 solved, r2 did not: fatex_19, fatex_26, fatex_50, fatex_58, fatex_61
-- r2 solved, r1 did not: fatex_33, fatex_47, fatex_66, fatex_69
-- projected to the full 90 once r2 finishes; 79 problems is a partial read
+- r2 solved, r1 did not: fatex_33, fatex_47, fatex_66, fatex_69, fatex_88
+
+| k replicates/arm | SE (solves) | 95% CI half-width | min detectable gap |
+|---|---|---|---|
+| 1 | 3.16 | ±6.2 | 8.9 |
+| 2 | 2.24 | ±4.4 | 6.3 |
+| 3 | 1.83 | ±3.6 | 5.1 |
+| 5 | 1.41 | ±2.8 | 4.0 |
 
 ## Pairwise discordance
 
@@ -54,23 +57,23 @@ coin, and it is the denominator of every comparison in the grid:
 |---|---|---|---|
 | base vs grep | 2 / 9 | 11 | 0.0654 |
 | base vs semantic | 2 / 8 | 10 | 0.1094 |
-| base vs snippetonly | 3 / 9 | 12 | 0.1460 |
-| base vs grep r2 | 3 / 9 | 12 | 0.1460 |
+| base vs snippetonly | 4 / 9 | 13 | 0.2668 |
+| base vs grep r2 | 3 / 10 | 13 | 0.0923 |
 | grep vs semantic | 4 / 3 | 7 | 1.0000 |
-| grep vs snippetonly | 6 / 5 | 11 | 1.0000 |
-| grep vs grep r2 | 5 / 4 | 9 | 1.0000 |
-| semantic vs snippetonly | 4 / 4 | 8 | 1.0000 |
-| semantic vs grep r2 | 5 / 5 | 10 | 1.0000 |
-| snippetonly vs grep r2 | 5 / 5 | 10 | 1.0000 |
+| grep vs snippetonly | 7 / 5 | 12 | 0.7744 |
+| grep vs grep r2 | 5 / 5 | 10 | 1.0000 |
+| semantic vs snippetonly | 5 / 4 | 9 | 1.0000 |
+| semantic vs grep r2 | 5 / 6 | 11 | 1.0000 |
+| snippetonly vs grep r2 | 5 / 7 | 12 | 0.7744 |
 
 Read against the noise floor above before calling any of these an effect.
 
 ## The contested problems
 
-20 of 78 problems are solved by some arms and not others —
+22 of 90 problems are solved by some arms and not others —
 the only ones carrying information. 36
 are solved by every arm and
-22 by none.
+32 by none.
 
 | problem | base | grep | semantic | snippetonly | grep r2 |
 |---|---|---|---|---|---|
@@ -86,6 +89,7 @@ are solved by every arm and
 | fatex_41 | · | · | · | ✓ | · |
 | fatex_47 | · | · | · | ✓ | ✓ |
 | fatex_50 | ✓ | ✓ | ✓ | · | · |
+| fatex_53 | ✓ | ✓ | ✓ | · | ✓ |
 | fatex_58 | · | ✓ | ✓ | ✓ | · |
 | fatex_61 | · | ✓ | · | · | · |
 | fatex_64 | · | ✓ | · | · | ✓ |
@@ -94,6 +98,7 @@ are solved by every arm and
 | fatex_69 | ✓ | · | ✓ | ✓ | ✓ |
 | fatex_76 | · | ✓ | ✓ | ✓ | ✓ |
 | fatex_83 | · | ✓ | ✓ | ✓ | ✓ |
+| fatex_88 | · | · | · | · | ✓ |
 
 ## Every run on record
 
@@ -116,10 +121,10 @@ are solved by every arm and
 | base-fatex87-0807-easy3 | base | 3 | 3 | $0.27 | 2026-08-08 |
 | semantic-fatex87-0807 | lean-search | 87 | 46 | $43.99 | 2026-08-08 |
 | base-fatex87-0807 | base | 87 | 40 | $43.57 | 2026-08-09 |
-| snippetonly-fatex90-0807 | *in flight* | 90 | 48 (of 89 done) | $44.62 | — |
-| grep-fatex90-0807-r2 | *in flight* | 90 | 49 (of 79 done) | $32.45 | — |
+| snippetonly-fatex90-0807 | lean-snippet | 90 | 48 | $45.28 | 2026-08-10 |
+| grep-fatex90-0807-r2 | lean-grep | 90 | 50 | $41.73 | 2026-08-10 |
 
 Plus 21 smoke/probe runs totalling $1.02.
 
-**Total cost_std across every run: $373.57** ($296.49 finished + $77.07 in flight).
+**Total cost_std across every run: $383.51** ($383.51 finished + $0.00 in flight).
 
