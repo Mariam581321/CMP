@@ -6,9 +6,10 @@
 # running alongside an existing server without ever creating a second one.
 #
 # Memory fuses (rss cap 13000MB/worker, avail floor 6000MB) are ON by default in
-# lean-server.js. The REPL pool defaults to 8 workers, sized for the 64 GB Ryzen
-# 3600 server (see CMP_REPL_WORKERS in lean-server.js for the arithmetic; takes
-# effect on the next server start). To run smaller, e.g. on a laptop:
+# lean-server.js. The REPL pool defaults to 6 workers — one per physical core of the
+# Ryzen 3600, which is the real ceiling for single-threaded CPU-bound checks (see
+# CMP_REPL_WORKERS in lean-server.js for the measurement; takes effect on the next
+# server start). To run smaller, e.g. on a laptop:
 #   CMP_REPL_WORKERS=1 ~/CMP/scripts/lean-server-watchdog.sh
 #
 # RESTART THIS AFTER PULLING. The server bakes in what a check IS — the injected

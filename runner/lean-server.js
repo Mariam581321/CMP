@@ -100,7 +100,18 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const LEAN_ENV = process.env.CMP_LEAN_ENV ?? join(ROOT, "lean-env");
 const REPL_BIN = process.env.CMP_REPL_BIN ?? join(ROOT, "vendor/repl/.lake/build/bin/repl");
 const PORT = parseInt(LEAN_PORT);
-const WORKERS = Math.max(1, parseInt(process.env.CMP_REPL_WORKERS ?? "8"));
+// 6, not 8: one worker per PHYSICAL core (Ryzen 5 3600, 6C/12T). A check is
+// single-threaded and CPU-bound, so the pool's ceiling is 6 checks' worth of compute per
+// wall second no matter how many workers exist — measured 2026-08-11 with three cells
+// live: 6 repls pinned at ~100% (595% total), 2 sitting at 0.0%, and /health reporting
+// ZERO queued checks. The two extra workers were not adding throughput; they were adding
+// ~7 GB of RSS each to a box whose RSS fuse fired 579 times in the preceding 3.6 days
+// (each kill discards a partly-computed check and pays a fresh Mathlib import) plus two
+// "system memory low" sweeps. Not part of CHECK_SHA (check-env.js hashes the set_option
+// head, the fuses, max_kills, retry_deadline — not the pool size), so this cannot move a
+// verdict or break comparability with an earlier cell; it changes throughput only.
+// Takes effect on the next server start.
+const WORKERS = Math.max(1, parseInt(process.env.CMP_REPL_WORKERS ?? "6"));
 const MAX_RSS_MB = parseInt(process.env.CMP_REPL_MAX_RSS_MB ?? "13000");
 const MIN_AVAIL_MB = parseInt(process.env.CMP_MIN_AVAIL_MB ?? "6000");
 // CPU fuse and memory fuses share one /proc sweep. The sweep period is also the fuse's

@@ -1,12 +1,23 @@
 #!/usr/bin/env bash
-# Overnight: wait for the snippet cell, then launch block C's spawn cell.
+# Wait for the base replicate to finish, then launch block C's spawn cell.
 #
 #   ./scripts/chain-blockC.sh
 #
-# spawn stacks on the block-B winner, so snippet finishing is not just a scheduling
-# trigger -- it is what DEFINES spawn's base config (lean-grep,lean-snippet,lean-spawn,
-# committed in cell-fatex90.sh). That is why this waits on snippet specifically and not
-# on the queue emptying.
+# spawn stacks on the block-B winner, and the winner is now settled ON SOLVES without
+# snippet's summary.json: snippetonly closed at 48/90 and snippet passed that with
+# problems still pending, which is the same "clinched before the other arm closed"
+# reading block A used for grep vs semantic. So the wait moved off snippet (user
+# decision, 2026-08-11) and onto base-fatex90-0807-r2, which has one problem left --
+# spawn starts ~10 h earlier and overlaps only snippet's tail. The block-B standings
+# are still pushed below, so the stated choice can still be reviewed.
+#
+# Concurrency 10, not 15, and this is measured rather than cautious: cells at conc 10 and
+# conc 15 finished 90 problems in the SAME wall clock (grep r2 32.7 h at 10, snippetonly
+# 31.9 h at 15) because the box tops out at 6 cores of Lean compute. The extra
+# concurrency bought nothing but a 2.5x inflation of per-attempt time (median 1.60 h ->
+# 4.09 h). 10 is what keeps 6 cores fed without that inflation; 4 could not fill them.
+# There is no resume (run.js refuses to start into an existing results dir), so this
+# number cannot be revised later without discarding the cell -- hence measuring first.
 #
 # The launch goes through cell-fatex90.sh with CMP_ALLOW_CONCURRENT_LAUNCH=1 set
 # unconditionally: if another cell is still live the launcher turns that into
@@ -25,7 +36,7 @@ export PATH="$HOME/.local/node/bin:$HOME/.elan/bin:$PATH"
 
 NOTIFY="/home/mariam/deepseek-price-watch/notify.sh"
 LOG="$ROOT/results/chain-blockC.log"
-WAIT_FOR="snippet-fatex90-0807"
+WAIT_FOR="base-fatex90-0807-r2"
 FLOOR=45
 say() { echo "$(date -Is) $*" | tee -a "$LOG"; }
 push() { [ -x "$NOTIFY" ] && printf '%s' "$2" | "$NOTIFY" "$1"; }
@@ -39,7 +50,7 @@ if [ -z "${CMP_IN_TMUX_LAUNCH:-}" ]; then
   exit 0
 fi
 
-say "armed: waiting on $WAIT_FOR, then spawn"
+say "armed: waiting on $WAIT_FOR, then spawn at concurrency 10"
 while true; do
   [ -f "$ROOT/results/$WAIT_FOR/summary.json" ] && { say "$WAIT_FOR finished"; break; }
   if ! pgrep -f "run\.js .*--run-id $WAIT_FOR" >/dev/null 2>&1; then
@@ -82,20 +93,20 @@ say "balance \$$BAL (floor \$$FLOOR)"
 if [ "$(python3 -c "print(1 if float('$BAL') < $FLOOR else 0)")" = "1" ]; then
   say "STOP: balance below floor"
   push "CMP: chain stopped — balance \$$BAL below \$$FLOOR" \
-       "snippet finished but spawn was NOT launched.
+       "$WAIT_FOR finished but spawn was NOT launched.
 
 Block B:
 $BLOCKB
 
-Top up, then: ./scripts/cell-fatex90.sh spawn 0807 15"
+Top up, then: ./scripts/cell-fatex90.sh spawn 0807 10"
   exit 1
 fi
 
 say "launching spawn (lean-grep,lean-snippet,lean-spawn)"
 env -u CMP_IN_TMUX_LAUNCH CMP_ALLOW_CONCURRENT_LAUNCH=1 \
-  "$ROOT/scripts/cell-fatex90.sh" spawn 0807 15 2>&1 | tee -a "$LOG"
+  "$ROOT/scripts/cell-fatex90.sh" spawn 0807 10 2>&1 | tee -a "$LOG"
 
-push "CMP: snippet done, spawn launched" \
+push "CMP: base r2 done, spawn launched" \
 "Block B:
 $BLOCKB
 
