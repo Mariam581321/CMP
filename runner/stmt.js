@@ -453,5 +453,16 @@ export async function checkedCompile(code, { original, problemName, client, work
   // checkStatus()/verifiedDone(). A cached verdict travelling alongside the facts it was
   // computed from is a second copy that can go stale, which is the whole bug class this
   // change exists to close.
-  return { ...r, pretty: shown.pretty, full: bare.full, probe, stmt, axiomsBad, axSorries };
+  // `stmtOriginal` rides along so the statement-modified blocker can QUOTE the file to
+  // restore. Measured need (0807-freeze audit, 2026-08-12): 357 of ~640 attempts tripped
+  // the blocker, 2,745 flagged checks, 49 attempts thrashed >=10 rounds re-guessing a
+  // line they had overwritten — snippet fatex_33 burned 69 rounds on `Type` vs `Type*`
+  // with the answer sitting in a file the harness had and the agent no longer did.
+  // FLAG-GATED (CMP_STMT_QUOTE=1), default OFF, because the quote is an experimental
+  // ARM, not a fix: it changes what 56% of attempts read, so it must never leak into a
+  // cell that claims comparability with the 0807 freeze — including the fgrerun
+  // rerun-patches, which must differ from their cells by the sorryAx gate fix ONLY.
+  // The basequote cell launches with the flag on (scripts/launch-basequote.sh).
+  const stmtOriginal = process.env.CMP_STMT_QUOTE === "1" ? original : null;
+  return { ...r, pretty: shown.pretty, full: bare.full, probe, stmt, axiomsBad, axSorries, stmtOriginal };
 }
