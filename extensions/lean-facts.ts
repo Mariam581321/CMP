@@ -23,6 +23,10 @@ export default function (pi: ExtensionAPI) {
   const bankName = basename(factsFile);
   const client: string = cfg.problem ?? "anon";
   const isWorker = cfg.worker != null;
+  // The snippetfacts arm (2026-08-12) runs the bank WITHOUT lean-spawn: don't promise
+  // "workers you spawn" when no spawn tool exists. Same detection lean-spawn uses for
+  // the bank; combos that carry both are byte-identical to before.
+  const hasSpawn = (cfg.tools ?? []).includes("spawn_subagents");
 
   pi.on("tool_call", (event) => {
     if (event.toolName !== "write" && event.toolName !== "edit") return;
@@ -48,7 +52,9 @@ export default function (pi: ExtensionAPI) {
       "The bank is append-only and shared: facts you add are immediately in scope for " +
       (isWorker
         ? "your own and everyone else's check_snippet calls (the main agent and the other workers see them too). "
-        : "check_snippet for you and for any workers you spawn. ") +
+        : hasSpawn
+          ? "check_snippet for you and for any workers you spawn. "
+          : "your check_snippet calls. ") +
       "Facts may freely use earlier bank facts by name. Rejected code returns the compiler " +
       "output and changes nothing. Submit named lemma/theorem/def/abbrev/instance declarations " +
       "only — no `axiom`, no metaprogramming, nothing `private`. " +
