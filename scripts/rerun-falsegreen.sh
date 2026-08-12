@@ -31,6 +31,11 @@
 set -u
 cd "$(dirname "$0")/.." || exit 1
 export PATH="$HOME/.local/node/bin:$HOME/.elan/bin:$PATH"
+# The chain may fire while another cell (snippetfacts, launched 2026-08-12 ahead of
+# queue) is mid-run: the pre-run REPL recycle would strand its in-flight checks (the
+# 2026-08-10 incident). Recycle skipped for these mini-runs — concurrency itself is
+# safe, the recycle is the hazard.
+export CMP_NO_RECYCLE=1
 
 echo "=== $(date -Is) waiting for block C (spawn + spawnfacts) to finish"
 until [ -f results/spawn-fatex90-0807/summary.json ] && [ -f results/spawnfacts-fatex90-0807/summary.json ]; do sleep 300; done

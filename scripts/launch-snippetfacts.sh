@@ -18,11 +18,19 @@ cd "$(dirname "$0")/.." || exit 1
 export PATH="$HOME/.local/node/bin:$HOME/.elan/bin:$PATH"
 
 RID="snippetfacts-fatex90-$(date +%m%d)"
-if pgrep -f "node runner/run.js" >/dev/null; then
-  echo "REFUSING: another run.js is alive (one cell at a time)"; exit 1
-fi
-if [ ! -f results/snippet-fatex90-0807-fgrerun-patched.results.jsonl ]; then
-  echo "REFUSING: fgrerun chain not finished (control cell not patched yet)"; exit 1
+# FORCE=1 (decision 2026-08-12): launch ahead of the queue, overlapping block C's tail
+# and the fgrerun chain. Requires CMP_NO_RECYCLE (the pre-run REPL recycle is the
+# concurrent-launch hazard, not the concurrency); accepts inflated wall times while
+# the box is shared — cost_std is token-based and unaffected.
+if [ "${FORCE:-0}" = "1" ]; then
+  export CMP_NO_RECYCLE=1
+else
+  if pgrep -f "node runner/run.js" >/dev/null; then
+    echo "REFUSING: another run.js is alive (one cell at a time; FORCE=1 overrides + sets CMP_NO_RECYCLE)"; exit 1
+  fi
+  if [ ! -f results/snippet-fatex90-0807-fgrerun-patched.results.jsonl ]; then
+    echo "REFUSING: fgrerun chain not finished (control cell not patched yet; FORCE=1 overrides)"; exit 1
+  fi
 fi
 if [ -f "results/$RID/summary.json" ]; then echo "$RID already complete"; exit 0; fi
 
