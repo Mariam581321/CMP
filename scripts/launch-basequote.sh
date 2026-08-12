@@ -32,6 +32,9 @@ cd "$(dirname "$0")/.." || exit 1
 export PATH="$HOME/.local/node/bin:$HOME/.elan/bin:$PATH"
 
 RID="basequote-fatex90-$(date +%m%d)"
+if pgrep -f "node runner/run.js" >/dev/null; then
+  echo "REFUSING: another run.js is alive (one cell at a time)"; exit 1
+fi
 for f in results/base-fatex87-0807-fgrerun-patched.results.jsonl \
          results/base-fatex90-0807-r2-fgrerun-patched.results.jsonl; do
   if [ ! -f "$f" ]; then
