@@ -70,6 +70,57 @@ original block-A design; the omission is stated in the write-up rather than pass
    cost-at-first-proof is 92% of cost-at-end, so only ~8% of spend is post-solve.
 9. **Money.** A cell costs $41–45 at the $1 cap ($0.82–1.02 per solve); the whole
    project ledger stands at ≈ $457 including the two cells in flight.
+10. **The apply?/sorryAx false green (found + fixed 2026-08-11).** The in-loop
+    done-gate dropped `sorryAx` from its axiom parse, so a proof admitted by a
+    suggestion tactic (`apply?` in 13 cases, one literal `exact sorryAx ...`) read
+    COMPLETE in the agent's own check while the grader correctly failed it as
+    `uses_sorry`. **Grades are safe** (the grader always kept sorryAx — solve counts
+    stand); the damage is behavioral: 14 attempts across 6 cells were told green,
+    and the 10 that ended `completed` stopped there believing they had solved.
+    Rerun candidates (per cell): semantic fatex_43, 79 · base fatex_33, 56, 61,
+    62, 78, 86 · base r2 fatex_43, 58, 62, 80 · snippetonly fatex_80 · snippet
+    fatex_43. grep and grep r2: clean. spawn/spawnfacts: clean so far but still
+    running on the old gate (loaded in-process) — re-scan with
+    `scripts/falsegreen-scan.mjs` when they close; full stamps in
+    `results/falsegreen-audit-0811.json`. The fix (runner/verdict.js + stmt.js:
+    the gate now reads sorryAx from the same axiom report the grader does; agent
+    sees INCOMPLETE plus one blocker note) is agent-invisible except on the
+    exact file class being excised, so reruns remain comparable to their cells
+    everywhere else.
+    A full transcript sweep (1.8 GB of sessions; verdicts per attempt in
+    `results/falsegreen-transcript-review-0811.md`) found NO additional victims:
+    every attempt that ever saw a false COMPLETE is in the stamped set. ~18
+    further attempts probed the axiom gate for evasion and were honestly
+    rebuffed (greens=0; wording they probed is unchanged) — not rerun. Reruns
+    are automated: `scripts/rerun-falsegreen.sh` (running, waits for block C)
+    reruns the 14 false greens plus base r2 fatex_36/50 — genuine solves, but
+    their cost-at-first-proof (the AUC input) is stamped at the fake green —
+    with each cell's exact combo, then glues `<cell>-fgrerun-patched
+    .results.jsonl` siblings; originals stay untouched, patched rows carry an
+    `fgrerun` provenance flag, and patched cells must be reported as patched.
+    A same-day integrity sweep over all 630 records found no other bug class
+    (axioms, lost proofs, cheap-solve discordance, tiny proofs, exit states,
+    cross-arm identical files all clean — details in the transcript-review doc).
+    Two follow-ups: the snippet fatex_20 regrade (grader_error from the REPL
+    13 GB memory cap; could make snippet 54/90) is chained into
+    rerun-falsegreen.sh — it runs after the reruns on a throwaway 1-worker
+    server on :8788 with the cap raised to 28 GB, patching a definitive
+    verdict into the snippet patched file with a `regraded` flag.
+    fatex_33 reviewed (2026-08-12): benign self-inflicted universe change
+    (`Type` → `Type*`, strictly more general; 2 sorries anyway, so no grade
+    impact) — but it exposed real friction: the statement-modified blocker
+    fired in 357 of ~640 attempts (2,745 checks ≈ 75 h of REPL; 49 attempts
+    ≥10 rounds, worst 159) because it never QUOTES the original to restore.
+    Reframed as an ARM, not a fix (2026-08-12): the quote is flag-gated
+    (`CMP_STMT_QUOTE=1`, default off, merged `042a8bf` — so the fgrerun
+    patches stay sorryAx-only), and `scripts/launch-basequote.sh` runs the
+    **basequote** cell (base + quote, safe90, $1 cap, ~$45) once the fgrerun
+    chain has produced the patched base controls. Both sides then sit on the
+    fixed gate and differ by the quote alone, with base at k=2 as control.
+    Endpoints: paired per-problem cost, AUC, thrash volume — NOT solves
+    (only 9 attempts grid-wide died of statement damage; the solve effect is
+    expected under the noise floor and the write-up says so). Launch needs an
+    explicit go — it is not auto-chained.
 
 ### Running right now (all self-driving)
 
