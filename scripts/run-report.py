@@ -155,7 +155,7 @@ if common:
     names = list(done_cells)
     w("| cap | " + " | ".join(names) + " | spread |")
     w("|---" * (len(names) + 2) + "|")
-    for c in [0.10, 0.25, 0.50, 0.75, 1.00]:
+    for c in [x / 100 for x in range(5, 101, 5)]:
         vals, sols = [], []
         for k in names:
             d = cells[k][0]
