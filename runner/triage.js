@@ -146,11 +146,17 @@ const retrievalLine = COMBO.includes("lean-grep")
   : COMBO.includes("lean-search")
     ? "- Searches Mathlib with search_mathlib: semantic search returning matching declarations with their signatures."
     : "- Has no search tool.";
+// The SUBJECT holds check_snippet when its combo says so — the bullet mirrors the
+// attempt-side tool description (extensions/lean-snippet.ts). The judge still never
+// does: this is description, not equipment.
+const snippetLine = COMBO.includes("lean-snippet")
+  ? "\n- Also compiles standalone snippets with check_snippet: the snippet is checked on its own against Mathlib, in a fresh environment that does not see problem.lean, and returns every error with its line number and the goal state at each `sorry`."
+  : "";
 const judgePrompt = (statement) => `Would the agent described below prove the theorem below, in Lean 4 with Mathlib?
 
 The agent:
 - Works in a directory holding problem.lean — the theorem below, with the proof left as \`sorry\`. It reads, writes and edits that file, and compiles it with lean_check, which returns the verdict (COMPLETE, INCOMPLETE or FAILED), every error with its line number, and the goal state at each remaining \`sorry\`.
-${retrievalLine}
+${retrievalLine}${snippetLine}
 - Has no other tools: no shell, no internet, no other agents, no human. One session, on the model you are running on.
 - Stops at about $${TARGET_BUDGET.toFixed(2)} of model usage at standard prices, proved or not.
 - May not add \`axiom\` declarations, use \`native_decide\`, or alter the theorem statement.
