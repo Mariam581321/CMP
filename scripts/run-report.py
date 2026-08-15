@@ -38,7 +38,15 @@ PILOTS = ["snippet-fatex10-0804", "spawn-fatex10-0804", "spawnfacts-fatex10-0804
 
 
 def rows(rid):
+    # Prefer the most-patched glued view of the cell (originals never edited):
+    # cwrerun-patched (context-wall reruns; stacks on the fgrerun view) >
+    # fgrerun-patched (post-false-green) > raw. Same chain as the chart scripts.
     p = os.path.join(ROOT, "results", rid, "results.jsonl")
+    for suffix in ("-cwrerun-patched.results.jsonl", "-fgrerun-patched.results.jsonl"):
+        patched = os.path.join(ROOT, "results", rid + suffix)
+        if os.path.exists(patched):
+            p = patched
+            break
     if not os.path.exists(p):
         return []
     out = []
