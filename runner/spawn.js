@@ -114,6 +114,7 @@ export function runWorker({ idx, task, maxCostStd = 0, cfg, onTokens, view, dirN
     "--no-extensions", "--no-skills", "-nc", "--no-prompt-templates", "--no-themes",
     "--model", cfg.model, "--thinking", cfg.thinking,
     "--tools", tools.join(","),
+    "-e", join(ROOT, "extensions", "compaction-guard.ts"),
     ...(cfg.max_tokens ? ["-e", join(ROOT, "extensions", "max-tokens.ts")] : []),
     ...exts.flatMap((x) => ["-e", join(ROOT, "extensions", `${x}.ts`)]),
     "--system-prompt", systemPrompt,

@@ -486,6 +486,7 @@ async function attempt(name, idx) {
     "-e", join(ROOT, "extensions", "file-sandbox.ts"),
     "-e", join(ROOT, "extensions", "cmp-edit.ts"),
     "-e", join(ROOT, "extensions", "supervisor.ts"),
+    "-e", join(ROOT, "extensions", "compaction-guard.ts"),
     ...(MAX_TOKENS > 0 ? ["-e", join(ROOT, "extensions", "max-tokens.ts")] : []),
     ...COMBO.flatMap((x) => ["-e", join(ROOT, "extensions", `${x}.ts`)]),
     "--system-prompt", FULL_SYSTEM_PROMPT,
