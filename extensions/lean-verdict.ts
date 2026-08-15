@@ -24,15 +24,15 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "submit_verdict",
     label: "Submit verdict",
-    description:
-      "Submit your final verdict and end the task. verdict is \"yes\" if you judge the theorem " +
-      "provable in this environment, \"no\" if not; reason is a short justification, recorded " +
-      "with the verdict. This is the only way to finish the task.",
+    // Says what the call does, not what to put in it: the question lives in the system
+    // prompt, and restating it here in different words was a second, slightly different
+    // question (prompt variant plain-0815).
+    description: "Submit your answer and end the task. This is the only way to finish.",
     parameters: Type.Object({
       verdict: Type.Union([Type.Literal("yes"), Type.Literal("no")], {
-        description: "Your verdict: yes (provable in this environment) or no",
+        description: "Your answer: yes or no",
       }),
-      reason: Type.String({ description: "Short justification — what settled it" }),
+      reason: Type.String({ description: "Your reason, briefly" }),
     }),
     async execute(_toolCallId, params) {
       writeFileSync(verdictPath, JSON.stringify({ verdict: params.verdict, reason: params.reason, reminders }));
@@ -50,7 +50,7 @@ export default function (pi: ExtensionAPI) {
     if (existsSync(join(process.cwd(), "..", "STOP"))) return;
     reminders++;
     try {
-      pi.sendUserMessage("When your verdict is settled, submit it with submit_verdict.", { deliverAs: "followUp" });
+      pi.sendUserMessage("Answer with submit_verdict.", { deliverAs: "followUp" });
     } catch {}
   });
 }

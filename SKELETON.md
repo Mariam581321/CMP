@@ -625,15 +625,41 @@ spawn arm section below.)
 
 **`triage`** (`extensions/lean-verdict.ts`, `runner/triage.js`, join in
 `runner/triage-join.js`) — implemented. One judge per problem: a worker-shaped agent
-(`runWorker` with a judge view) holding the attempt arm's information tools plus
+(`runWorker` with a judge view) holding the attempt arm's retrieval tool plus
 `submit_verdict(yes|no, reason)`, which records the verdict and ends the session
 (pi `terminate`, plus a harness-side watcher that stops the process when verdict.json
-appears — covers both pi behaviors). The judge's whole contract: here is the statement,
-investigate however you see fit, submit when settled. No method steering, no budget
-language; the generous cap (`--cap-std`, default 0.50) is enforcement, not information,
-and a capped judge simply ends. If a turn ends with no verdict, a fixed content-free
-reminder ("When your verdict is settled, submit it with submit_verdict.") fires, max 3 —
+appears — covers both pi behaviors). The judge has NO compiler — `check_snippet` was
+removed 2026-08-15 (snippetonly's 48/90 showed scratch compilation is the grid's
+active ingredient, so a compiling judge is halfway to an attempt arm: its "yes" drifts
+from prediction toward trial and its fee toward attempt cost; the with-snippet pilot
+`triage-grep1-pilot10-0815` is scratched, kept as `.discarded-snippetjudge`). A judge
+of a search-less arm holds only the verdict tool: pure prior prediction. The judge's
+whole contract: here is the agent, here is the theorem, would it prove it, answer with
+`submit_verdict`. Nothing tells it how to decide — the question names no failure mode
+to look for, no investigation to perform, and the tool description restates none of it
+(variant `plain-0815`, 2026-08-15; it strips `no-compile-0815`'s two worked examples of
+"no", its "investigate however you see fit", and the duplicated question in the
+`submit_verdict` schema — whether a judge generates its own failure modes IS the
+measurement). The subject arm stays stated explicitly — its tools (from `--combo`) and
+its per-problem budget (`--target-budget-std`) — because the join's counterfactual is
+about one cell and "provable in principle" is a different predicate from "provable at
+$1"; so does the "you cannot compile — this is a prediction, not your own attempt"
+line, without which the judge's own emptyhandedness reads as evidence about the
+subject. The variant id rides in every verdict (superseded: `no-compile-0815`,
+`target-arm-0815`, and the original tool-identity wording, which was false in both
+directions). The judge's OWN cap stays out of its
+view: the generous cap (`--cap-std`, default 0.50) is enforcement, not information,
+and a capped judge simply ends. Known residual: judge grep results are path-free
+(`mathlib_read` is unset for judges), so the judge cannot read Mathlib sources the
+grep arm can — a pessimistic bias, i.e. a caveat on "no" verdicts, wider now that the
+judge cannot compile what it suspects. If a turn ends with no verdict, a fixed content-free
+reminder ("Answer with submit_verdict.") fires, max 3 —
 the supervisor pattern, protecting the spend without leaning on the decision.
+`--print-view` prints the judge's whole view for the first problem — system prompt,
+user message, tool schemas, request params — read off the outgoing provider payload
+(`extensions/dump-view.ts` dumps it inside `before_provider_request` and exits before the
+request is sent, so it costs nothing) rather than reconstructed, which is the only way
+the printout cannot drift from what the model gets.
 No-verdict problems are EXCLUDED from the counterfactual (an infra artifact must never
 become a filter decision — 2026-08-04) and `triage-join` prints them next to every
 headline. The join is the whole evaluation: verdicts reweight an existing cell

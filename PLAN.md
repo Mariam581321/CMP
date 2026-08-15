@@ -228,13 +228,20 @@ steers toward shared theory, the gate is the only hard rule.
 Does not touch the attempt harness, so it burns no block and can run against any
 completed cell.
 
-- **triage** — a per-problem judge: an agentic loop with the attempt arm's information
-  tools (same search + `check_snippet`, no `lean_check`, no files) that ends by
-  calling `submit_verdict(yes|no, reason)` — can this system prove this statement?
+- **triage** — a per-problem judge: an agentic loop with the attempt arm's retrieval
+  tool only (no `check_snippet`, no `lean_check`, no files — decision 2026-08-15:
+  snippetonly showed verified scratch compilation is the grid's active ingredient, so
+  a judge that can compile is halfway to an attempt arm and its "yes" drifts from
+  prediction toward trial; a judge of a search-less arm holds nothing but the verdict
+  tool) that ends by calling `submit_verdict(yes|no, reason)` — can this system prove
+  this statement?
   Hardcap $0.15/problem, budget-blind like everything else, prompt deliberately
-  minimal (no "scrutinize your no" instruction — whether quick verdicts are calibrated
-  IS the measurement; the scrutiny-prompted variant is the follow-up cell if the "no"s
-  are trigger-happy). The arm is never "run": its verdicts reweight an existing cell —
+  minimal — variant `plain-0815`: the subject agent, the theorem, the question, submit.
+  Nothing about how to decide: no "scrutinize your no", no example failure modes, no
+  invitation to investigate (whether quick verdicts are calibrated, and whether the
+  judge generates its own failure modes, IS the measurement; a steered variant is the
+  follow-up cell if the "no"s are trigger-happy). `--print-view` prints the judge's
+  entire view, free. The arm is never "run": its verdicts reweight an existing cell —
   two-stage solve rate = solves among yes over ALL 87, two-stage cost = judge on all +
   attempts on yes — so the cell costs only the judge phase. Economic case from the
   0804 pilots: solves cost $0.34 total while fails cost $3.57. Readout: the
