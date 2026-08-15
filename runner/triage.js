@@ -152,11 +152,16 @@ const retrievalLine = COMBO.includes("lean-grep")
 const snippetLine = COMBO.includes("lean-snippet")
   ? "\n- Also compiles standalone snippets with check_snippet: the snippet is checked on its own against Mathlib, in a fresh environment that does not see problem.lean, and returns every error with its line number and the goal state at each `sorry`."
   : "";
+// Facts arm: mirrors extensions/lean-facts.ts + lean-facts.prompt.md — the bank, the
+// admission gate, and the not-in-scope-for-problem.lean catch, stated without comment.
+const factsLine = COMBO.includes("lean-facts")
+  ? "\n- Also keeps a fact bank with add_fact: verified Lean declarations, compiled against Mathlib and the existing bank and admitted only if they have no errors, no `sorry`, and no new axioms. Bank facts are automatically in scope for its check_snippet calls, but not for problem.lean — the final proof must copy in every bank fact it uses."
+  : "";
 const judgePrompt = (statement) => `Would the agent described below prove the theorem below, in Lean 4 with Mathlib?
 
 The agent:
 - Works in a directory holding problem.lean — the theorem below, with the proof left as \`sorry\`. It reads, writes and edits that file, and compiles it with lean_check, which returns the verdict (COMPLETE, INCOMPLETE or FAILED), every error with its line number, and the goal state at each remaining \`sorry\`.
-${retrievalLine}${snippetLine}
+${retrievalLine}${snippetLine}${factsLine}
 - Has no other tools: no shell, no internet, no other agents, no human. One session, on the model you are running on.
 - Stops at about $${TARGET_BUDGET.toFixed(2)} of model usage at standard prices, proved or not.
 - May not add \`axiom\` declarations, use \`native_decide\`, or alter the theorem statement.
