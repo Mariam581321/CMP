@@ -64,6 +64,12 @@ try {
       // and stamp library_sha into every record.
       library: { type: "string" },
       "run-id": { type: "string" },
+      // Continue dead attempts of an EXISTING run in their own sessions (pi -c):
+      // the session jsonl is the durable record, and the tail reads it from byte 0,
+      // so spend, turns, and the budget all bind cumulatively across segments. Built
+      // for the 2026-08-16 402 outage; only ever revives attempts, never re-prompts
+      // finished ones. --problems must list exactly the attempts to revive.
+      resume: { type: "boolean", default: false },
     },
     strict: true,
   }).values;
@@ -72,6 +78,7 @@ try {
   process.exit(1);
 }
 const COMBO = A.combo.split(",").map((s) => s.trim()).filter(Boolean);
+const RESUME = A.resume;
 const PROBLEMS_FILE = A.problems;
 const PROBLEMS_DIR = resolve(A["problems-dir"]);
 // Attempts are capped by SPEND, not time: a per-problem budget in cost_std dollars
@@ -321,7 +328,24 @@ const runDir = join(ROOT, "results", RUN_ID);
 // Guard on run.json too, not only results.jsonl: a launch that died before its first
 // record (a wide window — first records can take hours) left a dir the old guard
 // happily reused, interleaving two generations of attempts in one run dir.
-if (existsSync(join(runDir, "results.jsonl")) || existsSync(join(runDir, "run.json"))) {
+if (RESUME) {
+  // Resume targets an existing run and must be config-identical to it: a resumed
+  // segment that silently changed combo/model/budget would splice a different arm
+  // into the cell. run.json is the run's own record of that config — trust it, not
+  // the caller's memory.
+  let prev;
+  try { prev = JSON.parse(readFileSync(join(runDir, "run.json"), "utf8")); }
+  catch { console.error(`--resume: results/${RUN_ID}/run.json not found — nothing to resume`); process.exit(1); }
+  const mismatch = [];
+  if (JSON.stringify(prev.combo ?? []) !== JSON.stringify(COMBO)) mismatch.push(`combo ${JSON.stringify(prev.combo)} != ${JSON.stringify(COMBO)}`);
+  if (prev.model !== MODEL) mismatch.push(`model ${prev.model} != ${MODEL}`);
+  if (prev.thinking !== THINKING) mismatch.push(`thinking ${prev.thinking} != ${THINKING}`);
+  if ((prev.budget_std ?? null) !== (BUDGET_STD || null)) mismatch.push(`budget_std ${prev.budget_std} != ${BUDGET_STD}`);
+  if (mismatch.length) { console.error(`--resume config mismatch vs run.json:\n  ${mismatch.join("\n  ")}`); process.exit(1); }
+  for (const p of problems) {
+    if (!existsSync(join(runDir, p, "session"))) { console.error(`--resume: no session to continue for ${p}`); process.exit(1); }
+  }
+} else if (existsSync(join(runDir, "results.jsonl")) || existsSync(join(runDir, "run.json"))) {
   console.error(`results/${RUN_ID}/ already exists — pick a new --run-id or move the old run aside`);
   process.exit(1);
 }
@@ -367,7 +391,9 @@ async function deepseekBalance() {
 }
 const balanceBefore = await deepseekBalance();
 const RUN_STARTED = Date.now();
-writeFileSync(join(runDir, "run.json"), JSON.stringify({ run_id: RUN_ID, combo: COMBO, model: MODEL, thinking: THINKING, max_tokens: MAX_TOKENS || null, budget_std: BUDGET_STD || null, timeout_s: TIMEOUT_S, max_heartbeats: MAX_HEARTBEATS, check_sha: CHECK_SHA, library_sha: LIBRARY?.sha ?? null, library_run: LIBRARY?.run_id ?? null, concurrency: CONCURRENCY, problems, problems_dir: PROBLEMS_DIR, git_sha: gitSha, pi_version: piVersion, balance_before: balanceBefore, started_at: new Date(RUN_STARTED).toISOString() }, null, 2));
+// A resumed segment never rewrites the run's identity: run.json keeps the original
+// launch's config, sha, and opening balance.
+if (!RESUME) writeFileSync(join(runDir, "run.json"), JSON.stringify({ run_id: RUN_ID, combo: COMBO, model: MODEL, thinking: THINKING, max_tokens: MAX_TOKENS || null, budget_std: BUDGET_STD || null, timeout_s: TIMEOUT_S, max_heartbeats: MAX_HEARTBEATS, check_sha: CHECK_SHA, library_sha: LIBRARY?.sha ?? null, library_run: LIBRARY?.run_id ?? null, concurrency: CONCURRENCY, problems, problems_dir: PROBLEMS_DIR, git_sha: gitSha, pi_version: piVersion, balance_before: balanceBefore, started_at: new Date(RUN_STARTED).toISOString() }, null, 2));
 
 // Benchmark-neutral by design: no "competition" framing, since the problem source
 // changes between blocks (Putnam -> FATE -> whatever is next) and the prompt must not
@@ -447,7 +473,10 @@ async function attempt(name, idx) {
   const workersRoot = join(probDir, "workers");
   mkdirSync(work, { recursive: true });
   mkdirSync(sessionDir, { recursive: true });
-  copyFileSync(join(PROBLEMS_DIR, `${name}.lean`), join(work, "problem.lean"));
+  // On resume, work/problem.lean is the agent's own current state — overwriting it
+  // with the original would throw away everything the first segment built.
+  if (!(RESUME && existsSync(join(work, "problem.lean"))))
+    copyFileSync(join(PROBLEMS_DIR, `${name}.lean`), join(work, "problem.lean"));
   // Read access to the sources of the compiled environment, as SYMLINKS — one
   // canonical file/tree, not a copy per attempt; the sandbox blocks write/edit
   // through them (a write would corrupt the shared original for every attempt).
@@ -491,7 +520,13 @@ async function attempt(name, idx) {
     ...COMBO.flatMap((x) => ["-e", join(ROOT, "extensions", `${x}.ts`)]),
     "--system-prompt", FULL_SYSTEM_PROMPT,
     "--session-dir", sessionDir,
-    PROMPT,
+    // Resume rides pi's own session continuation: -c reopens the attempt's session
+    // (sessionDir holds exactly one), the model sees its full prior context, and the
+    // continuation message is deliberately neutral — the outage is stated, nothing
+    // about the problem is steered.
+    ...(RESUME
+      ? ["-c", "The infrastructure outage that interrupted you is over. Continue working from where you left off."]
+      : [PROMPT]),
   ];
 
   const stderrLog = createWriteStream(join(probDir, "stderr.log"));
@@ -598,7 +633,18 @@ async function attempt(name, idx) {
     }
   } catch {}
 
-  const wallMs = Date.now() - started;
+  // A resumed record's wall clock spans both segments (the tail already makes every
+  // OTHER number cumulative by reading the session from byte 0); the outage gap
+  // itself is not wall time and is not counted.
+  let priorWallS = 0, priorEnd = null;
+  if (RESUME) {
+    try {
+      const prevAttempt = JSON.parse(readFileSync(join(probDir, "attempt.json"), "utf8"));
+      priorWallS = prevAttempt.wall_s ?? 0;
+      priorEnd = prevAttempt.end ?? null;
+    } catch {}
+  }
+  const wallMs = Date.now() - started + priorWallS * 1000;
   // A death the runner did not order — OOM kill, pi crash, provider-retry exhaustion —
   // is not "completed": it used to be recorded as one and silently counted as an
   // ordinary arm failure (one such record already exists in the 0727 data). The file
@@ -678,6 +724,11 @@ async function attempt(name, idx) {
     // a proof" and "ended with one". null = the attempt never reached a green check.
     high_water: highWater,
     harness_git_sha: gitSha, pi_version: piVersion,
+    // Provenance for continued attempts: which abnormal end the first segment
+    // recorded, so "this record replaces an agent_died row" is queryable. The
+    // superseded row stays in results.jsonl (append-only while the original runner
+    // may still be alive) — views must dedup keep-last per problem.
+    ...(RESUME ? { resumed: true, prior_end: priorEnd } : {}),
   };
   writeFileSync(join(probDir, "attempt.json"), JSON.stringify(record, null, 2));
   appendFileSync(join(runDir, "results.jsonl"), JSON.stringify(record) + "\n");
@@ -767,5 +818,9 @@ const summary = {
   balance_before: balanceBefore, balance_after: balanceAfter, billed_usd: billedUsd, billed_note: billedNote,
   fail_reasons: reasons, finished_at: new Date().toISOString(),
 };
-writeFileSync(join(runDir, "summary.json"), JSON.stringify(summary, null, 2));
+// A resume segment must not claim the cell's summary: for a cell that closed with
+// poisoned records the garbage summary is honest history, and for a cell whose
+// original runner is still alive the file is not ours to write. The glue that
+// builds patched views reads results.jsonl, not summaries.
+writeFileSync(join(runDir, RESUME ? "summary-resume.json" : "summary.json"), JSON.stringify(summary, null, 2));
 console.log(cyan(`  ${JSON.stringify(summary)}\n`));
