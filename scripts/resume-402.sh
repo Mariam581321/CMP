@@ -57,7 +57,9 @@ PYEOF
   budget=$(python3 -c "import json;print(json.load(open('results/$rid/run.json'))['budget_std'])")
   local list="problems-fatex/resume402-$rid.txt"
   printf '%s\n' $dead > "$list"
-  echo "=== $(date -Is) resuming $rid: $(tr '\n' ' ' < "$list")"
+  echo "=== $(date -Is) rewinding outage scars for $rid"
+  node scripts/rewind-scar.mjs $(printf "results/$rid/%s " $dead)
+  echo "=== $(date -Is) resuming $rid (promptless): $(tr '\n' ' ' < "$list")"
   node runner/run.js --resume --combo "$combo" --problems "$list" \
     --problems-dir problems-fatex --budget-std "$budget" --concurrency "$(wc -l < "$list")" \
     --run-id "$rid" 2>&1 | tee -a "results/$rid.console.log"

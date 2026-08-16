@@ -520,13 +520,14 @@ async function attempt(name, idx) {
     ...COMBO.flatMap((x) => ["-e", join(ROOT, "extensions", `${x}.ts`)]),
     "--system-prompt", FULL_SYSTEM_PROMPT,
     "--session-dir", sessionDir,
-    // Resume rides pi's own session continuation: -c reopens the attempt's session
-    // (sessionDir holds exactly one), the model sees its full prior context, and the
-    // continuation message is deliberately neutral — the outage is stated, nothing
-    // about the problem is steered.
-    ...(RESUME
-      ? ["-c", "The infrastructure outage that interrupted you is over. Continue working from where you left off."]
-      : [PROMPT]),
+    // Resume is PROMPTLESS: -c reopens the attempt's session (sessionDir holds
+    // exactly one) and the sentinel tells runner/pi-continue.mjs to run pi's own
+    // continuation loop (public Agent.continue()) with nothing appended — the model
+    // sees exactly the context it had at its last healthy entry. The sentinel never
+    // reaches the session file or the LLM. Rewind the outage scar first
+    // (scripts/rewind-scar.mjs); an error-stopped leaf is pi's retry-removal target,
+    // never a continuation point.
+    ...(RESUME ? ["-c", "<<cmp-pi-continue-sentinel>>"] : [PROMPT]),
   ];
 
   const stderrLog = createWriteStream(join(probDir, "stderr.log"));
@@ -547,7 +548,9 @@ async function attempt(name, idx) {
   // The child says nothing on stdout (--mode text); everything the runner needs is
   // read off pi's own session jsonl as it is appended.
   const exit = await new Promise((resolveExit) => {
-    const child = spawn("pi", args, {
+    // Resume segments run through runner/pi-continue.mjs — pi's real CLI main()
+    // with AgentSession.prompt patched to honor the promptless-continue sentinel.
+    const child = spawn(RESUME ? process.execPath : "pi", RESUME ? [join(ROOT, "runner/pi-continue.mjs"), ...args] : args, {
       cwd: work,
       env: {
         ...process.env,
