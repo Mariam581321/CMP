@@ -107,6 +107,24 @@ if (COMBO.includes("lean-search") && !PRINT_VIEW) {
 
 // The whole judge view: the question, the agent it is about, the theorem, submit.
 //
+// PROMPT VARIANT tokens-0816 (was plain-0815). One change: the subject's budget is
+// quoted in the agent's own units — generated tokens and lean_check compiles — instead
+// of dollars. plain-0815's false "no"s were budget deaths, not math errors: on the
+// safe90 ×3 passes, ~82% of no-reasons on problems the arm actually solved conceded
+// the theorem and often the exact route, then predicted the budget kills it, and 24
+// verdicts glossed $1 as "tens of thousands of output tokens (frontier model)" — a
+// 30–50× mispricing (at STD_PRICES, a capped safe90 session medians ~1.2M generated
+// tokens, ~430 turns, ~110 lean_check compiles; 270 attempts, 88 near-cap, 2026-08-16).
+// The judge is told the subject runs "on the model you are running on", but a model
+// does not know its own price sheet, and dollars imported a frontier one. Re-uniting
+// the budget is a fact about the subject — the same clause that admitted the dollar
+// figure (see item 2 below) — not decision guidance; nothing else in the prompt moved.
+// Considered and rejected (2026-08-16, Mariam): dropping the budget line entirely.
+// The join's counterfactual is about a capped cell, so an uncapped "would it ever
+// prove this" is a different predicate — and the plain-0815 reasons show the judge
+// already believes most of the tier provable in principle, so a budget-less prompt
+// collapses toward the known all-yes degenerate mode. The line IS the gate.
+//
 // PROMPT VARIANT plain-0815 (was no-compile-0815, itself was target-arm-0815). Same
 // question, stripped: everything that told the judge HOW to answer is gone, and what
 // is left is only what the question is unintelligible without. Cut, and why —
@@ -157,13 +175,19 @@ const snippetLine = COMBO.includes("lean-snippet")
 const factsLine = COMBO.includes("lean-facts")
   ? "\n- Also keeps a fact bank with add_fact: verified Lean declarations, compiled against Mathlib and the existing bank and admitted only if they have no errors, no `sorry`, and no new axioms. Bank facts are automatically in scope for its check_snippet calls, but not for problem.lean — the final proof must copy in every bank fact it uses."
   : "";
+// The budget bullet's unit conversion: medians of near-cap (≥ 0.85·budget) sessions
+// across the grep/snippet/base safe90 cells, 2026-08-16 — ~1.2M generated tokens and
+// ~110 lean_check calls per $1.00 @std. Linear in the budget; both deliberately
+// round numbers, quoted as "roughly"/"about" in the prompt.
+const budgetTokensM = (1.2 * TARGET_BUDGET).toFixed(1);
+const budgetChecks = Math.max(10, Math.round((110 * TARGET_BUDGET) / 10) * 10);
 const judgePrompt = (statement) => `Would the agent described below prove the theorem below, in Lean 4 with Mathlib?
 
 The agent:
 - Works in a directory holding problem.lean — the theorem below, with the proof left as \`sorry\`. It reads, writes and edits that file, and compiles it with lean_check, which returns the verdict (COMPLETE, INCOMPLETE or FAILED), every error with its line number, and the goal state at each remaining \`sorry\`.
 ${retrievalLine}${snippetLine}${factsLine}
 - Has no other tools: no shell, no internet, no other agents, no human. One session, on the model you are running on.
-- Stops at about $${TARGET_BUDGET.toFixed(2)} of model usage at standard prices, proved or not.
+- Stops, proved or not, when its budget runs out: roughly ${budgetTokensM} million tokens of its own generation — in practice about ${budgetChecks} lean_check compiles, with reading and editing in between.
 - May not add \`axiom\` declarations, use \`native_decide\`, or alter the theorem statement.
 
 You cannot compile, run or test anything: your answer is a prediction about that agent, not a report of your own attempt. Answer with submit_verdict — "yes" or "no", and your reason, which is recorded. It is the only way to finish.
@@ -192,7 +216,7 @@ const TASK = "Answer the question in your instructions with submit_verdict.";
 // variant id rides in every record and in the summary — and so do the same freeze
 // identifiers run.js records (git sha + pi version; the sha alone under-identifies the
 // harness, one `npm update` wide hole).
-const PROMPT_VARIANT = "plain-0815";
+const PROMPT_VARIANT = "tokens-0816";
 let gitSha = "unknown";
 try { gitSha = execSync("git rev-parse --short HEAD", { cwd: ROOT }).toString().trim(); } catch {}
 let piVersion = "unknown";

@@ -240,7 +240,19 @@ completed cell.
   Nothing about how to decide: no "scrutinize your no", no example failure modes, no
   invitation to investigate (whether quick verdicts are calibrated, and whether the
   judge generates its own failure modes, IS the measurement; a steered variant is the
-  follow-up cell if the "no"s are trigger-happy). `--print-view` prints the judge's
+  follow-up cell if the "no"s are trigger-happy).
+  **The "no"s were trigger-happy, and in one specific way (safe90 ×3, 2026-08-16):**
+  precision ≈ 1.0 (grep majority: 21 yes, 21 solved, 0 FP) but recall 0.30–0.45, and
+  ~82% of false-"no" reasons conceded the theorem and the route, then predicted budget
+  death — 24 verdicts glossed $1 as "tens of thousands of output tokens", a 30–50×
+  mispricing of the subject's actual allowance (~1.2M generated tokens, ~110 compiles).
+  Follow-up variant `tokens-0816` therefore changes exactly one thing: the budget
+  bullet is quoted in the agent's own units (generated tokens + lean_check compiles),
+  no dollars. Dropping the budget line entirely was considered and rejected — the
+  counterfactual is about a capped cell, and the judge already believes most of the
+  tier provable in principle, so budget-less collapses toward the all-yes degenerate
+  mode. Other steering (failure-mode lists, "scrutinize") stays unrun unless
+  tokens-0816 fails the same way. `--print-view` prints the judge's
   entire view, free. The arm is never "run": its verdicts reweight an existing cell —
   two-stage solve rate = solves among yes over ALL 87, two-stage cost = judge on all +
   attempts on yes — so the cell costs only the judge phase. Economic case from the
