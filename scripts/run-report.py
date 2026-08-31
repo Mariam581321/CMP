@@ -30,7 +30,14 @@ CELLS = {
     "snippet":     ["snippet-fatex90-0807"],
     "base r2":     ["base-fatex90-0807-r2"],
     "spawn":       ["spawn-fatex90-0807"],
+    "spawnfacts":  ["spawnfacts-fatex90-0807"],
+    "snippetfacts": ["snippetfacts-fatex90-0812"],
+    "snippet r2":  ["snippet-fatex90-0807-r2"],
+    "snippetonly r2": ["snippetonly-fatex90-0807-r2"],
+    "basequote":   ["basequote-fatex90-0813"],
 }
+# Same-arm replicate pairs — the noise floor pools over all of them.
+REPLICATE_PAIRS = [("grep", "grep r2"), ("base", "base r2"), ("snippet", "snippet r2")]
 PRE_FREEZE = ["grep-fatex87-0805", "semantic-fatex87-0805"]
 PILOTS = ["snippet-fatex10-0804", "spawn-fatex10-0804", "spawnfacts-fatex10-0804",
           "lean-search-fatex-pilot10-0802", "lean-search-think-fateh81-0727",
@@ -177,30 +184,36 @@ if common:
     w("")
 
 # ---------------------------------------------------------------- noise floor
-gr1, gr2 = cells.get("grep", ({}, 0, 0))[0], cells.get("grep r2", ({}, 0, 0))[0]
-shared = sorted(set(gr1) & set(gr2))
-if shared:
-    only1 = [p for p in shared if gr1[p]["solved"] and not gr2[p]["solved"]]
-    only2 = [p for p in shared if gr2[p]["solved"] and not gr1[p]["solved"]]
+flips, pair_lines = [], []
+for a1, a2 in REPLICATE_PAIRS:
+    d1, d2 = cells.get(a1, ({}, 0, 0))[0], cells.get(a2, ({}, 0, 0))[0]
+    shared = sorted(set(d1) & set(d2))
+    if len(shared) < 85:
+        continue
+    only1 = [p for p in shared if d1[p]["solved"] and not d2[p]["solved"]]
+    only2 = [p for p in shared if d2[p]["solved"] and not d1[p]["solved"]]
     F = len(only1) + len(only2)
-    w("## The noise floor — grep run 1 vs run 2")
+    flips.append(F)
+    pair_lines.append((a1, a2, F, len(shared), only1, only2))
+if pair_lines:
+    w("## The noise floor — same arm, run 1 vs run 2")
     w("")
     w("Same arm, same freeze, same list. Every flip here is a problem whose outcome is a")
     w("coin, and it is the denominator of every comparison in the grid:")
     w("**Var(difference in solve counts) = F / k** for k replicates per arm.")
     w("")
-    w(f"- **{F} flips on {len(shared)} problems** ({len(shared)-F} agree)")
-    w(f"- r1 solved, r2 did not: {', '.join(only1) if only1 else '—'}")
-    w(f"- r2 solved, r1 did not: {', '.join(only2) if only2 else '—'}")
-    if len(shared) >= 85:
-        w("")
-        w("| k replicates/arm | SE (solves) | 95% CI half-width | min detectable gap |")
-        w("|---|---|---|---|")
-        for k in [1, 2, 3, 5]:
-            se = (F / k) ** 0.5
-            w(f"| {k} | {se:.2f} | ±{1.96*se:.1f} | {2.8*se:.1f} |")
-    else:
-        w(f"- projected to the full 90 once r2 finishes; {len(shared)} problems is a partial read")
+    for a1, a2, F, n, only1, only2 in pair_lines:
+        w(f"- **{a1} vs {a2}: {F} flips on {n}** ({n-F} agree)")
+        w(f"  - r1 solved, r2 did not: {', '.join(only1) if only1 else '—'}")
+        w(f"  - r2 solved, r1 did not: {', '.join(only2) if only2 else '—'}")
+    F = sum(flips) / len(flips)
+    w(f"- pooled over {len(pair_lines)} replicate pairs: **F = {F:.1f}**")
+    w("")
+    w("| k replicates/arm | SE (solves) | 95% CI half-width | min detectable gap |")
+    w("|---|---|---|---|")
+    for k in [1, 2, 3, 5]:
+        se = (F / k) ** 0.5
+        w(f"| {k} | {se:.2f} | ±{1.96*se:.1f} | {2.8*se:.1f} |")
     w("")
 
 # ---------------------------------------------------------------- pairwise
@@ -246,23 +259,58 @@ if common:
 # ---------------------------------------------------------------- all runs
 w("## Every run on record")
 w("")
-allrun = []
-for f in sorted(glob.glob(os.path.join(ROOT, "results", "*", "summary.json"))):
-    rid = os.path.basename(os.path.dirname(f))
-    try:
-        s = json.load(open(f))
-    except ValueError:
-        continue
-    allrun.append((rid, s))
-smoke = [(r, s) for r, s in allrun if r.startswith(("smoke", "ga-smoke", "preflight", "_", "retry-test", "wifi-test"))]
-main = [(r, s) for r, s in allrun if (r, s) not in smoke]
+w("n / solved / cost_std are keep-last over the run dir's own `results.jsonl` (resumed")
+w("rows carry cumulative spend, so this includes resume-segment costs that the original")
+w("summary.json predates). ⟳ = run was resumed after the 0816 402 outage; runs without")
+w("a finished date closed without a summary (killed or resume-only dirs).")
+w("")
+
+
+def ledger_row(rid):
+    """(combo, n, solved, cost, finished, resumed) — keep-last over the dir's own
+    results.jsonl (summary.json undercounts resumed dirs), summaries for metadata."""
+    s = summary(rid)
+    sr = os.path.join(ROOT, "results", rid, "summary-resume.json")
+    resume = json.load(open(sr)) if os.path.exists(sr) else None
+    last = {}
+    p = os.path.join(ROOT, "results", rid, "results.jsonl")
+    if os.path.exists(p):
+        for l in open(p):
+            try:
+                r = json.loads(l)
+                last[r["problem"]] = r
+            except ValueError:
+                pass
+    meta = s or resume or {}
+    if not meta.get("combo"):
+        rj = os.path.join(ROOT, "results", rid, "run.json")
+        if os.path.exists(rj):
+            meta = dict(meta, combo=json.load(open(rj)).get("combo"))
+    combo = ",".join(meta.get("combo") or []) or "base"
+    if not last:
+        return (combo, meta.get("problems"), meta.get("solved"),
+                meta.get("cost_std") or 0, (meta.get("finished_at") or "")[:10], bool(resume))
+    finished = (s or {}).get("finished_at") or (resume or {}).get("finished_at") or ""
+    if resume and (resume.get("finished_at") or "") > ((s or {}).get("finished_at") or ""):
+        finished = resume["finished_at"]
+    return (combo, len(last), sum(1 for r in last.values() if r.get("solved")),
+            sum(r.get("cost_std") or 0 for r in last.values()),
+            finished[:10] if s or resume else "—", bool(resume))
+
+
+dirs = sorted({os.path.basename(os.path.dirname(f)) for f in
+               glob.glob(os.path.join(ROOT, "results", "*", "summary.json")) +
+               glob.glob(os.path.join(ROOT, "results", "*", "summary-resume.json")) +
+               glob.glob(os.path.join(ROOT, "results", "*", "results.jsonl"))})
+allrun = [(rid, ledger_row(rid)) for rid in dirs]
+smoke = [(r, v) for r, v in allrun if r.startswith(("smoke", "ga-smoke", "preflight", "_", "retry-test", "wifi-test"))]
+main = [(r, v) for r, v in allrun if not r.startswith(("smoke", "ga-smoke", "preflight", "_", "retry-test", "wifi-test"))]
 
 w("| run | combo | n | solved | cost_std | finished |")
 w("|---|---|---|---|---|---|")
-for rid, s in sorted(main, key=lambda x: x[1].get("finished_at") or ""):
-    combo = ",".join(s.get("combo") or []) or "base"
-    w(f"| {rid} | {combo} | {s.get('problems')} | {s.get('solved')} | "
-      f"${(s.get('cost_std') or 0):.2f} | {(s.get('finished_at') or '')[:10]} |")
+for rid, (combo, n, sol, cost, fin, resumed) in sorted(main, key=lambda x: (x[1][4] == "—", x[1][4], x[0])):
+    mark = " ⟳" if resumed else ""
+    w(f"| {rid}{mark} | {combo} | {n} | {sol} | ${cost:.2f} | {fin or '—'} |")
 # in-flight
 for name, (d, done, tot) in cells.items():
     if not done and d:
@@ -272,16 +320,22 @@ for name, (d, done, tot) in cells.items():
                 w(f"| {rid} | *in flight* | {tot} | {sum(1 for r in rr if r['solved'])} (of "
                   f"{len(rr)} done) | ${sum(r.get('cost_std') or 0 for r in rr):.2f} | — |")
 w("")
-sm = sum((s.get("cost_std") or 0) for _, s in smoke)
+sm = sum(v[3] for _, v in smoke)
 w(f"Plus {len(smoke)} smoke/probe runs totalling ${sm:.2f}.")
 w("")
+triage = [d for d in glob.glob(os.path.join(ROOT, "results", "triage-*"))
+          if os.path.isdir(d) and not os.path.exists(os.path.join(d, "results.jsonl"))]
+if triage:
+    w(f"Not ledgered: {len(triage)} triage-judge dirs (arm killed 2026-08-16; per-attempt")
+    w("judge data only, no results.jsonl — spend not tracked here).")
+    w("")
 
-grand = sum((s.get("cost_std") or 0) for _, s in allrun)
+grand = sum(v[3] for _, v in allrun)
 inflight = sum(sum(r.get("cost_std") or 0 for r in rows(rid))
                for name, (d, done, _) in cells.items() if not done
                for rid in CELLS[name] if summary(rid) is None)
 w(f"**Total cost_std across every run: ${grand + inflight:.2f}** "
-  f"(${grand:.2f} finished + ${inflight:.2f} in flight).")
+  f"(${grand:.2f} on record + ${inflight:.2f} in flight).")
 w("")
 
 open(OUT, "w").write("\n".join(L) + "\n")

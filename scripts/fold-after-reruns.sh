@@ -40,6 +40,9 @@ for path in sorted(glob.glob("results/*-cwrerun-patched.results.jsonl") +
     rows = [json.loads(l) for l in open(path) if l.strip()]
     probs = [r["problem"] for r in rows]
     n_expected = len(json.load(open(f"results/{cell}/run.json"))["problems"])
+    # fatex87 cells merge their -easy3 companion (fatex_35/46/70) into the 90-problem view
+    if os.path.exists(f"results/{cell}-easy3/run.json"):
+        n_expected += len(json.load(open(f"results/{cell}-easy3/run.json"))["problems"])
     dupes = len(probs) - len(set(probs))
     prov = sum(1 for r in rows if r.get("cwrerun") or r.get("fgrerun"))
     line = f"{os.path.basename(path)}: {len(rows)} records, {prov} patched, {sum(1 for r in rows if r.get('solved'))} solved"

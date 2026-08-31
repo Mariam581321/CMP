@@ -149,14 +149,19 @@ with equal solve counts differ in AUC if one gets its proofs earlier in the budg
 
 | arm | solved | n | spend | $/solve | at-cap | AUC | status |
 |---|---|---|---|---|---|---|---|
-| base | 43 | 90 | $43.84 | $1.019 | 23 | 32.3 | complete |
+| base | 43 | 90 | $45.99 | $1.070 | 26 | 32.3 | complete |
 | grep | 50 | 90 | $41.15 | $0.823 | 23 | 38.1 | complete |
-| semantic | 49 | 90 | $44.03 | $0.899 | 29 | 38.9 | complete |
-| snippetonly | 48 | 90 | $45.28 | $0.943 | 25 | 34.2 | complete |
+| semantic | 50 | 90 | $44.36 | $0.887 | 29 | 39.5 | complete |
+| snippetonly | 49 | 90 | $45.31 | $0.925 | 26 | 35.1 | complete |
 | grep r2 | 50 | 90 | $41.73 | $0.835 | 25 | 38.5 | complete |
-| snippet | 53 | 90 | $41.39 | $0.781 | 21 | 40.0 | complete |
-| base r2 | 40 | 90 | $48.77 | $1.219 | 30 | 29.6 | complete |
+| snippet | 53 | 90 | $41.50 | $0.783 | 21 | 40.0 | complete |
+| base r2 | 40 | 90 | $51.93 | $1.298 | 36 | 30.7 | complete |
 | spawn | 52 | 90 | $43.12 | $0.829 | 27 | 41.6 | complete |
+| spawnfacts | 54 | 90 | $47.48 | $0.879 | 32 | 41.0 | complete |
+| snippetfacts | 52 | 90 | $43.67 | $0.840 | 25 | 39.7 | complete |
+| snippet r2 | 55 | 90 | $43.23 | $0.786 | 23 | 41.1 | complete |
+| snippetonly r2 | 47 | 90 | $44.90 | $0.955 | 26 | 37.9 | complete |
+| basequote | 45 | 90 | $48.76 | $1.084 | 27 | 32.5 | complete |
 
 ## Solve rate vs budget (simulated cutoffs)
 
@@ -164,47 +169,54 @@ Solves = first-proof cost ≤ cap; spend = Σ min(end cost, cap). Exact for any 
 since a $1 run censors downward for free. Assumes an attempt killed after reaching a
 verified proof still grades solved (high-water scan: 213/213).
 
-| cap | base | grep | semantic | snippetonly | grep r2 | snippet | base r2 | spawn | spread |
-|---|---|---|---|---|---|---|---|---|---|
-| $0.05 | 8 / $4.40 | 13 / $4.27 | 11 / $4.24 | 13 / $4.34 | 11 / $4.33 | 12 / $4.22 | 4 / $4.43 | 15 / $4.22 | 11 |
-| $0.10 | 13 / $8.37 | 23 / $7.88 | 24 / $7.76 | 20 / $7.97 | 22 / $8.05 | 23 / $7.73 | 16 / $8.47 | 23 / $7.74 | 11 |
-| $0.15 | 20 / $12.02 | 26 / $11.09 | 29 / $10.84 | 23 / $11.28 | 29 / $11.16 | 30 / $10.77 | 18 / $12.12 | 34 / $10.80 | 16 |
-| $0.20 | 26 / $15.14 | 32 / $13.98 | 33 / $13.64 | 26 / $14.33 | 32 / $13.95 | 34 / $13.51 | 23 / $15.45 | 36 / $13.55 | 13 |
-| $0.25 | 30 / $17.87 | 34 / $16.50 | 39 / $16.25 | 31 / $17.11 | 37 / $16.47 | 36 / $15.95 | 26 / $18.55 | 39 / $16.07 | 13 |
-| $0.30 | 31 / $20.46 | 35 / $18.85 | 40 / $18.60 | 32 / $19.67 | 39 / $18.73 | 38 / $18.29 | 30 / $21.38 | 41 / $18.43 | 11 |
-| $0.35 | 32 / $22.91 | 37 / $21.12 | 40 / $20.91 | 34 / $22.15 | 39 / $20.81 | 40 / $20.50 | 31 / $23.90 | 44 / $20.56 | 13 |
-| $0.40 | 32 / $25.24 | 38 / $23.20 | 40 / $23.21 | 36 / $24.43 | 40 / $22.83 | 42 / $22.63 | 31 / $26.39 | 44 / $22.61 | 13 |
-| $0.45 | 33 / $27.49 | 39 / $25.13 | 43 / $25.33 | 36 / $26.56 | 41 / $24.71 | 42 / $24.68 | 33 / $28.77 | 45 / $24.64 | 12 |
-| $0.50 | 34 / $29.58 | 42 / $26.94 | 43 / $27.29 | 36 / $28.61 | 42 / $26.54 | 42 / $26.73 | 33 / $30.96 | 46 / $26.57 | 13 |
-| $0.55 | 38 / $31.38 | 42 / $28.64 | 43 / $29.24 | 36 / $30.66 | 45 / $28.31 | 42 / $28.71 | 33 / $33.10 | 46 / $28.42 | 13 |
-| $0.60 | 39 / $33.05 | 43 / $30.34 | 43 / $31.15 | 37 / $32.67 | 45 / $29.92 | 44 / $30.58 | 35 / $35.15 | 47 / $30.27 | 12 |
-| $0.65 | 39 / $34.60 | 44 / $31.97 | 43 / $33.04 | 39 / $34.59 | 45 / $31.52 | 46 / $32.30 | 36 / $37.07 | 47 / $32.09 | 11 |
-| $0.70 | 39 / $36.13 | 46 / $33.50 | 46 / $34.78 | 39 / $36.36 | 47 / $33.09 | 48 / $33.83 | 36 / $38.84 | 47 / $33.87 | 12 |
-| $0.75 | 41 / $37.58 | 47 / $34.96 | 46 / $36.38 | 41 / $38.07 | 47 / $34.57 | 48 / $35.28 | 36 / $40.59 | 47 / $35.62 | 12 |
-| $0.80 | 42 / $38.89 | 47 / $36.36 | 47 / $37.96 | 43 / $39.67 | 47 / $35.99 | 50 / $36.66 | 37 / $42.31 | 49 / $37.31 | 13 |
-| $0.85 | 42 / $40.14 | 49 / $37.64 | 47 / $39.51 | 44 / $41.15 | 47 / $37.39 | 52 / $37.94 | 38 / $44.01 | 51 / $38.85 | 14 |
-| $0.90 | 42 / $41.37 | 50 / $38.81 | 47 / $41.06 | 46 / $42.56 | 47 / $38.79 | 52 / $39.14 | 38 / $45.62 | 52 / $40.23 | 14 |
-| $0.95 | 42 / $42.57 | 50 / $39.96 | 48 / $42.60 | 47 / $43.90 | 47 / $40.19 | 53 / $40.28 | 38 / $47.14 | 52 / $41.58 | 15 |
-| $1.00 | 43 / $43.74 | 50 / $41.11 | 49 / $43.99 | 48 / $45.16 | 49 / $41.59 | 53 / $41.32 | 38 / $48.62 | 52 / $42.93 | 15 |
+| cap | base | grep | semantic | snippetonly | grep r2 | snippet | base r2 | spawn | spawnfacts | snippetfacts | snippet r2 | snippetonly r2 | basequote | spread |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| $0.05 | 8 / $4.40 | 13 / $4.27 | 11 / $4.25 | 13 / $4.34 | 11 / $4.33 | 12 / $4.25 | 4 / $4.43 | 15 / $4.22 | 13 / $4.26 | 13 / $4.25 | 13 / $4.28 | 10 / $4.36 | 7 / $4.42 | 11 |
+| $0.10 | 13 / $8.37 | 23 / $7.88 | 24 / $7.82 | 20 / $7.97 | 22 / $8.05 | 23 / $7.81 | 16 / $8.47 | 23 / $7.74 | 24 / $7.74 | 23 / $7.88 | 25 / $7.83 | 24 / $8.12 | 14 / $8.45 | 12 |
+| $0.15 | 20 / $12.04 | 26 / $11.09 | 29 / $10.97 | 24 / $11.31 | 29 / $11.16 | 30 / $10.88 | 18 / $12.16 | 34 / $10.80 | 32 / $10.85 | 30 / $11.03 | 33 / $10.89 | 27 / $11.48 | 20 / $12.16 | 16 |
+| $0.20 | 26 / $15.21 | 32 / $13.98 | 33 / $13.81 | 27 / $14.39 | 32 / $13.95 | 34 / $13.63 | 23 / $15.49 | 36 / $13.55 | 35 / $13.66 | 32 / $13.88 | 35 / $13.59 | 29 / $14.56 | 22 / $15.45 | 14 |
+| $0.25 | 30 / $18.03 | 34 / $16.50 | 39 / $16.47 | 32 / $17.17 | 37 / $16.47 | 36 / $16.06 | 26 / $18.60 | 39 / $16.07 | 36 / $16.37 | 35 / $16.62 | 37 / $16.11 | 35 / $17.49 | 28 / $18.51 | 13 |
+| $0.30 | 31 / $20.71 | 35 / $18.85 | 40 / $18.83 | 33 / $19.69 | 39 / $18.73 | 38 / $18.40 | 30 / $21.46 | 41 / $18.43 | 36 / $19.06 | 37 / $19.12 | 40 / $18.52 | 38 / $19.98 | 30 / $21.28 | 11 |
+| $0.35 | 32 / $23.21 | 37 / $21.12 | 40 / $21.14 | 35 / $22.13 | 39 / $20.81 | 40 / $20.62 | 31 / $24.08 | 44 / $20.56 | 36 / $21.71 | 37 / $21.57 | 41 / $20.77 | 41 / $22.24 | 31 / $23.96 | 13 |
+| $0.40 | 32 / $25.59 | 38 / $23.20 | 40 / $23.44 | 37 / $24.35 | 40 / $22.83 | 42 / $22.74 | 32 / $26.68 | 44 / $22.61 | 38 / $24.30 | 39 / $23.92 | 43 / $22.94 | 41 / $24.35 | 33 / $26.57 | 12 |
+| $0.45 | 33 / $27.89 | 39 / $25.13 | 43 / $25.56 | 37 / $26.43 | 41 / $24.71 | 42 / $24.80 | 34 / $29.19 | 45 / $24.64 | 43 / $26.76 | 40 / $26.07 | 45 / $25.04 | 42 / $26.38 | 34 / $29.08 | 12 |
+| $0.50 | 34 / $30.05 | 42 / $26.94 | 44 / $27.52 | 37 / $28.43 | 42 / $26.54 | 42 / $26.85 | 35 / $31.52 | 46 / $26.57 | 45 / $29.00 | 41 / $28.17 | 46 / $26.97 | 42 / $28.37 | 35 / $31.43 | 12 |
+| $0.55 | 38 / $32.00 | 42 / $28.64 | 44 / $29.47 | 37 / $30.43 | 45 / $28.31 | 42 / $28.83 | 35 / $33.82 | 46 / $28.42 | 47 / $31.08 | 44 / $30.14 | 47 / $28.84 | 42 / $30.30 | 37 / $33.67 | 12 |
+| $0.60 | 39 / $33.83 | 43 / $30.34 | 44 / $31.38 | 38 / $32.39 | 45 / $29.92 | 44 / $30.70 | 37 / $36.07 | 47 / $30.27 | 48 / $33.05 | 47 / $31.92 | 47 / $30.69 | 44 / $32.19 | 37 / $35.72 | 11 |
+| $0.65 | 39 / $35.56 | 44 / $31.97 | 44 / $33.28 | 40 / $34.29 | 45 / $31.52 | 46 / $32.41 | 38 / $38.22 | 47 / $32.09 | 50 / $34.98 | 48 / $33.52 | 47 / $32.54 | 45 / $33.96 | 40 / $37.66 | 12 |
+| $0.70 | 39 / $37.25 | 46 / $33.50 | 47 / $35.07 | 40 / $36.09 | 47 / $33.09 | 48 / $33.94 | 38 / $40.29 | 47 / $33.87 | 51 / $36.84 | 48 / $35.07 | 47 / $34.30 | 45 / $35.66 | 41 / $39.45 | 13 |
+| $0.75 | 41 / $38.84 | 47 / $34.96 | 47 / $36.71 | 42 / $37.85 | 47 / $34.57 | 48 / $35.39 | 38 / $42.32 | 47 / $35.62 | 51 / $38.60 | 50 / $36.60 | 48 / $36.02 | 45 / $37.36 | 41 / $41.19 | 13 |
+| $0.80 | 42 / $40.35 | 47 / $36.36 | 48 / $38.28 | 44 / $39.50 | 47 / $35.99 | 50 / $36.77 | 39 / $44.30 | 49 / $37.31 | 51 / $40.35 | 51 / $38.02 | 49 / $37.58 | 46 / $39.02 | 44 / $42.86 | 12 |
+| $0.85 | 42 / $41.80 | 49 / $37.64 | 48 / $39.83 | 45 / $41.03 | 47 / $37.39 | 52 / $38.05 | 40 / $46.25 | 51 / $38.85 | 51 / $42.10 | 51 / $39.42 | 51 / $39.03 | 47 / $40.57 | 44 / $44.40 | 12 |
+| $0.90 | 42 / $43.21 | 50 / $38.81 | 48 / $41.38 | 47 / $42.49 | 47 / $38.79 | 52 / $39.25 | 40 / $48.12 | 52 / $40.23 | 51 / $43.85 | 51 / $40.77 | 51 / $40.38 | 47 / $42.04 | 45 / $45.84 | 12 |
+| $0.95 | 42 / $44.56 | 50 / $39.96 | 49 / $42.92 | 48 / $43.88 | 47 / $40.19 | 53 / $40.40 | 40 / $49.93 | 52 / $41.58 | 53 / $45.57 | 51 / $42.07 | 52 / $41.73 | 47 / $43.44 | 45 / $47.19 | 13 |
+| $1.00 | 43 / $45.88 | 50 / $41.11 | 50 / $44.31 | 49 / $45.19 | 49 / $41.59 | 53 / $41.43 | 40 / $51.72 | 52 / $42.93 | 54 / $47.19 | 52 / $43.32 | 55 / $42.99 | 47 / $44.74 | 45 / $48.54 | 15 |
 
 On the 90 problems all arms have finished.
 
-## The noise floor — grep run 1 vs run 2
+## The noise floor — same arm, run 1 vs run 2
 
 Same arm, same freeze, same list. Every flip here is a problem whose outcome is a
 coin, and it is the denominator of every comparison in the grid:
 **Var(difference in solve counts) = F / k** for k replicates per arm.
 
-- **10 flips on 90 problems** (80 agree)
-- r1 solved, r2 did not: fatex_19, fatex_26, fatex_50, fatex_58, fatex_61
-- r2 solved, r1 did not: fatex_33, fatex_47, fatex_66, fatex_69, fatex_88
+- **grep vs grep r2: 10 flips on 90** (80 agree)
+  - r1 solved, r2 did not: fatex_19, fatex_26, fatex_50, fatex_58, fatex_61
+  - r2 solved, r1 did not: fatex_33, fatex_47, fatex_66, fatex_69, fatex_88
+- **base vs base r2: 11 flips on 90** (79 agree)
+  - r1 solved, r2 did not: fatex_10, fatex_16, fatex_19, fatex_34, fatex_45, fatex_50, fatex_69
+  - r2 solved, r1 did not: fatex_26, fatex_64, fatex_68, fatex_76
+- **snippet vs snippet r2: 8 flips on 90** (82 agree)
+  - r1 solved, r2 did not: fatex_17, fatex_41, fatex_66
+  - r2 solved, r1 did not: fatex_19, fatex_20, fatex_24, fatex_45, fatex_95
+- pooled over 3 replicate pairs: **F = 9.7**
 
 | k replicates/arm | SE (solves) | 95% CI half-width | min detectable gap |
 |---|---|---|---|
-| 1 | 3.16 | ±6.2 | 8.9 |
-| 2 | 2.24 | ±4.4 | 6.3 |
-| 3 | 1.83 | ±3.6 | 5.1 |
-| 5 | 1.41 | ±2.8 | 4.0 |
+| 1 | 3.11 | ±6.1 | 8.7 |
+| 2 | 2.20 | ±4.3 | 6.2 |
+| 3 | 1.80 | ±3.5 | 5.0 |
+| 5 | 1.39 | ±2.7 | 3.9 |
 
 ## Pairwise discordance
 
@@ -216,82 +228,139 @@ means the imbalance is unlikely to be luck, and p = 1.0 means a dead-even split.
 | comparison | b / c | discordant | exact McNemar |
 |---|---|---|---|
 | base vs grep | 2 / 9 | 11 | 0.0654 |
-| base vs semantic | 2 / 8 | 10 | 0.1094 |
-| base vs snippetonly | 4 / 9 | 13 | 0.2668 |
+| base vs semantic | 2 / 9 | 11 | 0.0654 |
+| base vs snippetonly | 3 / 9 | 12 | 0.1460 |
 | base vs grep r2 | 3 / 10 | 13 | 0.0923 |
 | base vs snippet | 3 / 13 | 16 | 0.0213 |
-| base vs base r2 | 6 / 3 | 9 | 0.5078 |
+| base vs base r2 | 7 / 4 | 11 | 0.5488 |
 | base vs spawn | 3 / 12 | 15 | 0.0352 |
-| grep vs semantic | 4 / 3 | 7 | 1.0000 |
-| grep vs snippetonly | 7 / 5 | 12 | 0.7744 |
+| base vs spawnfacts | 3 / 14 | 17 | 0.0127 |
+| base vs snippetfacts | 1 / 10 | 11 | 0.0117 |
+| base vs snippet r2 | 0 / 12 | 12 | 0.0005 |
+| base vs snippetonly r2 | 5 / 9 | 14 | 0.4240 |
+| base vs basequote | 3 / 5 | 8 | 0.7266 |
+| grep vs semantic | 4 / 4 | 8 | 1.0000 |
+| grep vs snippetonly | 6 / 5 | 11 | 1.0000 |
 | grep vs grep r2 | 5 / 5 | 10 | 1.0000 |
 | grep vs snippet | 4 / 7 | 11 | 0.5488 |
 | grep vs base r2 | 10 / 0 | 10 | 0.0020 |
 | grep vs spawn | 4 / 6 | 10 | 0.7539 |
-| semantic vs snippetonly | 5 / 4 | 9 | 1.0000 |
-| semantic vs grep r2 | 5 / 6 | 11 | 1.0000 |
-| semantic vs snippet | 6 / 10 | 16 | 0.4545 |
-| semantic vs base r2 | 11 / 2 | 13 | 0.0225 |
-| semantic vs spawn | 4 / 7 | 11 | 0.5488 |
-| snippetonly vs grep r2 | 5 / 7 | 12 | 0.7744 |
-| snippetonly vs snippet | 4 / 9 | 13 | 0.2668 |
-| snippetonly vs base r2 | 13 / 5 | 18 | 0.0963 |
-| snippetonly vs spawn | 3 / 7 | 10 | 0.3438 |
+| grep vs spawnfacts | 2 / 6 | 8 | 0.2891 |
+| grep vs snippetfacts | 3 / 5 | 8 | 0.7266 |
+| grep vs snippet r2 | 0 / 5 | 5 | 0.0625 |
+| grep vs snippetonly r2 | 5 / 2 | 7 | 0.4531 |
+| grep vs basequote | 7 / 2 | 9 | 0.1797 |
+| semantic vs snippetonly | 4 / 3 | 7 | 1.0000 |
+| semantic vs grep r2 | 6 / 6 | 12 | 1.0000 |
+| semantic vs snippet | 6 / 9 | 15 | 0.6072 |
+| semantic vs base r2 | 12 / 2 | 14 | 0.0129 |
+| semantic vs spawn | 4 / 6 | 10 | 0.7539 |
+| semantic vs spawnfacts | 4 / 8 | 12 | 0.3877 |
+| semantic vs snippetfacts | 5 / 7 | 12 | 0.7744 |
+| semantic vs snippet r2 | 3 / 8 | 11 | 0.2266 |
+| semantic vs snippetonly r2 | 6 / 3 | 9 | 0.5078 |
+| semantic vs basequote | 10 / 5 | 15 | 0.3018 |
+| snippetonly vs grep r2 | 5 / 6 | 11 | 1.0000 |
+| snippetonly vs snippet | 4 / 8 | 12 | 0.3877 |
+| snippetonly vs base r2 | 12 / 3 | 15 | 0.0352 |
+| snippetonly vs spawn | 4 / 7 | 11 | 0.5488 |
+| snippetonly vs spawnfacts | 4 / 9 | 13 | 0.2668 |
+| snippetonly vs snippetfacts | 4 / 7 | 11 | 0.5488 |
+| snippetonly vs snippet r2 | 3 / 9 | 12 | 0.1460 |
+| snippetonly vs snippetonly r2 | 8 / 6 | 14 | 0.7905 |
+| snippetonly vs basequote | 8 / 4 | 12 | 0.3877 |
 | grep r2 vs snippet | 5 / 8 | 13 | 0.5811 |
 | grep r2 vs base r2 | 11 / 1 | 12 | 0.0063 |
 | grep r2 vs spawn | 6 / 8 | 14 | 0.7905 |
+| grep r2 vs spawnfacts | 2 / 6 | 8 | 0.2891 |
+| grep r2 vs snippetfacts | 3 / 5 | 8 | 0.7266 |
+| grep r2 vs snippet r2 | 3 / 8 | 11 | 0.2266 |
+| grep r2 vs snippetonly r2 | 7 / 4 | 11 | 0.5488 |
+| grep r2 vs basequote | 10 / 5 | 15 | 0.3018 |
 | snippet vs base r2 | 14 / 1 | 15 | 0.0010 |
 | snippet vs spawn | 6 / 5 | 11 | 1.0000 |
-| base r2 vs spawn | 3 / 15 | 18 | 0.0075 |
+| snippet vs spawnfacts | 5 / 6 | 11 | 1.0000 |
+| snippet vs snippetfacts | 5 / 4 | 9 | 1.0000 |
+| snippet vs snippet r2 | 3 / 5 | 8 | 0.7266 |
+| snippet vs snippetonly r2 | 9 / 3 | 12 | 0.1460 |
+| snippet vs basequote | 11 / 3 | 14 | 0.0574 |
+| base r2 vs spawn | 2 / 14 | 16 | 0.0042 |
+| base r2 vs spawnfacts | 0 / 14 | 14 | 0.0001 |
+| base r2 vs snippetfacts | 0 / 12 | 12 | 0.0005 |
+| base r2 vs snippet r2 | 0 / 15 | 15 | 0.0001 |
+| base r2 vs snippetonly r2 | 2 / 9 | 11 | 0.0654 |
+| base r2 vs basequote | 5 / 10 | 15 | 0.3018 |
+| spawn vs spawnfacts | 3 / 5 | 8 | 0.7266 |
+| spawn vs snippetfacts | 7 / 7 | 14 | 1.0000 |
+| spawn vs snippet r2 | 4 / 7 | 11 | 0.5488 |
+| spawn vs snippetonly r2 | 8 / 3 | 11 | 0.2266 |
+| spawn vs basequote | 10 / 3 | 13 | 0.0923 |
+| spawnfacts vs snippetfacts | 7 / 5 | 12 | 0.7744 |
+| spawnfacts vs snippet r2 | 4 / 5 | 9 | 1.0000 |
+| spawnfacts vs snippetonly r2 | 8 / 1 | 9 | 0.0391 |
+| spawnfacts vs basequote | 12 / 3 | 15 | 0.0352 |
+| snippetfacts vs snippet r2 | 2 / 5 | 7 | 0.4531 |
+| snippetfacts vs snippetonly r2 | 8 / 3 | 11 | 0.2266 |
+| snippetfacts vs basequote | 10 / 3 | 13 | 0.0923 |
+| snippet r2 vs snippetonly r2 | 10 / 2 | 12 | 0.0386 |
+| snippet r2 vs basequote | 11 / 1 | 12 | 0.0063 |
+| snippetonly r2 vs basequote | 8 / 6 | 14 | 0.7905 |
 
 Read against the noise floor above before calling any of these an effect.
 
 ## The contested problems
 
-28 of 90 problems are solved by some arms and not others —
+30 of 90 problems are solved by some arms and not others —
 the only ones carrying information. 33
 are solved by every arm and
-29 by none.
+27 by none.
 
-| problem | base | grep | semantic | snippetonly | grep r2 | snippet | base r2 | spawn |
-|---|---|---|---|---|---|---|---|---|
-| fatex_10 | ✓ | ✓ | · | ✓ | ✓ | ✓ | · | ✓ |
-| fatex_16 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | · | ✓ |
-| fatex_17 | · | · | · | · | · | ✓ | · | ✓ |
-| fatex_19 | ✓ | ✓ | ✓ | ✓ | · | · | · | · |
-| fatex_20 | · | ✓ | ✓ | · | ✓ | · | · | ✓ |
-| fatex_24 | ✓ | ✓ | ✓ | ✓ | ✓ | · | ✓ | ✓ |
-| fatex_25 | · | · | · | · | · | ✓ | · | · |
-| fatex_26 | · | ✓ | ✓ | ✓ | · | ✓ | · | ✓ |
-| fatex_27 | · | ✓ | ✓ | ✓ | ✓ | ✓ | · | ✓ |
-| fatex_33 | · | · | ✓ | · | ✓ | · | · | · |
-| fatex_34 | ✓ | · | · | · | · | ✓ | · | ✓ |
-| fatex_37 | · | · | ✓ | ✓ | · | · | · | ✓ |
-| fatex_39 | ✓ | ✓ | ✓ | · | ✓ | ✓ | ✓ | ✓ |
-| fatex_41 | · | · | · | ✓ | · | ✓ | · | ✓ |
-| fatex_45 | ✓ | ✓ | ✓ | ✓ | ✓ | · | · | ✓ |
-| fatex_47 | · | · | · | ✓ | ✓ | ✓ | · | · |
-| fatex_50 | ✓ | ✓ | ✓ | · | · | ✓ | ✓ | · |
-| fatex_53 | ✓ | ✓ | ✓ | · | ✓ | ✓ | ✓ | · |
-| fatex_58 | · | ✓ | ✓ | ✓ | · | ✓ | · | ✓ |
-| fatex_61 | · | ✓ | · | · | · | ✓ | · | ✓ |
-| fatex_64 | · | ✓ | · | · | ✓ | ✓ | ✓ | · |
-| fatex_66 | · | · | · | ✓ | ✓ | ✓ | · | · |
-| fatex_68 | · | ✓ | · | · | ✓ | ✓ | ✓ | ✓ |
-| fatex_69 | ✓ | · | ✓ | ✓ | ✓ | ✓ | · | ✓ |
-| fatex_76 | · | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| fatex_83 | · | ✓ | ✓ | ✓ | ✓ | ✓ | · | ✓ |
-| fatex_88 | · | · | · | · | ✓ | · | · | · |
-| fatex_91 | · | · | · | · | · | · | · | ✓ |
+| problem | base | grep | semantic | snippetonly | grep r2 | snippet | base r2 | spawn | spawnfacts | snippetfacts | snippet r2 | snippetonly r2 | basequote |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| fatex_10 | ✓ | ✓ | · | ✓ | ✓ | ✓ | · | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| fatex_16 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | · | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| fatex_17 | · | · | · | · | · | ✓ | · | ✓ | ✓ | · | · | · | · |
+| fatex_19 | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | ✓ | ✓ | · | ✓ |
+| fatex_20 | · | ✓ | ✓ | · | ✓ | · | · | ✓ | ✓ | ✓ | ✓ | ✓ | · |
+| fatex_24 | ✓ | ✓ | ✓ | ✓ | ✓ | · | ✓ | ✓ | ✓ | ✓ | ✓ | · | ✓ |
+| fatex_25 | · | · | · | · | · | ✓ | · | · | · | · | ✓ | · | · |
+| fatex_26 | · | ✓ | ✓ | ✓ | · | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | · |
+| fatex_27 | · | ✓ | ✓ | ✓ | ✓ | ✓ | · | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| fatex_32 | · | · | · | · | · | · | · | · | · | ✓ | · | · | · |
+| fatex_33 | · | · | ✓ | · | ✓ | · | · | · | ✓ | · | · | ✓ | · |
+| fatex_34 | ✓ | · | · | · | · | ✓ | · | ✓ | · | ✓ | ✓ | · | ✓ |
+| fatex_37 | · | · | ✓ | ✓ | · | · | · | ✓ | · | · | · | · | · |
+| fatex_39 | ✓ | ✓ | ✓ | · | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | · |
+| fatex_41 | · | · | ✓ | ✓ | · | ✓ | · | ✓ | · | · | · | · | · |
+| fatex_45 | ✓ | ✓ | ✓ | ✓ | ✓ | · | · | ✓ | ✓ | · | ✓ | · | ✓ |
+| fatex_47 | · | · | · | ✓ | ✓ | ✓ | · | · | · | ✓ | ✓ | · | · |
+| fatex_50 | ✓ | ✓ | ✓ | · | · | ✓ | · | · | · | ✓ | ✓ | ✓ | ✓ |
+| fatex_53 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | · | ✓ | ✓ | ✓ | ✓ | · |
+| fatex_58 | · | ✓ | ✓ | ✓ | · | ✓ | · | ✓ | ✓ | · | ✓ | ✓ | ✓ |
+| fatex_61 | · | ✓ | · | · | · | ✓ | · | ✓ | ✓ | · | ✓ | · | ✓ |
+| fatex_64 | · | ✓ | · | · | ✓ | ✓ | ✓ | · | ✓ | ✓ | ✓ | · | · |
+| fatex_66 | · | · | · | ✓ | ✓ | ✓ | · | · | ✓ | ✓ | · | · | ✓ |
+| fatex_68 | · | ✓ | · | · | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| fatex_69 | ✓ | · | ✓ | ✓ | ✓ | ✓ | · | ✓ | ✓ | ✓ | ✓ | · | · |
+| fatex_76 | · | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | · |
+| fatex_83 | · | ✓ | ✓ | ✓ | ✓ | ✓ | · | ✓ | ✓ | ✓ | ✓ | ✓ | · |
+| fatex_88 | · | · | · | · | ✓ | · | · | · | · | · | · | · | · |
+| fatex_91 | · | · | · | · | · | · | · | ✓ | ✓ | · | · | ✓ | · |
+| fatex_95 | · | · | · | · | · | · | · | · | ✓ | · | ✓ | · | · |
 
 ## Every run on record
+
+n / solved / cost_std are keep-last over the run dir's own `results.jsonl` (resumed
+rows carry cumulative spend, so this includes resume-segment costs that the original
+summary.json predates). ⟳ = run was resumed after the 0816 402 outage; runs without
+a finished date closed without a summary (killed or resume-only dirs).
 
 | run | combo | n | solved | cost_std | finished |
 |---|---|---|---|---|---|
 | lean-search-fateh20-0726 | lean-search | 20 | 12 | $9.73 | 2026-07-26 |
-| lean-search-think-fateh81-0727 | lean-search | 81 | 52 | $37.02 | 2026-07-28 |
 | lean-search-think-fateh21-rerun-0728 | lean-search | 1 | 1 | $1.00 | 2026-07-28 |
 | lean-search-think-fateh63-rerun-0728 | lean-search | 1 | 0 | $1.00 | 2026-07-28 |
+| lean-search-think-fateh81-0727 | lean-search | 81 | 52 | $37.02 | 2026-07-28 |
 | lean-grep-fateh50-0730b | lean-grep | 50 | 31 | $22.02 | 2026-07-30 |
 | lean-search-fatex-pilot10-0802 | lean-search | 10 | 6 | $3.34 | 2026-08-02 |
 | snippet-fatex10-0804 | lean-search,lean-snippet | 10 | 6 | $3.91 | 2026-08-04 |
@@ -300,18 +369,47 @@ are solved by every arm and
 | grep-fatex87-0805 | lean-grep | 87 | 46 | $43.34 | 2026-08-06 |
 | semantic-fatex87-0805 | lean-search | 87 | 44 | $40.75 | 2026-08-06 |
 | grep-fatex87-0807 | lean-grep | 87 | 47 | $41.09 | 2026-08-07 |
-| grep-fatex87-0807-easy3 | lean-grep | 3 | 3 | $0.05 | 2026-08-08 |
-| semantic-fatex87-0807-easy3 | lean-search | 3 | 3 | $0.04 | 2026-08-08 |
 | base-fatex87-0807-easy3 | base | 3 | 3 | $0.27 | 2026-08-08 |
+| grep-fatex87-0807-easy3 | lean-grep | 3 | 3 | $0.05 | 2026-08-08 |
 | semantic-fatex87-0807 | lean-search | 87 | 46 | $43.99 | 2026-08-08 |
+| semantic-fatex87-0807-easy3 | lean-search | 3 | 3 | $0.04 | 2026-08-08 |
 | base-fatex87-0807 | base | 87 | 40 | $43.57 | 2026-08-09 |
-| snippetonly-fatex90-0807 | lean-snippet | 90 | 48 | $45.28 | 2026-08-10 |
 | grep-fatex90-0807-r2 | lean-grep | 90 | 50 | $41.73 | 2026-08-10 |
+| snippetonly-fatex90-0807 | lean-snippet | 90 | 48 | $45.28 | 2026-08-10 |
 | base-fatex90-0807-r2 | base | 90 | 40 | $48.77 | 2026-08-11 |
 | snippet-fatex90-0807 | lean-grep,lean-snippet | 90 | 53 | $41.39 | 2026-08-11 |
 | spawn-fatex90-0807 | lean-grep,lean-snippet,lean-spawn | 90 | 52 | $43.12 | 2026-08-13 |
+| snippetfacts-fatex90-0812 | lean-grep,lean-snippet,lean-facts | 90 | 52 | $43.67 | 2026-08-14 |
+| spawnfacts-fatex90-0807 | lean-grep,lean-snippet,lean-spawn,lean-facts | 90 | 54 | $47.48 | 2026-08-14 |
+| base-fatex87-0807-fgrerun | base | 6 | 0 | $4.61 | 2026-08-15 |
+| base-fatex90-0807-r2-fgrerun | base | 6 | 1 | $4.37 | 2026-08-15 |
+| basequote-fatex90-0813 | base | 90 | 45 | $47.73 | 2026-08-15 |
+| semantic-fatex87-0807-fgrerun | lean-search | 2 | 0 | $0.39 | 2026-08-15 |
+| snippet-fatex90-0807-fgrerun | lean-grep,lean-snippet | 1 | 0 | $0.13 | 2026-08-15 |
+| snippet-fatex90-0807-r2 | lean-grep,lean-snippet | 90 | 55 | $42.92 | 2026-08-15 |
+| snippetonly-fatex90-0807-fgrerun | lean-snippet | 1 | 0 | $0.18 | 2026-08-15 |
+| base-fatex87-0807-cwrerun | base | 4 | 0 | $4.01 | 2026-08-16 |
+| base-fatex87-0807-cwrerun2 | base | 1 | 0 | $0.89 | 2026-08-16 |
+| base-fatex90-0807-r2-cwrerun ⟳ | base | 5 | 1 | $4.46 | 2026-08-16 |
+| basequote-fatex90-0813-cwrerun | base | 2 | 0 | $2.00 | 2026-08-16 |
+| semantic-fatex87-0807-cwrerun ⟳ | lean-search | 1 | 1 | $0.74 | 2026-08-16 |
+| snippet-fatex90-0807-r2-cwrerun ⟳ | lean-grep,lean-snippet | 1 | 0 | $1.00 | 2026-08-16 |
+| snippetonly-fatex90-0807-r2-laptop ⟳ | lean-snippet | 48 | 3 | $12.72 | 2026-08-16 |
+| snippetonly-fatex90-0807-r2-laptop-mid ⟳ | lean-snippet | 4 | 0 | $2.71 | 2026-08-16 |
+| snippetonly-fatex90-0807-cwrerun ⟳ | lean-snippet | 2 | 1 | $1.27 | 2026-08-17 |
+| snippetonly-fatex90-0807-r2 ⟳ | lean-snippet | 90 | 44 | $29.54 | 2026-08-17 |
+| base-fatex87-0805 | base | 11 | 11 | $1.98 | — |
+| lean-grep-fateh50-0730 | lean-grep | 30 | 24 | $4.43 | — |
+| lean-search-fateh100-0801 | lean-search | 83 | 80 | $5.85 | — |
+| lean-search-fatex-diedrerun-0802 | lean-search | 1 | 1 | $0.21 | — |
+| lean-search-fatex-rest90-0802 | lean-search | 86 | 43 | $29.52 | — |
+| lean-search-think-fateh20-0727 | lean-search | 19 | 13 | $5.48 | — |
+| spawn-fatex90-0807.discarded-conc4 | lean-grep,lean-snippet,lean-spawn | 2 | 2 | $0.10 | — |
 
-Plus 21 smoke/probe runs totalling $1.02.
+Plus 22 smoke/probe runs totalling $1.02.
 
-**Total cost_std across every run: $516.78** ($516.78 finished + $0.00 in flight).
+Not ledgered: 22 triage-judge dirs (arm killed 2026-08-16; per-attempt
+judge data only, no results.jsonl — spend not tracked here).
+
+**Total cost_std across every run: $815.15** ($815.15 on record + $0.00 in flight).
 

@@ -119,6 +119,20 @@ are replays of pre-generated attempts. Free idea anyway: their failure features
 (error diversity, attempt similarity) are computable post-hoc from `events.jsonl` —
 check whether "all failures look the same" predicts timeout in our runs.
 
+## MerLean-Prover: A Recursive Looping Harness for Lean 4 Theorem Proving
+
+- arXiv: https://arxiv.org/abs/2605.26959 · PDF: `merlean-prover-2605.26959.pdf`
+  (downloaded 2026-07-18, indexed 2026-08-12)
+
+The closest published neighbour to our thesis: argues harness design, not model, is
+the central factor (three agent types + a recursive outer loop that revises the
+*plan*; transfers across Sonnet/Haiku with no fine-tuning). It is our claim asserted
+without evidence — headline numbers are 10/23 FormalQualBench and 12/12 Putnam2025,
+single runs, no intervals; at n=23 a 2-problem gap has a ~±17-point CI, so nothing
+there is resolvable. Use in the write-up as the "harness matters" citation *and* the
+sample-size foil; their plan-revision loop is the published cousin of our archived
+`replan` arm.
+
 ## AXLE: A Cloud Infrastructure for LEAN 4 Theorem Proving Utilities
 
 - arXiv: https://arxiv.org/abs/2606.26442 · PDF: `axle-2606.26442.pdf`
