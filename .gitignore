@@ -28,3 +28,14 @@ problems-fatex/*
 !problems-fatex/pilot10-0802.txt
 !problems-fatex/safe93.txt
 !problems-fatex/safe87.txt
+.venv-paper/
+_server-final-0827/
+
+# session-mined transcript derivatives (contain verbatim agent content)
+mined/
+_server-pull-backup-0818/
+# draft working artifacts
+drafts/*.html
+drafts/figs-0817/
+drafts/.artifact-rebuilt-runs
+texput.log
