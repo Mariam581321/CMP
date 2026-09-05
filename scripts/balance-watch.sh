@@ -18,7 +18,7 @@ Alerts carry the burn rate and the live cells' remaining need, because "$18 left
 means something different with one cell finishing than with two just launched.
 
 Install (every 15 min):
-    (crontab -l 2>/dev/null; echo '*/15 * * * * /home/mariam/CMP/scripts/balance-watch.sh >/dev/null 2>&1  # cmp-balance-watch') | crontab -
+    (crontab -l 2>/dev/null; echo '*/15 * * * * $HOME/CMP/scripts/balance-watch.sh >/dev/null 2>&1  # cmp-balance-watch') | crontab -
 Run by hand to see the current reading without touching state:
     ./scripts/balance-watch.sh --dry-run
 """
@@ -32,12 +32,12 @@ import urllib.request
 import urllib.error
 from datetime import datetime, timezone
 
-CMP = "/home/mariam/CMP"
-STATE_DIR = "/home/mariam/cmp-balance-watch"
+CMP = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+STATE_DIR = os.path.expanduser("~/cmp-balance-watch")
 STATE = os.path.join(STATE_DIR, "state.json")
 LOG = os.path.join(STATE_DIR, "watch.log")
 BANNER = os.path.join(STATE_DIR, "ALERT")
-NOTIFY = "/home/mariam/deepseek-price-watch/notify.sh"
+NOTIFY = os.path.expanduser("~/deepseek-price-watch/notify.sh")
 
 BALANCE_URL = "https://api.deepseek.com/user/balance"
 

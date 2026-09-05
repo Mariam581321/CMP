@@ -11,7 +11,7 @@
 # Guards: refuses while any run.js is alive (one cell at a time — 6 Lean cores) and
 # until the fgrerun chain has landed (box + patch discipline). Launch from the MAIN
 # checkout, in tmux:
-#   tmux new-session -d -s snippetfacts -c /home/mariam/CMP \
+#   tmux new-session -d -s snippetfacts -c ~/CMP \
 #     'scripts/launch-snippetfacts.sh >> results/snippetfacts-fatex90.console.log 2>&1'
 set -u
 cd "$(dirname "$0")/.." || exit 1

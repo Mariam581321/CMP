@@ -7,7 +7,7 @@
 # excluded. Output: results/loophole-review-blockC-final.txt, one block per attempt.
 import json, glob, os, re
 
-RESULTS = "/home/mariam/CMP/results"
+RESULTS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "results")
 RUNS = ["spawn-fatex90-0807", "spawnfacts-fatex90-0807"]
 OUT = os.path.join(RESULTS, "loophole-review-blockC-final.txt")
 

@@ -1,15 +1,17 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { classifyLines } from "/home/mariam/CMP/runner/common.js";
-import { sanitize } from "/home/mariam/CMP/runner/sanitize.js";
+import { fileURLToPath } from "node:url";
+import { classifyLines } from "../runner/common.js";
+import { sanitize } from "../runner/sanitize.js";
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 // any token that would make a dropped line semantically load-bearing
 const CODE_TOKEN = /(^|\W)(import|open|namespace|end|section|variable|universe|set_option|attribute|local|instance|theorem|lemma|def|abbrev|structure|class|inductive|axiom|example|noncomputable|macro|notation|deriving|where|sorry|:=)(\W|$)/;
 
 const CORPORA = [
-  ["FATE-X", "/home/mariam/CMP/benchmarks/FATE/FATE-X/FATEX", "/home/mariam/CMP/problems-fatex", "fatex_"],
-  ["FATE-H", "/home/mariam/CMP/benchmarks/FATE/FATE-H/FATEH", "/home/mariam/CMP/problems-fateh", "fateh_"],
-  ["FATE-M", "/home/mariam/CMP/benchmarks/FATE/FATE-M/FATEM", "/home/mariam/CMP/problems-fatem", "fatem_"],
+  ["FATE-X", join(ROOT, "benchmarks/FATE/FATE-X/FATEX"), join(ROOT, "problems-fatex"), "fatex_"],
+  ["FATE-H", join(ROOT, "benchmarks/FATE/FATE-H/FATEH"), join(ROOT, "problems-fateh"), "fateh_"],
+  ["FATE-M", join(ROOT, "benchmarks/FATE/FATE-M/FATEM"), join(ROOT, "problems-fatem"), "fatem_"],
 ];
 
 for (const [name, src, out, prefix] of CORPORA) {

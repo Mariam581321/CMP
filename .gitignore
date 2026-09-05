@@ -39,3 +39,9 @@ drafts/*.html
 drafts/figs-0817/
 drafts/.artifact-rebuilt-runs
 texput.log
+
+# never commit compiled papers, bundles or Windows download droppings at the root
+/*.pdf
+/*.zip
+/*.lnk
+*:Zone.Identifier

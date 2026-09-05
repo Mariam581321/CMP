@@ -7,7 +7,7 @@ token* is an ordinary word.  Each query is then name-only, mixed, or prose-only.
 grep patterns are stripped of regex metacharacters first and alternations are counted
 as one query.  Also: for the semantic arm, whether a name the query asked for came
 back in the results at all."""
-import json, re, sys
+import json, os, re, sys
 from collections import Counter, defaultdict
 
 NAME = re.compile(r"^[A-Za-z_À-ɏ][A-Za-z0-9_.'₀-₉À-ɏ!?]*$")
@@ -35,7 +35,7 @@ def shape(q, tool):
     return ("name-only" if p == 0 else "prose-only" if n == 0 else "mixed"), len(ts)
 
 rows = defaultdict(lambda: {"shape": Counter(), "len": [], "asked": 0, "unconfirmed": 0})
-for line in open("/home/mariam/CMP/mined/queries.jsonl"):
+for line in open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "mined", "queries.jsonl")):
     d = json.loads(line)
     if d["worker"]:
         continue

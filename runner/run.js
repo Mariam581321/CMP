@@ -283,13 +283,6 @@ for (const ext of COMBO)
     process.exit(1);
   }
 
-// lean-loogle's environment filter reads a derived, gitignored file; without it every
-// loogle call of a multi-day run would fail while the budget burned. Refuse to launch.
-if (COMBO.includes("lean-loogle") && !existsSync(join(ROOT, "problems", "env-names.txt"))) {
-  console.error("lean-loogle needs problems/env-names.txt — regenerate with `node scripts/dump-env-names.mjs` (lean server must be up)");
-  process.exit(1);
-}
-
 // A model id pi's catalog doesn't know does NOT fail: pi clones the provider's default
 // model and swaps only the id, so an unknown/mistyped id runs fine but is priced with
 // the default model's cost table — silently wrong cost_usd in every result.
@@ -604,7 +597,7 @@ async function attempt(name, idx) {
     // No silence fuse. A "no message completed in N minutes" kill was tried (2026-08-02)
     // and dropped: every way an attempt can sit inside ONE operation is already bounded
     // well under the wall backstop — lean_check by the server's 900 s wall / 600 s CPU
-    // fuses under a 30 min client wait, loogle by a 30 s abort, a stalled provider stream
+    // fuses under a 30 min client wait, a stalled provider stream
     // by pi's 5 min HTTP idle timeout, and a provider retry storm not at all, since pi
     // persists each failed assistant message (stopReason "error") like any other. A
     // single message is capped by --max-tokens, and the 60 min fuse was sized against the

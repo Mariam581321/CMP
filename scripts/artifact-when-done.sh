@@ -11,7 +11,7 @@
 #   tmux new -d -s artifact-when-done ~/CMP/scripts/artifact-when-done.sh
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-NOTIFY="/home/mariam/deepseek-price-watch/notify.sh"
+NOTIFY="${CMP_NOTIFY:-$HOME/deepseek-price-watch/notify.sh}"
 MARK="$ROOT/drafts/.artifact-rebuilt-runs"
 WANT="spawn-fatex90-0807 spawnfacts-fatex90-0807"
 touch "$MARK"

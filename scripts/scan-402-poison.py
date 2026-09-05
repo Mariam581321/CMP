@@ -6,7 +6,7 @@ and a rerun list of poisoned records that nothing is currently reviving."""
 import json, os, sys
 from pathlib import Path
 
-RESULTS = Path("/home/mariam/CMP/results")
+RESULTS = Path(__file__).resolve().parent.parent / "results"
 
 RUNS = [
     "snippetonly-fatex90-0807-r2",

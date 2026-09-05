@@ -10,6 +10,7 @@
 
 import { spawn } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const arg = (k, d) => {
   const i = process.argv.indexOf(k);
@@ -19,7 +20,7 @@ const BIN = arg("--bin");
 const FILE = arg("--file");
 const N = parseInt(arg("--n", "8"));
 const LIMITS = process.argv.includes("--limits");
-const LEAN_ENV = "/home/mariam/CMP/lean-env";
+const LEAN_ENV = fileURLToPath(new URL("../lean-env", import.meta.url));
 const MAX_HEARTBEATS = 400000;
 
 // prepare(), copied from lean-server.js: import lines become the heartbeat cap so

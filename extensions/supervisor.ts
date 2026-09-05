@@ -5,7 +5,7 @@
 //
 // This replaces the old runner-side respawn loop (spawn pi → wait for exit → resume
 // session with a nudge): one pi process per attempt, one session file, one continuous
-// event stream, and per-extension state (lean_check's unchanged-file note, lean-plan's
+// event stream, and per-extension state (lean_check's unchanged-file note)
 // green-phase memory) survives the whole attempt. pi explicitly supports this: messages
 // queued by agent_end extension handlers trigger a continuation inside the same
 // headless prompt() await (agent-session.ts, _handlePostAgentRun).

@@ -123,7 +123,7 @@ const extTools = (name) => {
   const m = /^\/\/ @tools\s+(.+)$/m.exec(readFileSync(join(ROOT, "extensions", `${name}.ts`), "utf8"));
   return m ? m[1].split(",").map((s) => s.trim()).filter(Boolean) : [];
 };
-const searchExts = COMBO.filter((x) => ["lean-search", "lean-grep", "lean-loogle"].includes(x));
+const searchExts = COMBO.filter((x) => ["lean-search", "lean-grep"].includes(x));
 const exts = ["file-sandbox", "lean-snippet", ...searchExts, "lean-facts", "lean-spawn"];
 const toolList = ["read", ...exts.flatMap(extTools)];
 

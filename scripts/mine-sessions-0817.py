@@ -35,7 +35,7 @@ from collections import Counter, defaultdict
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WT = os.path.dirname(HERE)
-CMP = "/home/mariam/CMP"
+CMP = WT
 RES = os.path.join(CMP, "results")
 OUTDIR = os.path.join(WT, "mined")
 os.makedirs(OUTDIR, exist_ok=True)

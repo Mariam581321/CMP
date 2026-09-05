@@ -56,7 +56,7 @@ PYEOF
 if [ $? -ne 0 ]; then
   echo "=== $(date -Is) VERIFY FAILED — fold aborted, nothing regenerated"
   printf 'CMP fold ABORTED: a patched view failed verification — see results/fold-after-reruns.console.log\n' \
-    >> /home/mariam/deepseek-price-watch/ALERT
+    >> $HOME/deepseek-price-watch/ALERT
   exit 1
 fi
 
@@ -64,7 +64,7 @@ echo "=== $(date -Is) regenerating RUNS.md from patched views"
 python3 scripts/run-report.py
 
 echo "=== $(date -Is) refreshing charts + paper stats"
-/home/mariam/CMP/.claude/worktrees/bridge-cse_01L6Jh9sGmNmQ6uapMTHMLPp/scripts/refresh-charts.sh
+"$PWD/scripts/refresh-charts.sh"  # lived in a side worktree during the grid; not in this tree
 
 {
   echo "======================================================================"
@@ -72,7 +72,7 @@ echo "=== $(date -Is) refreshing charts + paper stats"
   echo "RUNS.md regenerated, charts/PAPER-STATS rebuilt from patched views."
   echo "To update the meeting links, open a Claude session in ~/CMP and say:"
   echo "  republish the grid artifact, then the cost-diff artifact"
-  echo "Clear this banner with:  rm /home/mariam/deepseek-price-watch/ALERT"
+  echo "Clear this banner with:  rm $HOME/deepseek-price-watch/ALERT"
   echo "======================================================================"
-} >> /home/mariam/deepseek-price-watch/ALERT
+} >> $HOME/deepseek-price-watch/ALERT
 echo "=== $(date -Is) fold complete"

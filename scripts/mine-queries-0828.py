@@ -4,7 +4,7 @@ paper/data is built from (provenance.csv run_id), plus what came back.
 Writes mined/queries.jsonl: one row per tool call."""
 import csv, glob, json, os, re
 
-CMP = "/home/mariam/CMP"
+CMP = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROV = os.path.join(CMP, "paper", "data", "provenance.csv")
 OUT = os.path.join(CMP, "mined", "queries.jsonl")
 ARMS = {"semantic", "grep", "snippet", "spawn", "spawnfacts", "snippetfacts"}

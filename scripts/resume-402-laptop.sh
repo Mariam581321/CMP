@@ -16,7 +16,7 @@
 # (summary-resume.json) so this load queues behind them on the 6 cores.
 #
 #   tmux new-session -d -s resume402-laptop \
-#     'cd /home/mariam/CMP && scripts/resume-402-laptop.sh 2>&1 | tee -a results/resume-402-laptop.console.log'
+#     'cd ~/CMP && scripts/resume-402-laptop.sh 2>&1 | tee -a results/resume-402-laptop.console.log'
 # MUST run from the main checkout. CMP_NO_RECYCLE: other cells are live.
 set -u
 cd "$(dirname "$0")/.." || exit 1

@@ -34,7 +34,7 @@ cd "$(dirname "$0")/.." || exit 1
 ROOT="$PWD"
 export PATH="$HOME/.local/node/bin:$HOME/.elan/bin:$PATH"
 
-NOTIFY="/home/mariam/deepseek-price-watch/notify.sh"
+NOTIFY="${CMP_NOTIFY:-$HOME/deepseek-price-watch/notify.sh}"
 LOG="$ROOT/results/chain-blockC.log"
 WAIT_FOR="base-fatex90-0807-r2"
 FLOOR=45

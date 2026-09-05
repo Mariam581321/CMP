@@ -3,7 +3,7 @@
 # meaningful (the DeepSeek balance delta is account-wide): snippet -> spawn ->
 # spawn+facts, all on lean-search like the 0802 pilot, all at HEAD 435c471.
 set -u
-cd /home/mariam/CMP
+cd "$(dirname "$0")/.." || exit 1
 run() {
   local id="$1"; shift
   echo "=== $(date -Is) launching $id ==="

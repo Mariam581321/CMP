@@ -1,7 +1,9 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { classifyLines } from "/home/mariam/CMP/runner/common.js";
+import { fileURLToPath } from "node:url";
+import { classifyLines } from "../runner/common.js";
 
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const OPEN = "([{⟨⦃", CLOSE = ")]}⟩⦄";
 
 // Walk the binder body from `start`; report if a top-level ↔ appears before the
@@ -20,8 +22,8 @@ function swallows(text, start) {
 const CORPORA = [["FATE-X","benchmarks/FATE/FATE-X/FATEX","Problem"],["FATE-H","benchmarks/FATE/FATE-H/FATEH",null]];
 for (const [name, dir] of CORPORA) {
   const flagged = [];
-  for (const f of readdirSync("/home/mariam/CMP/" + dir).filter(x => x.endsWith(".lean")).sort((a,b)=>parseInt(a)-parseInt(b))) {
-    const src = readFileSync(join("/home/mariam/CMP/" + dir, f), "utf8");
+  for (const f of readdirSync(join(ROOT, dir)).filter(x => x.endsWith(".lean")).sort((a,b)=>parseInt(a)-parseInt(b))) {
+    const src = readFileSync(join(join(ROOT, dir), f), "utf8");
     const code = classifyLines(src).filter(l => l.kind === "code").map(l => l.line).join("\n");
     // statement text: from the theorem head to `:= by`
     const m = /\btheorem\b([\s\S]*?):=\s*by/.exec(code);

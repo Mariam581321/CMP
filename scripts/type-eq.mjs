@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
-import { benchmarkDecls, stmtProbe, parseStmtProbe, serverCheck } from "/home/mariam/CMP/runner/stmt.js";
+import { benchmarkDecls, stmtProbe, parseStmtProbe, serverCheck } from "../runner/stmt.js";
+import { fileURLToPath } from "node:url";
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 const CASES = [
   ["fatex_13", "benchmarks/FATE/FATE-X/FATEX/13.lean", "problems-fatex/fatex_13.lean"],
@@ -18,8 +20,8 @@ async function probe(src) {
 }
 
 for (const [name, origPath, oursPath] of CASES) {
-  const orig = readFileSync("/home/mariam/CMP/" + origPath, "utf8");
-  const ours = readFileSync("/home/mariam/CMP/" + oursPath, "utf8");
+  const orig = readFileSync(ROOT + origPath, "utf8");
+  const ours = readFileSync(ROOT + oursPath, "utf8");
   try {
     const [a, b] = await Promise.all([probe(orig), probe(ours)]);
     const declsSame = JSON.stringify(a.decls) === JSON.stringify(b.decls);

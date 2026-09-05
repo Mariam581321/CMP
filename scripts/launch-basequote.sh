@@ -25,7 +25,7 @@
 #
 # Refuses to launch until the fgrerun chain has finished (box contention + the
 # patched control files must exist first). Launch from the MAIN checkout, in tmux:
-#   tmux new-session -d -s basequote -c /home/mariam/CMP \
+#   tmux new-session -d -s basequote -c ~/CMP \
 #     'scripts/launch-basequote.sh >> results/basequote-fatex90.console.log 2>&1'
 set -u
 cd "$(dirname "$0")/.." || exit 1

@@ -37,7 +37,7 @@ N=$(python3 -c "import json;print(len(json.load(open('results/falsegreen-audit-b
 } >> results/falsegreen-transcript-review-0811.md
 
 if [ "$N" -gt 0 ]; then
-  /home/mariam/deepseek-price-watch/notify.sh "CMP: ${N} false green(s) in final block-C scan" <<EOF || true
+  "${CMP_NOTIFY:-$HOME/deepseek-price-watch/notify.sh}" "CMP: ${N} false green(s) in final block-C scan" <<EOF || true
 The closed spawn/spawnfacts cells show ${N} false-green attempt(s) the 0811 rerun
 list does not cover. Add them to SPECS in scripts/rerun-falsegreen.sh (or rerun by
 hand) BEFORE regenerating the fgrerun-patched tables.

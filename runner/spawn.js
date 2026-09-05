@@ -44,7 +44,7 @@ const extTools = (name) => {
 export function workerExtensions(combo) {
   const exts = [
     "lean-snippet",
-    ...(combo ?? []).filter((x) => ["lean-search", "lean-grep", "lean-loogle"].includes(x)),
+    ...(combo ?? []).filter((x) => ["lean-search", "lean-grep"].includes(x)),
     ...((combo ?? []).includes("lean-facts") ? ["lean-facts"] : []),
   ];
   return { exts, tools: exts.flatMap(extTools) };

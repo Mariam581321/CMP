@@ -1,7 +1,7 @@
 // Statement-probe library: everything about asking Lean "what did this file declare,
 // and is it the same statement the benchmark shipped?". Shared by the grader
 // (runner/grade.js), the agent-facing checks (extensions/lean-check.ts via
-// checkedCompile), and plan_check (runner/plan.js).
+// checkedCompile).
 //
 // Principle: a theorem's statement IS the type of its declaration, so statement
 // preservation is decided by elaborated-type equality read out of the environment,

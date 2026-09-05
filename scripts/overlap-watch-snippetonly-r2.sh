@@ -16,7 +16,7 @@
 set -u
 cd "$(dirname "$0")/.." || exit 1
 
-SERVER="${CMP_SERVER:-mariam@157.180.101.246}"
+SERVER="${CMP_SERVER:?set CMP_SERVER=user@host of the box running run A}"
 RUN_A="snippetonly-fatex90-0807-r2"
 RUN_B="snippetonly-fatex90-0807-r2-laptop"
 ALL=problems-fatex/safe90.txt

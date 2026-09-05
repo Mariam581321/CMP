@@ -10,7 +10,7 @@ Writes mined/check-errors.jsonl, one row per lean_check.
 """
 import csv, glob, json, os, re
 
-CMP = "/home/mariam/CMP"
+CMP = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ARMS = {"base", "grep", "semantic", "snippetonly", "snippet"}
 TOOLS = {"lean_check", "check_snippet"}
 ERR = re.compile(r"^error: [^:]+:\d+:\d+: (.*)$", re.M)

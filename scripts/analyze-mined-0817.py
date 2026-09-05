@@ -847,7 +847,7 @@ w("")
 # export the no-nudge outcome map for paper-stats.py (cost at pre-nudge green, else None)
 nnmap = {a: {p: nn_cost(att(a, p)) for p in PROBS} for a in ARMS}
 json.dump(nnmap, open(os.path.join(MINED, "nn-outcomes.json"), "w"))
-json.dump(nnmap, open("/home/mariam/CMP/results/nn-outcomes-0817.json", "w"))
+json.dump(nnmap, open(os.path.join(WT, "results", "nn-outcomes-0817.json"), "w"))
 json.dump(OUT, open(os.path.join(MINED, "analysis.json"), "w"))
 open(os.path.join(WT, "drafts", "MINED-STATS-0817.md"), "w").write("\n".join(MD) + "\n")
 print(f"wrote {os.path.join(WT, 'drafts', 'MINED-STATS-0817.md')} and mined/analysis.json")

@@ -1,6 +1,8 @@
 import { readFileSync, existsSync } from "node:fs";
-import { classifyLines } from "/home/mariam/CMP/runner/common.js";
+import { classifyLines } from "../runner/common.js";
 import { execSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 const solved = JSON.parse(readFileSync("/tmp/solved.json", "utf8"));
 const map = JSON.parse(execSync(`python3 -c "
@@ -12,7 +14,7 @@ for f in glob.glob('results/*/*/attempt.json')+glob.glob('results/_archive/*/*/a
     w=os.path.join(os.path.dirname(f),'work','problem.lean')
     if os.path.exists(w): out.setdefault(d['problem'],[]).append(w)
 print(json.dumps(out))
-"`, { cwd: "/home/mariam/CMP", encoding: "utf8" }));
+"`, { cwd: ROOT, encoding: "utf8" }));
 
 const DECL = /^\s*(?:@\[[^\]]*\]\s*)?(?:noncomputable\s+|private\s+|protected\s+|local\s+)*(abbrev|def|theorem|lemma|class|structure|instance|inductive|axiom|opaque)\b/;
 // split code-only source into declaration blocks
@@ -31,7 +33,7 @@ function decls(src) {
 const findings = [];
 for (const p of solved) {
   const dir = p.startsWith("fatex") ? "problems-fatex" : "problems-fateh";
-  const orig = readFileSync(`/home/mariam/CMP/${dir}/${p}.lean`, "utf8");
+  const orig = readFileSync(`${ROOT}${dir}/${p}.lean`, "utf8");
   const setup = decls(orig).filter(d => d.kind !== "theorem" && d.kind !== "lemma");
   if (!setup.length) continue;
   for (const w of map[p] ?? []) {
