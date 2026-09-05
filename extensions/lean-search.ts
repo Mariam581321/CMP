@@ -35,30 +35,23 @@ async function waitForSlot(client: string): Promise<number> {
 
 // Retry transient failures INSIDE the tool, where waiting costs zero tokens. Bouncing
 // one to the model costs a whole turn, with the growing context re-billed as input —
-// the same argument that already keeps connection retries inside lean_check.
-// This is not hypothetical and it was not symmetric: every one of the 69 search_mathlib
-// failures in semantic-fatex87-0805 was an HTTP **429**. LeanSearch is a public endpoint
-// and the runner points 25 concurrent attempts at it, so the arm was losing 69 turns to
-// OUR concurrency — a harness effect landing on exactly one side of the block-A
-// comparison, since grep runs locally and cannot rate-limit.
+// the same argument that already keeps connection retries inside lean_check. It also
+// keeps a harness effect off one side of the comparison: LeanSearch is a public
+// endpoint that rate-limits our own concurrency (HTTP 429), while grep runs locally
+// and cannot.
 //
-// The failures are BURSTS, not volume (measured over that cell): 6,314 calls in 13.1 h
-// is 8.0/min average, p90 23/min — and all 69 rejections fall inside SIX minutes of 569,
-// each of which carried 65-99 calls. So the endpoint is comfortable with our sustained
-// rate and refuses the spikes, which happen when many attempts search at once. That
-// shape decides the retry: **full jitter is the load-bearing part, not the backoff**. A
-// fixed delay would have all N rejected requests sleep the same 2 s and fire together —
-// the same spike, two seconds later. Sleeping a uniform random slice of the window
-// spreads one burst across it instead, which is the whole fix; the growing window is
-// only there for the case where the limiter needs longer than one round to clear.
+// The 429s are BURSTS, not volume: the endpoint is comfortable with the sustained rate
+// and refuses the spikes, which happen when many attempts search at once. That shape
+// decides the retry: **full jitter is the load-bearing part, not the backoff**. A fixed
+// delay would have all N rejected requests sleep the same 2 s and fire together — the
+// same spike, two seconds later. Sleeping a uniform random slice of the window spreads
+// one burst across it instead; the growing window is only there for the case where the
+// limiter needs longer than one round to clear.
 //
-// Sized past a plausible per-minute limiter window (expected ~31 s of waiting over five
-// retries, up to ~62 s) because waiting is free in the currency that is measured: it
-// costs wall clock, never tokens or turns, so a 429 absorbed here cannot move `cost_std`
-// or the solve rate — which is exactly what stops it biasing the arm comparison. A 4xx
-// that is not 429 is the query's own answer and is never retried.
-// No Retry-After header exists on this endpoint (checked 2026-08-07: Cloudflare in
-// front, no rate-limit headers at all), but honour it if one ever appears.
+// Waiting is free in the currency that is measured: it costs wall clock, never tokens
+// or turns, so a 429 absorbed here cannot move `cost_std` or the solve rate. A 4xx that
+// is not 429 is the query's own answer and is never retried. The endpoint sends no
+// Retry-After header, but honour it if one ever appears.
 const RETRY_MAX = 5;
 const RETRY_BASE_MS = 2_000;
 const RETRY_CAP_MS = 45_000;
@@ -72,9 +65,8 @@ const backoffMs = (attempt: number, resp: Response) => {
 };
 
 // Fixed result count, deliberately not a tool parameter: how deep to retrieve is a
-// property of the arm, not a decision for the agent. With the knob exposed, 91% of
-// calls set it (mode 5, then 10, then 3), so the arm was really measuring a mix of
-// retrieval depths rather than one. 6 ≈ the old default and the observed median.
+// property of the arm, not a decision for the agent (with the knob exposed, agents set
+// it on most calls, so the arm measured a mix of depths rather than one).
 const NUM_RESULTS = 6;
 
 export default function (pi: ExtensionAPI) {
@@ -96,9 +88,8 @@ export default function (pi: ExtensionAPI) {
       const n = NUM_RESULTS;
       let ac: AbortController;
       let t: ReturnType<typeof setTimeout> | undefined;
-      // Telemetry only (`details` never reaches the model): without it, "did the jitter
-      // actually absorb the bursts" is unanswerable after the run, which is how the 429s
-      // went unnoticed for a whole cell in the first place.
+      // Telemetry only (`details` never reaches the model): records whether the jitter
+      // actually absorbed the bursts.
       let retries = 0;
       let slotMs = 0;
       const t0 = Date.now();
@@ -155,9 +146,7 @@ export default function (pi: ExtensionAPI) {
           details: {
             count: hits.length,
             // How hard this call was to get: `retries` > 0 means the endpoint pushed
-            // back and the jitter absorbed it. A cell whose retries stay near zero is
-            // one where the burst smoothing is working; a cell where they climb is the
-            // signal to move the limiter somewhere shared (see the note above).
+            // back and the jitter absorbed it.
             retries,
             slot_ms: slotMs,
             wait_ms: Date.now() - t0,

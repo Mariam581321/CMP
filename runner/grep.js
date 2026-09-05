@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "lean-env", ".lake", "packages", "mathlib");
 export const MATHLIB_SRC = join(PKG_ROOT, "Mathlib");
 
-// Block D: when a library is baked into the compile env (CMP_LIB_FILE — run.js sets
+// Library cells: when a library is baked into the compile env (CMP_LIB_FILE — run.js sets
 // it for library cells and pi children inherit it), its source is part of what
 // "exists in the agent's environment", so every rung searches it alongside Mathlib —
 // one search surface for everything ambient. Hits render as `library.lean:<line>`.
@@ -28,18 +28,12 @@ const displayPath = (file) => (file === process.env.CMP_LIB_FILE ? "library.lean
 const HEAD_RE =
   /^(?:@\[|(?:protected\s+|private\s+|noncomputable\s+|nonrec\s+|unsafe\s+|partial\s+|scoped\s+)*(?:theorem|lemma|def|abbrev|instance|structure|class|inductive|axiom|opaque)\b)/;
 
-// Raw grep lines to collect before SIGKILLing grep. This is the FIRST of the three cuts
-// in this file and the one nobody could see: grep streams in directory-traversal order,
-// so a cap here silently answers a query with the alphabetical prefix of Mathlib. It sat
-// at 400 on the assumption that grep is expensive; measured 2026-08-07, an uncapped grep
-// over the whole checkout costs ~0.1 s even for `Ideal` (11,916 matching lines), so the
-// cap was buying nothing and losing the back half of the library.
-// There are now TWO cuts in this file instead of three, and both are visible: grep stops
-// at RAW_LINE_CAP, and the display stops at maxResults. The middle one — collection
-// stopped at `maxResults * 3` = 30 declarations — is gone, because it meant the tool
-// never even LOOKED at a 31st candidate, so ranking them would have been ranking the
-// alphabet. Everything grep returns is now expanded, deduped and ranked; the pool is
-// bounded by RAW_LINE_CAP alone, and dedup can only shrink it.
+// Raw grep lines to collect before SIGKILLing grep. grep streams in directory-traversal
+// order, so a low cap here would silently answer a query with the alphabetical prefix of
+// Mathlib; an uncapped grep over the whole checkout costs ~0.1 s even for a very common
+// token, so this is a safety net, not a budget. There are TWO cuts in this file, both
+// visible: grep stops at RAW_LINE_CAP, and the display stops at maxResults. Everything
+// grep returns is expanded, deduped and ranked.
 const RAW_LINE_CAP = 20_000;
 const ANCHOR_LINE_CAP = 20_000; // the cross-line pass filters after grep, so it needs the same net
 const GREP_TIMEOUT_MS = 30_000;
@@ -104,10 +98,9 @@ function expandDecl(fileLines, hitLine) {
   for (let k = head; k < fileLines.length && parts.length < DECL_MAX_LINES; k++) {
     // Stop at the blank line that ends the declaration, BEFORE consuming it. Mathlib
     // never puts a blank line inside a signature and always puts one between
-    // declarations, so this is where the declaration ends — and with the line cap raised
-    // to 24 it is what keeps an `inductive` with no `:=` from running on into the
-    // `namespace`/`variable`/next-declaration block underneath it (measured on
-    // `QuaternionGroup`). The cap alone used to hide that by stopping at 10 lines.
+    // declarations, so this is where the declaration ends — and it is what keeps an
+    // `inductive` with no `:=` from running on into the `namespace`/`variable`/
+    // next-declaration block underneath it.
     if (k > head && fileLines[k].trim() === "") break;
     parts.push(fileLines[k]);
     if (fileLines[k].includes(":=") || / by$/.test(fileLines[k])) break;
@@ -122,8 +115,7 @@ function expandDecl(fileLines, hitLine) {
 // means the hit IS the declaration/signature — what a name query is after; otherwise
 // the raw match sits in the proof body below (a usage site), which is ranked after
 // definitions with its matched line appended, or the output shows a containing lemma
-// with no visible connection to the query (smoke 0729: a query for an exact lemma
-// name returned only baffling-looking lemmas that merely *used* it).
+// with no visible connection to the query.
 // declOnly drops anything that is not a matching declaration — the cross-line pass
 // uses it, because there grep matched an anchor fragment, not the query.
 // Ranking inside the declaration bucket. Minimal and derived from the query itself, not
@@ -136,12 +128,10 @@ function expandDecl(fileLines, hitLine) {
 //   2  the query matches somewhere in the name  (`inv_mem` -> Foo.inv_mem_of_bar)
 //   3  the query matches only the signature
 //
-// Why it exists: results were emitted in `grep -rnI` order, i.e. alphabetical by path,
-// so the display cut kept whatever happened to live earliest in the tree. Measured over
-// the grep cell (2026-08-07), 43% of calls truncated and the median truncated query
-// matched 38 declarations — so on nearly half of all retrievals the arm was answering
-// with an alphabetical prefix, and an exact-name hit in `Mathlib/RingTheory/…` could be
-// crowded out by `Mathlib/Algebra/…` lemmas that merely mention the token.
+// Why it exists: results come out in `grep -rnI` order, i.e. alphabetical by path, so
+// without ranking the display cut keeps whatever happens to live earliest in the tree,
+// and an exact-name hit in `Mathlib/RingTheory/…` could be crowded out by
+// `Mathlib/Algebra/…` lemmas that merely mention the token.
 // Ties keep traversal order (the index tiebreak below), so this only ever moves an exact
 // answer UP; it never invents an order among equals.
 function nameTier(name, { pattern, ci, inName }) {
@@ -210,11 +200,9 @@ function collectHits(rawLines, { inText, inName, pattern, ci, maxResults, trunca
 // A Lean declaration's real name is assembled by the elaborator: `namespace
 // IntermediateField` + `protected theorem inv_mem` = `IntermediateField.inv_mem`. That
 // string never appears in the source, so a text search for the name the agent must
-// WRITE finds nothing, while the declaration plainly exists (0730b: 233 dotted-name
-// queries came back empty; the declaration existed for 21 of them). Worse, the name
-// often does appear at *usage* sites in other files, so the search half-works and
-// returns lemmas that merely mention it — the symptom recorded in the 0729 smoke and
-// treated then as a ranking problem. This reconstructs the prefix the way Lean does.
+// WRITE finds nothing, while the declaration plainly exists. Worse, the name often does
+// appear at *usage* sites in other files, so the search half-works and returns lemmas
+// that merely mention it. This reconstructs the prefix the way Lean does.
 // A Lean identifier is not ASCII: Mathlib names carry subscripts and Greek throughout
 // (`d₁`, `ε₁`, `HomologicalComplex₂`), and `!`/`?` are ordinary name characters
 // (`Array.get!`, `List.find?`). Matching only [A-Za-z_] silently truncates such a name to
@@ -300,13 +288,11 @@ function commentDepthAfter(line, depth) {
 // consume an `end`, so they must sit on the stack — popping a namespace on an `end` that
 // closed a section silently mis-attributes every declaration below it.
 //
-// EVERY scope has to be pushed, not just the named sections. Because only those were, a
-// bare `end` popped the nearest non-namespace entry — reaching past the scope it actually
-// closed to a named section further out, and the truncation took the namespaces stacked
-// above that one with it. 360 declarations in 32 files came out unqualified (`zero_mem`
-// for `LieSubalgebra.zero_mem`, and likewise `LinearEquiv.neg`, `StarAlgHom.comp`,
-// `ContinuousMultilinearMap.pi`), so rung 0 missed them and the query fell through to the
-// text rungs that answer with usage sites — the exact failure rung 0 exists to prevent.
+// EVERY scope has to be pushed, not just the named sections: otherwise a bare `end`
+// pops the nearest non-namespace entry, reaching past the scope it actually closed, and
+// the declarations below come out unqualified (`zero_mem` for `LieSubalgebra.zero_mem`),
+// so rung 0 misses them and the query falls through to the text rungs that answer with
+// usage sites — the exact failure rung 0 exists to prevent.
 //
 // A bare `end` pops the TOP of the stack, and only when that is a scope a bare `end` can
 // legally close (anonymous section or `mutual`). Lean rejects `end` without a name for
@@ -368,8 +354,7 @@ const pasteableNameAt = (f, l, n) => qualifiedSegsAt(f, l, n).map((q) => q.raw).
 // bare attribute — `@[simp]` alone on a line is a head for HEAD_RE — so the keyword line
 // is searched for inside the block rather than assumed to be the first. Returns null when
 // the block is not a declaration at all: import lines, docstring prose, wrapped binders
-// and proof-body lines all reach here (13% of hits over a 120-query replay of the 0730b
-// logs), and there is no name to give for those.
+// and proof-body lines all reach here, and there is no name to give for those.
 function nameOfHit(fileLines, headLine, text) {
   const lines = text.split("\n");
   for (let k = 0; k < lines.length; k++) {
@@ -389,8 +374,7 @@ function nameOfHit(fileLines, headLine, text) {
 // Declarations whose assembled name is EXACTLY the query. Exact only, by design: a
 // declaration that merely shares the final segment (`Fin.val_lt_val` vs the real
 // `Units.val_lt_val`) is a different lemma, and offering it as a lead reads as
-// confirmation — the run shows the agent already writes names that do not exist 21%
-// of the time in that situation, so a wrong lead makes it worse, not better.
+// confirmation of a name that does not exist.
 async function qualifiedLookup(pattern, maxResults, signal) {
   // `?` is a legal Lean name character (`List.find?`) and an ERE quantifier, so escape
   // before handing the segment to grep.
@@ -452,12 +436,11 @@ function matcherFor(pattern, ci, regex) {
 
 // Main entry. Returns { hits: [{path, line, text}], truncated, mode }.
 //
-// The agent does NOT choose the matching mode — it proved unable to (0730b: 3226 of
-// 8309 calls passed a pattern full of regex metacharacters with regex=false, so grep
-// matched `GL.*Sylow` as 9 literal characters; 99% of those returned nothing, 38% of
-// every call in the run). Mode is a property of the tool, like result depth: try the
-// interpretations in order of how literally they take the query and stop at the first
-// that finds anything.
+// The agent does NOT choose the matching mode: given the choice, agents routinely
+// passed regex metacharacters with regex=false (so `GL.*Sylow` matched as 9 literal
+// characters) and got nothing. Mode is a property of the tool, like result depth: try
+// the interpretations in order of how literally they take the query and stop at the
+// first that finds anything.
 //
 //   1 literal                     grep -F                 (`(a * b) ^ n` stays literal)
 //   2 literal, case-insensitive   grep -F -i              (wrong-case guess)
@@ -466,8 +449,7 @@ function matcherFor(pattern, ci, regex) {
 //   5 across line breaks          anchor grep + whole-declaration match
 //
 // Rung 5 is what a line-based grep structurally cannot do: Mathlib signatures wrap, so
-// `card_GL.*Fin.*ZMod` never matches a single line even as a correct regex (0730b: 73%
-// of the calls that DID set regex=true still returned nothing). It greps the longest
+// `card_GL.*Fin.*ZMod` never matches a single line even as a correct regex. It greps the longest
 // literal fragment to get candidate declarations, then tests the whole query against
 // each expanded declaration with its whitespace flattened.
 export async function grepMathlib(pattern, { maxResults = 10 } = {}, signal) {
@@ -479,8 +461,7 @@ export async function grepMathlib(pattern, { maxResults = 10 } = {}, signal) {
   // text rung. Running this last would only rescue the queries that come back empty;
   // running it first also fixes the more common half, where the qualified string does
   // occur at usage sites in other files and the text rungs answer a "does X exist?"
-  // question with lemmas that merely mention X and never the declaration itself
-  // (`Nat.card_eq_zero`: 4 hits before this, all usage sites, no declaration).
+  // question with lemmas that merely mention X and never the declaration itself.
   if (QUALIFIED.test(pattern)) {
     const exact = await qualifiedLookup(pattern, maxResults, signal);
     if (exact.length) return { hits: exact, truncated: false, mode: "qualified-name" };

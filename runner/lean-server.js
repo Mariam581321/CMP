@@ -1,23 +1,21 @@
 #!/usr/bin/env node
 // Persistent Lean REPL pool behind a tiny local HTTP API. Loads Mathlib once per
 // worker (sequentially — the second worker's import rides the first one's warm page
-// cache; the ~4.6 GB of .olean mmaps are clean file-backed pages the kernel shares
-// physically between workers, so an extra worker costs ~1 GB, not another 6 GB).
-// One REPL command runs at a time PER WORKER; queued requests are served round-robin
-// across clients (body.client) so one busy attempt can't starve the rest, and
-// whichever worker frees up first takes the next job.
+// cache, and the .olean mmaps are clean file-backed pages the kernel shares physically
+// between workers). One REPL command runs at a time PER WORKER; queued requests are
+// served round-robin across clients (body.client) so one busy attempt can't starve the
+// rest, and whichever worker frees up first takes the next job.
 //
-// THE VERDICT IS DETERMINISTIC (2026-08-01): what decides "compiles" is a per-declaration
+// THE VERDICT IS DETERMINISTIC: what decides "compiles" is a per-declaration
 // `maxHeartbeats` cap (MAX_HEARTBEATS in common.js), enforced by Lean and returned as an
 // ordinary compile error in `messages`. Every RESOURCE bound here — cpu, wall, rss, mem —
 // is machine protection only and can never produce a verdict: a kill is swallowed, the
 // check requeued, and past the retry cap the client is told the check is `unavailable`,
 // which records nothing about the file (runCheck). A watchdog kills and respawns a
 // worker's REPL on hang/crash. If CMP_REPL_MAX_RSS_MB is set, an RSS monitor kills a
-// worker whose process group balloons past the cap (pathological checks — huge kernel
-// reductions — have OOM'd the whole box before; better one worker respawns in ~10 s than
-// the kernel picks a victim). Results are memoized by code hash — only real verdicts,
-// never a resource outcome. Memo hits skip the queue.
+// worker whose process group balloons past the cap (better one worker respawns than the
+// kernel OOM-killer picks a victim). Results are memoized by code hash — only real
+// verdicts, never a resource outcome. Memo hits skip the queue.
 //
 //   GET  /health           -> {ready, recycling, check_sha, check_env, max_heartbeats,
 //                              library_sha256, cpu_fuse_s,
@@ -40,47 +38,21 @@
 //                             Poll /health for {recycling: false, ready: true}.
 //
 // Env: CMP_LEAN_ENV, CMP_REPL_BIN, CMP_LEAN_PORT (default 8787)
-//      CMP_REPL_WORKERS (default 8 — sized for the 64 GB Ryzen 3600 server, 2026-08-01)
-//        Measured on this box with one worker serving: RSS 7.2 GB, of which 5.3 GB is
-//        CLEAN file-backed .olean mapping (private only because nobody else maps it yet;
-//        a second worker shares those pages physically) and ~1.25 GB is dirty heap. So
-//        the pool costs ~6 GB once plus ~1.5-3 GB per worker as heap accumulates between
-//        watchdog restarts: 8 workers ≈ 18-30 GB, comfortable in 64 GB. The CPU is
-//        6 cores / 12 threads; a check is one busy thread, so 8 concurrent checks
-//        oversubscribe physical cores under full load — which since the heartbeat
-//        verdict (2026-08-01) costs only wall time, never a verdict flip, and full
-//        occupancy is rare (checks arrive bursty between LLM turns). 8 of 12 threads
-//        leaves room for the runner, the pi children and a Claude session.
-//      CMP_REPL_MAX_RSS_MB (default 13000; 0 = off) — per-worker balloon fuse.
-//        Raised from 9000 on 2026-08-06, with the snapshot-retention fix below; the
-//        two are one change. 9000 was calibrated 2026-07-26 against a pool whose heap
-//        grew per check, where "a healthy worker reaches ~7.1 GB in 10 min" made 8.5 GB
-//        the highest non-false-firing line. It fired 234 times in grep-fatex87-0805 —
-//        every worker every ~16 min, median 12 MB past the line, i.e. workers parked
-//        under the cap and drifting across it, not checks demanding memory. Two of
-//        those cost an attempt its verdict (fatex_19, fatex_31).
-//        With retention capped a fresh worker sits at 6.35 GB RSS and stays there, and
-//        the heaviest file in FATE-X (fatex_19: 2113 lines, 272 decls) adds ~2 GB of
-//        its own — which 9000 did not clear even on a pristine worker. 13000 leaves
-//        that file ~4.5 GB of margin and still catches the balloon class this fuse
-//        exists for (the Jul-25 OOM, tens of GB in one check).
+//      CMP_REPL_WORKERS (default 6) — one per physical core is the useful ceiling: a
+//        check is one busy thread, so extra workers add memory, not throughput. The pool
+//        costs ~6 GB once (the shared .olean mapping) plus 1-3 GB of heap per worker.
+//      CMP_REPL_MAX_RSS_MB (default 13000; 0 = off) — per-worker balloon fuse, sized to
+//        clear the heaviest FATE-X file with margin and still catch a check that
+//        balloons into tens of GB.
 //      CMP_MIN_AVAIL_MB (default 6000; 0 = off) — system fuse: when /proc/meminfo
-//        MemAvailable drops below this, kill the fattest worker. Self-adjusting
-//        (page sharing between workers, cache eviction) where RSS math is not.
-//        This is the fuse that actually protects a multi-worker box: 8 x the 13 GB RSS
-//        cap is more memory than exists, so the per-worker cap alone stops nothing.
-//        Raised 4000 -> 6000 with the RSS cap: the floor is what a single ballooning
-//        worker now has to cross before its OWN cap fires, so it needs more room than
-//        when the per-worker line sat at 9000. It doubles as the load governor: if it
-//        fires more than occasionally (see "system memory low" log lines), run fewer
-//        workers.
+//        MemAvailable drops below this, kill the fattest worker. This is the fuse that
+//        actually protects a multi-worker box (the per-worker caps summed exceed the
+//        memory that exists), and it doubles as the load governor: if it fires more than
+//        occasionally (see "system memory low" log lines), run fewer workers.
 //
-// WHY RSS OVERSTATES THE COST (it is a fuse, not a budget): the number swept here
-// counts each worker's ~5.2 GB .olean mapping in full, and those are clean file-backed
-// pages the kernel holds ONCE for the whole pool. Measured 2026-08-06 on 8 live
-// workers: 6.35-7.7 GB RSS each but 1.16-2.56 GB PSS each — ~17 GB of real memory for
-// a pool whose RSS sums to ~60. Any per-worker RSS line is therefore ~5 GB higher than
-// the memory it is protecting; CMP_MIN_AVAIL_MB is the number that tracks reality.
+// RSS overstates the cost (it is a fuse, not a budget): the number swept here counts each
+// worker's .olean mapping in full, and those are clean file-backed pages the kernel holds
+// ONCE for the whole pool. CMP_MIN_AVAIL_MB is the number that tracks reality.
 
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -92,7 +64,7 @@ import { LEAN_PORT, MAX_HEARTBEATS } from "./common.js";
 // What a check IS — the injected `set_option` head, the clamp, and the bound chain —
 // lives in check-env.js because run.js has to verify that the server it is about to
 // launch a run against is enforcing THIS checkout's version of it. CHECK_SHA is that
-// verification; see the module header.
+// verification.
 import { prepare, CPU_FUSE_MS, WALL_FUSE_MS, MAX_KILLS, RETRY_DEADLINE_MS, CHECK_SHA, checkEnv } from "./check-env.js";
 import { renderCheck } from "./render.js";
 
@@ -100,34 +72,22 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const LEAN_ENV = process.env.CMP_LEAN_ENV ?? join(ROOT, "lean-env");
 const REPL_BIN = process.env.CMP_REPL_BIN ?? join(ROOT, "vendor/repl/.lake/build/bin/repl");
 const PORT = parseInt(LEAN_PORT);
-// 6, not 8: one worker per PHYSICAL core (Ryzen 5 3600, 6C/12T). A check is
-// single-threaded and CPU-bound, so the pool's ceiling is 6 checks' worth of compute per
-// wall second no matter how many workers exist — measured 2026-08-11 with three cells
-// live: 6 repls pinned at ~100% (595% total), 2 sitting at 0.0%, and /health reporting
-// ZERO queued checks. The two extra workers were not adding throughput; they were adding
-// ~7 GB of RSS each to a box whose RSS fuse fired 579 times in the preceding 3.6 days
-// (each kill discards a partly-computed check and pays a fresh Mathlib import) plus two
-// "system memory low" sweeps. Not part of CHECK_SHA (check-env.js hashes the set_option
-// head, the fuses, max_kills, retry_deadline — not the pool size), so this cannot move a
-// verdict or break comparability with an earlier cell; it changes throughput only.
-// Takes effect on the next server start.
+// One worker per physical core: a check is single-threaded and CPU-bound, so extra
+// workers add memory, not throughput. Not part of CHECK_SHA (the pool size cannot move
+// a verdict). Takes effect on the next server start.
 const WORKERS = Math.max(1, parseInt(process.env.CMP_REPL_WORKERS ?? "6"));
 const MAX_RSS_MB = parseInt(process.env.CMP_REPL_MAX_RSS_MB ?? "13000");
 const MIN_AVAIL_MB = parseInt(process.env.CMP_MIN_AVAIL_MB ?? "6000");
 // CPU fuse and memory fuses share one /proc sweep. The sweep period is also the fuse's
-// granularity — a check can overshoot by up to one tick — which no longer matters to any
-// verdict now that no measured bound decides anything.
+// granularity — a check can overshoot by up to one tick — which matters to no verdict.
 const MONITOR_MS = 5000;
-// Importing Mathlib is ~1.8 GB of .olean reads. Warm it takes 20-60 s, but under WSL2
-// balloon pressure the kernel drops the pages as fast as they load (measured 2026-07-30:
-// reading all 7878 oleans grew the page cache by 121 MB, with 6.4 GB free) and the same
-// import crawls past several minutes. That is slow, not hung — and run.js aborts the
-// WHOLE run when the server fails to come up, so this bound must sit above the slow case
-// or a memory-pressure blip costs a launch. Overridable for a laptop having a bad day.
+// Importing Mathlib is ~1.8 GB of .olean reads: 20-60 s warm, several minutes under
+// memory pressure. That is slow, not hung — and run.js aborts the WHOLE run when the
+// server fails to come up, so this bound must sit above the slow case.
 const IMPORT_TIMEOUT_MS = parseInt(process.env.CMP_IMPORT_TIMEOUT_MS ?? "900000");
 const MEMO_MAX = 2000;
 
-// Block D library baking: CMP_LIB_FILE names a gate-verified library (a frozen
+// Library baking: CMP_LIB_FILE names a gate-verified library (a frozen
 // add_fact bank) that every worker elaborates ON TOP of Mathlib at startup; checks
 // then run against that env, so library names are ambient exactly like Mathlib names
 // — for agents and the grader alike, one definition of compiles. The file is read
@@ -219,9 +179,8 @@ async function startRepl(w) {
   // resume from it (`{"cmd": ..., "env": 17}`), and the arrays only ever grow. We never
   // resume — every check is sent against baseEnv and the returned id is discarded (see
   // handleCheck) — so past the base envs each snapshot is garbage that pins the whole
-  // elaborated environment of a 2000-line proof file. That was ~1.4 GB per worker per
-  // 10 min of serving, and it is what walked the pool into the RSS fuse 234 times in
-  // grep-fatex87-0805. Keep exactly the base envs (import, then the baked library if
+  // elaborated environment of a large proof file, which is what walked the pool into
+  // the RSS fuse. Keep exactly the base envs (import, then the baked library if
   // there is one) and drop the rest; proof snapshots, one per `sorry`, we never name at
   // all. Stock upstream repl ignores both variables, so an unpatched binary still runs —
   // it just leaks again, visibly, in the rss cap log lines.
@@ -321,17 +280,13 @@ async function restartRepl(w, why) {
 
 // ---------- recycle ----------
 // Deliberate, all-workers restart for the gap BETWEEN runs. A server the watchdog has
-// kept alive for hours carries ~2.5 GB of accumulated Lean heap per worker (it grows
-// ~4 MB/check and only a crash or watchdog restart has ever reset it), part of it
-// swapped out, and the workers have drifted onto different slices of the .olean page
-// cache — measured 2026-07-31, two idle workers shared only ~1.1 GB where a fresh pair
-// shares several. Restarting is sequential exactly as at boot, so worker 0 pays the
-// import and the rest ride its warm cache. Callers must poll /health: holding an HTTP
-// response open across a slow import trips undici's 5-minute header limit.
-// The memo is deliberately NOT cleared. Measured 2026-07-31: agents essentially never
-// resubmit a byte-identical file (94 distinct md5s across 95 checks in one attempt), so
-// memoized failure verdicts almost never fire and cross-run contamination through a
-// reused server is theoretical.
+// kept alive for hours carries accumulated Lean heap per worker, part of it swapped
+// out, and the workers have drifted onto different slices of the .olean page cache.
+// Restarting is sequential exactly as at boot, so worker 0 pays the import and the rest
+// ride its warm cache. Callers must poll /health: holding an HTTP response open across
+// a slow import trips undici's 5-minute header limit.
+// The memo is deliberately NOT cleared: agents essentially never resubmit a
+// byte-identical file, so cross-run contamination through a reused server is theoretical.
 let recycling = false;
 async function recycleAll() {
   recycling = true;
@@ -370,7 +325,7 @@ const PAGE = 4096;
 const CLK_TCK = 100; // sysconf(_SC_CLK_TCK) — 100 on every Linux we run on
 // One sweep, both numbers, ALL groups: RSS for the balloon fuses, CPU for the CPU fuse.
 // Bucketed by pgid in a single /proc pass because the monitor asks about every worker on
-// every tick — a scan per worker re-read every pid's stat and statm 8 times per sweep.
+// every tick.
 // /proc/<pid>/stat fields are 1-based and the comm field contains parens, so slicing
 // past the LAST ")" makes f[0] = field 3: ppid=f[1], pgrp=f[2], utime=f[11], stime=f[12].
 // cutime/cstime (f[13]/f[14]) are deliberately excluded — we sweep the whole process
@@ -465,10 +420,9 @@ setInterval(() => {
   }
 }, MONITOR_MS).unref();
 
-// The heartbeat NOTE used to be appended to every timeout MESSAGE here, so that the
-// server's `pretty` and the agent-facing rebuild (stmt.js) would say the same thing.
-// Both now go through renderCheck, which emits it once per check instead of once per
-// message — same words, in one place, 1.72 MB less of them across a cell pair.
+// The server's `pretty` and the agent-facing rebuild (stmt.js) both go through
+// renderCheck, so they say the same thing, and the heartbeat note is emitted once per
+// check rather than once per timeout message.
 function render(resp, shifted) {
   const messages = (resp.messages ?? []).map((m) => ({
     severity: m.severity,
@@ -544,7 +498,7 @@ async function handleCheck(w, prep) {
     return { ...result, ...usage(w) };
   } catch (e) {
     // Nothing here is memoized. A crash and every fuse kill are events on this machine;
-    // the memo holds verdicts, which since 2026-08-01 come only from Lean's own output.
+    // the memo holds verdicts, which come only from Lean's own output.
     return {
       ok: false, error: e.message, kind: e.kind ?? "error", bound: e.bound ?? null,
       pretty: `lean check failed: ${e.message}`,
@@ -573,10 +527,8 @@ async function handleCheck(w, prep) {
 // implicates nobody; RETRY_DEADLINE_MS is what bounds a box stuck under its memory floor.
 //
 // Past either limit the answer is `unavailable`: not a verdict, never memoized, nothing
-// recorded about the file. Until 2026-08-01 a second cpu/wall/rss kill was instead
-// "accepted as the file's own cost" and became a charged, memoized failure — a verdict
-// decided by a measurement, which is exactly the coin-flip that change removed. What a
-// file costs is now unjudged; what it elaborates to is judged by the heartbeat cap.
+// recorded about the file. What a file costs is unjudged; what it elaborates to is
+// judged by the heartbeat cap.
 // MAX_KILLS and the deadline live in check-env.js, where the whole bound chain is
 // derived so the retry can never outlast the client that is waiting for it.
 const unavailable = (r, kills) => ({
@@ -622,37 +574,24 @@ async function runCheck(client, prep) {
 // network dependency, and an upstream that hangs or changes shape is still entirely the
 // extension's problem.
 //
-// Why it has to live in a shared process at all: the failures are BURSTS, not volume.
-// Measured over semantic-fatex87-0805 — 6,314 searches in 13.1 h, 8.0/min average, p90
-// 23/min — every one of the 69 HTTP 429s falls inside SIX minutes of 569, each carrying
-// 65-99 calls. Those spikes are 25 pi processes searching at the same moment, so no
-// per-process limiter can see them, and a retry (even a jittered one) only spreads a
-// burst that has already been sent and refused. This stops it being sent.
+// Why it has to live in a shared process at all: the endpoint's 429s come in BURSTS,
+// when many pi processes search at the same moment, which no per-process limiter can
+// see, and a retry (even a jittered one) only spreads a burst that has already been
+// sent and refused. This stops it being sent.
 //
 // Token bucket, not a fixed spacing, because the traffic is legitimately bursty and
 // mostly harmless: an idle pool banks SEARCH_BURST slots, so a handful of simultaneous
-// searches go straight through, and only sustained pressure is paced.
-//
-// The numbers are measured, not picked. Bucketing that cell's 6,314 searches by minute
-// brackets the endpoint's limit tightly: the highest CLEAN minute is 50 requests and the
-// lowest FAILING one is 52, over 563 clean minutes against 6 failing (52, 64, 65, 65,
-// 69, 99). So the rule is ~50/min per IP.
-// 30 + 8 leaves 24% of margin under that, and the margin is the point rather than
-// timidity: those per-minute buckets are FIXED windows, while a Cloudflare limiter
-// slides — 30 requests either side of a minute boundary is 60 in a sliding window while
-// both fixed buckets read 30, so the measurement understates the instantaneous rate. A
-// token bucket is what closes that gap: it paces emission continuously, so no sliding
-// 60 s window can ever contain more than SEARCH_RATE_PER_MIN + SEARCH_BURST = 38. The
-// price is small and bounded — replayed against the cell, a 30/min cap would have paced
-// 16 of 563 clean minutes (2.8%) and all 6 failing ones, and pacing costs wall clock
-// only.
+// searches go straight through, and only sustained pressure is paced. The rate sits
+// with margin under the ~50/min per IP the endpoint was observed to tolerate, and a
+// token bucket paces emission continuously, so no sliding 60 s window can ever contain
+// more than SEARCH_RATE_PER_MIN + SEARCH_BURST. Pacing costs wall clock only.
 // Round-robin across clients for the same reason checks are: one search-happy attempt
 // must wait behind itself, not in front of the run.
 const SEARCH_RATE_PER_MIN = parseInt(process.env.CMP_SEARCH_RATE_PER_MIN ?? "30");
 const SEARCH_BURST = parseInt(process.env.CMP_SEARCH_BURST ?? "8");
 // A backstop on the queue, not a policy: past this the caller is told to go ahead
 // unpaced rather than be parked, because a stuck dispenser must never be able to hold
-// up a run. Sized far above anything the measured traffic can produce.
+// up a run. Sized far above real traffic.
 const SEARCH_QUEUE_MAX = 500;
 let slotTokens = SEARCH_BURST;
 let slotLast = Date.now();
@@ -708,8 +647,8 @@ function slotRequest(client, grant) {
 
 // Requests are served round-robin across clients (body.client, e.g. the problem
 // name; the grader is just another client) — an attempt with many queued checks
-// waits behind itself, not in front of everyone else (seen: one check-spamming
-// attempt starving a whole run's checks). Any idle ready worker takes the next job.
+// waits behind itself, not in front of everyone else. Any idle ready worker takes the
+// next job.
 const queues = new Map(); // client -> FIFO of jobs
 const rr = []; // clients with pending jobs, in service order
 function enqueue(client, job) {
@@ -743,11 +682,10 @@ const server = createServer((req, res) => {
       recycling,
       // EVERYTHING this server decides, so a client can check it is the one it thinks it
       // is. The watchdog keeps a server alive for days, across git pulls, so the code on
-      // disk and the code deciding today's checks are not necessarily the same — and
-      // `max_heartbeats` alone did not notice, because it is the one number that has not
-      // moved since July. check_sha covers the injected `set_option` head (linters,
-      // typeclass budget) and the fuses too; run.js refuses to launch on a mismatch and
-      // prints check_env field by field to say what moved.
+      // disk and the code deciding today's checks are not necessarily the same.
+      // check_sha covers the injected `set_option` head (linters, typeclass budget) and
+      // the fuses; run.js refuses to launch on a mismatch and prints check_env field by
+      // field to say what moved.
       check_sha: CHECK_SHA,
       check_env: checkEnv(),
       max_heartbeats: MAX_HEARTBEATS,
@@ -759,7 +697,7 @@ const server = createServer((req, res) => {
       // The external-search rate slots (see slotPump). Informational, deliberately NOT
       // in check_sha: pacing costs wall clock and nothing else — it cannot move a
       // verdict or change one byte the agent sees — and a server without it degrades to
-      // the extension calling out directly, which is what happened before it existed.
+      // the extension calling out directly.
       search_slots: { rate_per_min: SEARCH_RATE_PER_MIN, burst: SEARCH_BURST, tokens: +slotRefill().toFixed(2), granted: slotsGranted, paced: slotsPaced, queued: [...slotQueues.values()].reduce((n, q) => n + q.length, 0) },
       queued: Object.fromEntries([...queues].map(([k, v]) => [k, v.length])),
       workers: workers.map((w) => ({ id: w.id, ready: w.ready, busy: w.busy })),
@@ -814,7 +752,7 @@ const server = createServer((req, res) => {
       // The env identity is part of the key: the same bytes compile differently with a
       // library baked in, and a memo entry must never cross that boundary (the memo
       // survives recycles and, in principle, a future durable store).
-      prep.key = createHash("sha256").update(`${prep.text} ${LIB_SHA ?? ""}`).digest("hex");
+      prep.key = createHash("sha256").update(`${prep.text}\0${LIB_SHA ?? ""}`).digest("hex");
       // Memo hits skip the queue entirely — re-verification of an unchanged file must
       // never wait behind live checks. force=true (the grader) skips the lookup: the
       // recorded verdict must come from a real compile. The fresh result still lands in

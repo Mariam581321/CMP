@@ -1,7 +1,7 @@
 // @tools add_fact
-// Experimental arm (PLAN.md block C, spawn+facts): the shared, append-only bank of
-// verified lemmas — the channel between the main agent and its workers, with the
-// compiler as the only writer. Core logic (gate, lock, rendering) in runner/facts.js.
+// The shared, append-only bank of verified lemmas — the channel between the main agent
+// and its workers, with the compiler as the only writer. Core logic (gate, lock,
+// rendering) in runner/facts.js.
 //
 // Monotonicity is mechanical, not requested: a tool_call handler blocks write/edit
 // calls resolving to the bank file, so the bank is readable with the ordinary read
@@ -19,13 +19,12 @@ export default function (pi: ExtensionAPI) {
   const cfg = cmpConfig();
   const factsFile: string = cfg.facts_file ?? join(process.cwd(), "facts.lean");
   // Agent-facing name follows the actual file: facts.lean in attempts, library.lean
-  // in the block-D librarian phase.
+  // in the librarian phase.
   const bankName = basename(factsFile);
   const client: string = cfg.problem ?? "anon";
   const isWorker = cfg.worker != null;
-  // The snippetfacts arm (2026-08-12) runs the bank WITHOUT lean-spawn: don't promise
-  // "workers you spawn" when no spawn tool exists. Same detection lean-spawn uses for
-  // the bank; combos that carry both are byte-identical to before.
+  // The bank can run WITHOUT lean-spawn: don't promise "workers you spawn" when no
+  // spawn tool exists. Same detection lean-spawn uses for the bank.
   const hasSpawn = (cfg.tools ?? []).includes("spawn_subagents");
 
   pi.on("tool_call", (event) => {

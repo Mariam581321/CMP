@@ -3,16 +3,14 @@
 // pi's session jsonl IS the durable, linear record of an attempt: one entry per
 // completed message (assistant with full `usage`, toolResult, user), appended as they
 // happen. Everything the runner accounts for — turns, tool calls, nudges, tokens,
-// cost — reconstructs from it byte-exactly (verified against 0802 records, including
-// the killed and the OOM-killed attempts).
+// cost — reconstructs from it byte-exactly.
 //
-// The runner used to read the same numbers off pi's `--mode json` event stream
-// instead. That stream re-emits the WHOLE accumulated assistant message once per token
-// delta, so one message of T deltas costs O(T^2) bytes, and pi's writer queues them in
-// memory with no backpressure (core/output-guard.js). A long thinking block therefore
-// killed the child with a V8 heap abort — 11 attempts across 0727-0802 died that way,
-// recorded as `agent_died`. Reading the file instead makes the accounting linear in
-// what actually happened, and the child no longer has to say anything on stdout.
+// Not pi's `--mode json` event stream: that stream re-emits the WHOLE accumulated
+// assistant message once per token delta, so one message of T deltas costs O(T^2)
+// bytes, and pi's writer queues them in memory with no backpressure
+// (core/output-guard.js), so a long thinking block kills the child with a V8 heap
+// abort. Reading the file instead makes the accounting linear in what actually
+// happened, and the child no longer has to say anything on stdout.
 //
 // Polling, not fs.watch: one stat() per second per attempt is nothing next to the run,
 // and watch semantics on appended files vary by platform. Reads are incremental (byte
@@ -82,15 +80,10 @@ export function tailSession(sessionDir, onEntry, opts) {
 }
 
 // The accounting the runner keeps per attempt, fed one session entry at a time.
-// Mirrors what run.js used to derive from the event stream, replayed over all 47
-// finished 0802 attempts: tokens and cost_std match byte-exactly, always. Two counts
-// shift by at most one, and only on attempts the runner killed:
-//   tool_calls now means "returned a result", where the event stream counted "started
-//   executing" — a SIGKILL mid-tool is the difference, and the session file cannot tell
-//   that apart from a final call the agent loop never began (both are a toolCall block
-//   with no result), so no definition reproduces the old count in both directions.
-//   turns counts assistant messages, which no longer misses the last turn when the
-//   budget kill lands between the message landing and its turn_end.
+//   tool_calls means "returned a result": a SIGKILL mid-tool leaves a toolCall block
+//   with no result, indistinguishable from a final call the agent loop never began.
+//   turns counts assistant messages, so the last turn is counted even when the budget
+//   kill lands between the message landing and its turn_end.
 export function newStats() {
   return { turns: 0, userMsgs: 0, toolCalls: {}, tokens: { in: 0, out: 0, cache_read: 0 }, cost: 0 };
 }

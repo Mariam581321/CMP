@@ -64,7 +64,8 @@ unavailable, never as a verdict. Results are memoized by file hash. A file conta
 deprecation warnings are kept.
 
 Environment: `CMP_LEAN_ENV` (default `lean-env/`), `CMP_REPL_BIN`, `CMP_REPL_WORKERS`
-(default 8; the pool costs about 6 GB once plus 1 to 3 GB per worker) and
+(default 6, one per physical core; the pool costs about 6 GB once plus 1 to 3 GB per
+worker) and
 `CMP_REPL_MAX_RSS_MB`. `run.js` records the server's check fingerprint in `run.json`
 and refuses to launch against a server whose checks differ from the checkout's.
 

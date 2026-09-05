@@ -55,10 +55,9 @@ for (const p of problems) {
 console.log("");
 for (const r of runs) {
   const all = problems.map((p) => r.byProblem[p]).filter(Boolean);
-  // Back-compat only: runs before 2026-07-30 could end an attempt "provider_error" when
-  // an outage truncated it, and those records are still on disk. Nothing writes that end
-  // any more — pi-agent/settings.json retries inside the SDK instead — so for new runs
-  // both filters are no-ops.
+  // Back-compat only: early runs could end an attempt "provider_error" when an outage
+  // truncated it. Nothing writes that end any more — pi-agent/settings.json retries
+  // inside the SDK instead — so for new runs both filters are no-ops.
   const aborted = all.filter((x) => reasonOf(x) === "provider_error");
   const recs = all.filter((x) => reasonOf(x) !== "provider_error");
   const solved = recs.filter((x) => x.solved);
@@ -72,8 +71,8 @@ for (const r of runs) {
   // One "searches" number across both retrieval arms: an arm carries search_mathlib OR
   // grep_mathlib, never both, so summing them keeps the column comparable between a
   // semantic and a grep cell instead of showing the grep cell as having done no search.
-  // check_snippet is counted separately — block B's substitution question is whether
-  // snippet displaces search, so the two must stay distinguishable.
+  // check_snippet is counted separately, so that whether snippet displaces search
+  // stays visible.
   const searches = recs.reduce((s, x) => s + (x.tool_calls?.search_mathlib ?? 0) + (x.tool_calls?.grep_mathlib ?? 0), 0);
   const snippets = recs.reduce((s, x) => s + (x.tool_calls?.check_snippet ?? 0), 0);
   const tokIn = recs.reduce((s, x) => s + (x.tokens?.in ?? 0), 0);

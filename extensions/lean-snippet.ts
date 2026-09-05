@@ -1,9 +1,7 @@
 // @tools check_snippet
-// Experimental arm (PLAN.md block B): scratch verification — compile any snippet,
-// no files involved. Motivated by the autopsies: agents already write scratch .lean
-// files and try to compile them (silently inert today), and clobber the graded file
-// with probes, destroying best states (fateh_28: statement_changed after 371 turns
-// of scratch work in problem.lean). Like the search arms, the whole prompt delta
+// Scratch verification — compile any snippet, no files involved. Without it agents
+// write scratch .lean files that nothing compiles, or clobber the graded file with
+// probes and destroy their best state. Like the search arms, the whole prompt delta
 // lives in the tool description. Core logic in runner/snippet.js.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";

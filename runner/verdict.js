@@ -1,30 +1,16 @@
 // THE reading of a compile result: what is wrong with this file, and would it grade
 // solved. Every part of the harness that answers that question reads it from here —
-// the header line the agent sees first (runner/render.js), lean_check's and
-// plan_check's failure wording, the supervisor's stop-nudging test, and the solved
-// high-water snapshot gate (runner/highwater.js).
+// the header line the agent sees first (runner/render.js), lean_check's failure
+// wording, the supervisor's stop-nudging test, and the solved high-water snapshot gate
+// (runner/highwater.js).
 //
-// Why one place. Every time two parts of this harness kept their own idea of "green"
-// they drifted, and the drift was only ever visible after a run:
-//   * agent-facing check vs grader on what "compiles" means (fixed 2026-07-27);
-//   * the axiom axis — lean_check said green on a file the grader failed as
-//     bad_axioms (2026-08-04, spawn-fatex10-0804 fatex_99 and three 0802 incidents);
-//   * the sorry axis (found 2026-08-11, live in every 0807-freeze cell): the in-loop
-//     axiom parse dropped sorryAx entirely, so a proof that reached sorryAx WITHOUT a
-//     listable `sorry` — apply?/exact? admit the goal silently; `exact sorryAx ...`
-//     written out — passed this gate while the grader failed it as uses_sorry.
-//     14 attempts across 6 cells watched a green check on an unsolvable file;
-//   * the header itself (introduced and fixed the same day, 2026-08-07): it was computed
-//     from the compiler's messages alone, so a file with a rewritten statement or a
-//     smuggled axiom would open with `CLEAN — no errors, no sorries` and then have a
-//     `CHECK FAILED: you modified the theorem statement` paragraph glued on above it —
-//     the first 200 characters, the part of a check designed to be unmissable, saying
-//     the opposite of the verdict. This one never reached a run (the header postdates
-//     both block-A cells), so the number below is a rate, not damage: 683 of the 13,058
-//     checks in those cells were statement-tampered or axiom-tampered, i.e. that is how
-//     often the contradiction would have fired in a cell.
-// So `done` here is the ONLY definition of a green file, and the header word is
-// derived from it rather than computed alongside it.
+// Why one place: whenever two parts of the harness kept their own idea of "green" they
+// drifted — on what "compiles" means, on the axiom axis (a green check on a file the
+// grader fails as bad_axioms), on the sorry axis (apply?/exact? admit the goal via
+// sorryAx with no listable `sorry`), and in the header itself (a CLEAN first line above
+// a "you modified the theorem statement" paragraph). So `done` here is the ONLY
+// definition of a green file, and the header word is derived from it rather than
+// computed alongside it.
 
 import { ALLOWED_AXIOMS } from "./common.js";
 
@@ -56,7 +42,7 @@ export function checkStatus(check = {}) {
   const compiles = errors.length === 0 && check.ok !== false;
   // sorryAx reached without a `sorry` the server could list: apply?/exact? admit the
   // goal silently, `exact sorryAx ...` does it in a term. The grader fails these as
-  // uses_sorry, so `done` must too (the 2026-08-11 false-green class above). Surfaced
+  // uses_sorry, so `done` must too. Surfaced
   // only when it is the ONLY sorry signal — with errors present, recovery turns every
   // failed proof into sorryAx and the report is noise; with a listed sorry the header
   // already says sorry. `done` is already false in both of those cases, so gating the
@@ -118,17 +104,14 @@ export const axiomList = (status) =>
   Object.entries(status.axiomsBad).map(([d, a]) => `${d}: [${a.join(", ")}]`).join("; ");
 
 // The agent-facing explanation of everything blocking this file that is NOT ordinary
-// compiler output. One wording, used by lean_check, plan_check and the supervisor's
-// nudge — three places that used to carry three near-copies of these paragraphs and
-// could drift in what they claimed grading does.
+// compiler output. One wording, used by lean_check and the supervisor's nudge, so they
+// cannot drift in what they claim grading does.
 export function blockerNotes(status) {
   const notes = [];
   if (status.stmtBad) {
-    // Quote the file to restore, not just the instruction to restore it. Agents that
-    // trip this have usually overwritten their only copy of the original; without the
-    // quote they re-guess the line from memory — measured at 2,745 flagged checks
-    // across the 0807-freeze grid, worst case 159 rounds on one attempt, and one
-    // attempt (snippet fatex_33) that never recovered a one-token universe change.
+    // Quote the file to restore, not just the instruction to restore it: agents that
+    // trip this have usually overwritten their only copy of the original and otherwise
+    // re-guess the line from memory, sometimes for dozens of rounds.
     const quote = status.stmtOriginal
       ? `\n\nThe ORIGINAL file was, byte-exact (restore every declaration to this, keeping your ` +
         `helper lemmas above the statement and your proof in place of the sorry):\n` +

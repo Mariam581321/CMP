@@ -21,7 +21,7 @@ if (!dirs.length) {
   process.exit(1);
 }
 
-// The env identity gate (block D): regrading a run against a server with a different
+// The env identity gate: regrading a run against a server with a different
 // library baked in (or none, when the run had one) would flip verdicts for reasons that
 // have nothing to do with the grader — silently. Same refusal as run.js's launch check.
 const health = await fetch(`${LEAN_URL}/health`, { signal: AbortSignal.timeout(3000) })
@@ -48,13 +48,9 @@ for (const runDir of dirs) {
     continue;
   }
   const problemsDir = runMeta.problems_dir ?? join(ROOT, "problems");
-  // No budget is passed any more: the verdict is the server's heartbeat cap, so a regrade
+  // No budget is passed: the verdict is the server's heartbeat cap, so a regrade
   // reproduces a run's metric exactly when the server enforces the cap that run recorded
-  // (run.json `max_heartbeats`, recorded from the live server). Runs older than
-  // 2026-08-01 recorded a CPU or wall budget instead; those runs are pre-freeze anyway,
-  // and a regrade of one shows how TODAY's grader judges the same files — which is what
-  // this tool is for. The one systematic difference is one-directional: a file that only
-  // ever failed by aggregate cost now compiles.
+  // (run.json `max_heartbeats`, recorded from the live server).
   const probs = readdirSync(runDir).filter((f) => statSync(join(runDir, f)).isDirectory());
   console.log(bold(`\n${runMeta.run_id} (${probs.length} attempts)`));
 

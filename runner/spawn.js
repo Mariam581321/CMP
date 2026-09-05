@@ -1,13 +1,11 @@
-// spawn_subagents core (PLAN.md block C): launch one worker pi subprocess per task,
-// follow its session file, and hand back its final message as the report. Shared by
+// spawn_subagents core: launch one worker pi subprocess per task, follow its session
+// file, and hand back its final message as the report. Shared by
 // extensions/lean-spawn.ts.
 //
 // A worker is a CHILD PI PROCESS, not an in-process SDK session, deliberately: it is
 // the exact launch shape run.js already trusts (same --mode text/no-stdout discipline,
-// same max-tokens extension, same session-file accounting — see SKELETON.md "Why the
-// runner does not read stdout"), it cannot take the parent down with it (the 0802
-// SIGABRT class), and the installed pi (0.80.6) is behind the checked-out source, so
-// the SDK surface is unverified where the CLI surface runs every day.
+// same max-tokens extension, same session-file accounting), and it cannot take the
+// parent down with it.
 //
 // Process hygiene: workers are spawned WITHOUT detaching, so they stay in the parent
 // pi's process group — the runner's budget/backstop SIGKILL of that group reaps them
@@ -37,10 +35,9 @@ const extTools = (name) => {
   return m ? m[1].split(",").map((s) => s.trim()).filter(Boolean) : [];
 };
 
-// Workers always get check_snippet (PLAN: "workers get check_snippet (+ search), not
-// lean_check"), whatever search arms the parent combo carries, and add_fact iff the
-// facts arm is on. Everything else — file tools, lean_check, plan_check, spawn — is
-// deliberately absent.
+// Workers always get check_snippet, whatever search arms the parent combo carries, and
+// add_fact iff the facts arm is on. Everything else — file tools, lean_check, spawn —
+// is deliberately absent.
 export function workerExtensions(combo) {
   const exts = [
     "lean-snippet",
@@ -53,10 +50,9 @@ export function workerExtensions(combo) {
 const capText = (s, n) => (s.length > n ? s.slice(0, n) + "\n... (truncated)" : s);
 
 function workerSystemPrompt(cfg) {
-  // The context block is the problem statement by default (block C: "workers see one
-  // subgoal + the parent statements"). A phase without a single problem — the block-D
-  // librarian — swaps in its own preamble via cfg.worker_preamble_file instead; the
-  // parent's task text stays the only other channel either way.
+  // The context block is the problem statement by default. A phase without a single
+  // problem — the librarian — swaps in its own preamble via cfg.worker_preamble_file
+  // instead; the parent's task text stays the only other channel either way.
   const preamble =
     cfg.worker_preamble_file && existsSync(cfg.worker_preamble_file)
       ? readFileSync(cfg.worker_preamble_file, "utf8").trim()
@@ -92,13 +88,12 @@ Rules:
 // after launch) to { idx, end, report, stats } once the worker exits and its session
 // is drained; kill(reason) stops it early. onTokens(usage) fires per completed
 // assistant message so the caller can keep a live ledger for the supervisor.
-// maxCostStd is a HARNESS-side knob only (the triage cap, block-D per-worker caps): it
-// is deliberately not exposed in the spawn tool schema — the model is never given
-// budget or spend language to reason about (2026-08-04).
-// `view` ({ exts, tools, systemPrompt }) overrides the block-C worker view for other
-// worker-shaped agents (the triage judge, and anything after it) — same process
-// hygiene, session accounting and report channel, different role. `dirName` names the
-// worker dir (default wN; triage uses the problem name).
+// maxCostStd is a HARNESS-side knob only (per-worker caps in the library phase): it is
+// deliberately not exposed in the spawn tool schema — the model is never given budget
+// or spend language to reason about.
+// `view` ({ exts, tools, systemPrompt }) overrides the worker view for other
+// worker-shaped agents — same process hygiene, session accounting and report channel,
+// different role. `dirName` names the worker dir (default wN).
 export function runWorker({ idx, task, maxCostStd = 0, cfg, onTokens, view, dirName }) {
   const wDir = join(cfg.workers_dir, dirName ?? `w${idx}`);
   const work = join(wDir, "work");

@@ -21,45 +21,31 @@ export { CLIENT_WAIT_MS };
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const STMT_CACHE = join(ROOT, "problems", "stmt-types.json");
 
-// ONE definition of "compiles" for agent checks, supervisor and grader (2026-07-27):
-// a solve must be observable inside the agent's own feedback loop, or a proof the
-// agent's tool rejects could secretly count as solved. Since 2026-08-01 that is free
-// rather than enforced — no client passes a bound at all. The verdict is the server's
+// ONE definition of "compiles" for agent checks, supervisor and grader: a solve must be
+// observable inside the agent's own feedback loop, or a proof the agent's tool rejects
+// could secretly count as solved. No client passes a bound: the verdict is the server's
 // per-declaration `maxHeartbeats` cap (MAX_HEARTBEATS in common.js), a pure function of
-// the file, so agent, supervisor, grader and any later regrade necessarily agree on it
-// whoever compiles first. What used to differ between them — a measured CPU budget
-// passed per request — is gone: CPU is a machine fuse the server owns.
-// The outermost bound of the check chain lives in runner/check-env.js, derived from the
-// fuses rather than written down next to them, and is re-exported here for the clients
-// that have always imported it from this module.
+// the file, so agent, supervisor, grader and any later regrade agree on it whoever
+// compiles first. CPU is a machine fuse the server owns. The outermost bound of the
+// check chain lives in runner/check-env.js and is re-exported here.
 
 // Names of the declarations the benchmark expects (theorem + setup defs/abbrevs),
 // FULLY QUALIFIED: FATE-X wraps every file in `namespace ProblemN`, so the environment
-// name the probe must look up is `ProblemN.<head>`, not the bare head (all 100 FATE-X
-// probes came back `missing` before this tracked scopes, 2026-08-02). The tracker is a
+// name the probe must look up is `ProblemN.<head>`, not the bare head. The tracker is a
 // plain stack — every `end` closes exactly one scope-opening command in well-formed
 // Lean, and these are sanitized, machine-generated files (no comments, no `mutual`, no
-// modifier forms; the corpus has no `private`/`protected`/`_root_` heads — grep.js
-// rung 0 shows what tracking costs when those assumptions fail, and none of them holds
-// a benchmark file). Sections push an empty prefix; dotted namespaces and dotted decl
-// heads concatenate. Unchanged for namespace-free corpora (PutnamBench, FATE-M/H): no
-// scopes ever open, so the emitted names are the bare heads exactly as before.
-// Lean names are not \w: subscripts (eval₂_…), primes (M'), and pure-unicode idents
-// (τ, 𝔽) are all legal, so match everything up to a delimiter instead of an ASCII set.
+// modifier forms). Sections push an empty prefix; dotted namespaces and dotted decl
+// heads concatenate. Namespace-free corpora emit the bare heads. Lean names are not \w:
+// subscripts (eval₂_…), primes (M'), and pure-unicode idents (τ, 𝔽) are all legal, so
+// match everything up to a delimiter instead of an ASCII set.
 //
-// `class`/`structure`/`inductive` are tracked too (2026-08-05). They were not, and that
-// was the whole hole behind the fatex_74 solve: FATE-X problem 74 ships
-// `class IsGorensteinLocalRing … where injDim_le_infity : ∃ n, ∀ i, n ≤ i → Subsingleton …`,
-// the attempt shipped `injDim_le_infity : True`, and the grader passed it. The theorem's
-// own type was untouched — it still reads `IsGorensteinRing (R ⧸ …)` — because a type
-// references a class by NAME only, exactly the setup-definition hole the CMPVAL value
-// probe closes for def/abbrev, left open for the field types of a class. 39 declarations
-// across FATE-X (36 class, 2 structure, 1 inductive) were unprotected; FATE-H, FATE-M and
-// PutnamBench have none, which is why it surfaced only here.
-// `instance` is deliberately NOT tracked: every instance in the corpus is anonymous, so
-// there is no source-level name to look up, and instances are covered transitively —
-// they are fully resolved inside the canonical types of the decls that use them, so
-// swapping or deleting one changes a tracked type or constructor.
+// `class`/`structure`/`inductive` are tracked too: a theorem's type references a class
+// by NAME only, so a weakened field (a class field replaced by `True`) leaves the
+// theorem's own type untouched — the same setup-definition hole the CMPVAL value probe
+// closes for def/abbrev. `instance` is deliberately NOT tracked: every instance in the
+// corpus is anonymous, so there is no source-level name to look up, and instances are
+// covered transitively — they are fully resolved inside the canonical types of the
+// decls that use them, so swapping or deleting one changes a tracked type or constructor.
 export function benchmarkDecls(originalSource) {
   const decls = [];
   const scopes = []; // each entry: [] for a section, the dot-split components for a namespace
@@ -82,12 +68,11 @@ export function benchmarkDecls(originalSource) {
 // (or |missing), plus one CMPVAL|<name>|<canonical value> line per def/abbrev
 // ("-" for theorems — proofs are the agent's to write and can be huge). The value
 // line closes the setup-definition hole: a theorem's TYPE references file-local
-// defs by NAME only, so an agent could gut a setup def's body (dist_to_int := fun
-// _ => 0, verified exploitable 2026-07-28) without changing the theorem's type.
-// For a class/structure/inductive the same hole exists one level down — the field
-// types live in the CONSTRUCTOR, not in the inductive's own type, which is just
-// `Type → … → Prop` and stays byte-identical when a field is gutted (measured on
-// fatex_74). So the value slot of an inductive carries every constructor's canonical
+// defs by NAME only, so an agent could gut a setup def's body without changing the
+// theorem's type. For a class/structure/inductive the same hole exists one level down
+// — the field types live in the CONSTRUCTOR, not in the inductive's own type, which is
+// just `Type → … → Prop` and stays byte-identical when a field is gutted. So the value
+// slot of an inductive carries every constructor's canonical
 // type, `<ctor>|<type>` joined by " ;; ", and the same value comparison that protects
 // def bodies protects class fields. `extends` parents are constructor arguments too,
 // so they are covered by the same string.
@@ -101,7 +86,6 @@ export function benchmarkDecls(originalSource) {
 // PREFIXED by the declaration's name (compiler-generated auxiliaries like .match_1 /
 // .proof_1 / ._unary, where the elaborator hoists branches) — a sorry inside a
 // referenced helper lemma lives in the helper's value and reports `clean` here.
-// That is exactly plan-validity: "main proof complete in terms of helpers".
 // Runs even when the file has errors: Lean's recovery still adds a declaration whose
 // signature elaborates (proof failures become sorryAx), so statement preservation is
 // checkable on non-compiling solutions too.
@@ -168,7 +152,7 @@ run_cmd do
 // The probe body the grader and every agent-facing check append, byte-identical: the
 // statement probe plus one `#print axioms` per benchmark declaration.
 //
-// `_root_.` on every name (2026-08-07). `#print axioms` takes an identifier and RESOLVES
+// `_root_.` on every name: `#print axioms` takes an identifier and RESOLVES
 // it against whatever namespace and `open`s the submitted file left in scope, unlike the
 // statement probe, whose `` `Name `` literals are absolute by construction. A solution
 // that leaves a namespace open, or opens one that happens to contain a matching prefix,
@@ -240,7 +224,7 @@ export function serverCheck(code, client = "grader", force = false) {
 // gitignored like the problem files; `grade.js --build-stmt-cache` rebuilds all, and
 // the sha key means a stale entry can only cause a recompute, never a wrong verdict).
 // The key does NOT include the compile environment, and that is safe only because of a
-// launch precondition rather than a mechanism: a baked library (block D) elaborates the
+// launch precondition rather than a mechanism: a baked library elaborates the
 // same statements in a richer env, and `runner/drift-check.js` requires ZERO drift in
 // canonical types and values before a library cell may run — so a cache entry written
 // under either env is by construction the same entry. If drift-check is ever skipped, a
@@ -330,26 +314,19 @@ export async function verifyStatement(problemName, originalSource, messages) {
 
 // The probe's CMPSTMT/CMPVAL lines are harness internals, not compiler feedback about
 // the agent's file, so they are removed before anyone sees the output. Rebuilt from the
-// STRUCTURED messages rather than filtered out of the server's rendered `pretty`, which
-// is what the old stripProbeOutput did: it split on blank lines and dropped whole
-// blocks, and render() joins its "compiled with output:" header to the first message
-// with a single newline — so on a clean compile, where the probe lines are the ONLY
-// output, the header was dropped along with them, the string emptied, and lean_check
-// answered "no output" at the exact moment the agent had succeeded. Measured in 31 of
-// 50 attempts in the 0730b run and again on 0731: agents responded by re-checking the
-// byte-identical file, spending a turn to re-ask a question already answered. It also
-// left the statement-changed message quoting an empty "Compiler output:".
-// Shape and cap live in runner/render.js, shared with lean-server's render() and
-// snippet.js's renderSnippet(), so one error format is used everywhere. The verdict the
-// header states is computed by runner/verdict.js from the WHOLE result — the server's
-// own `ok` and the statement and axiom verdicts included, which the caller passes in via
-// `opts` — so the first line of a check cannot say CLEAN about a file whose statement
-// was rewritten.
+// STRUCTURED messages rather than filtered out of the server's rendered `pretty`:
+// text filtering dropped the "compiled with output:" header along with them on a clean
+// compile, so lean_check answered "no output" at the exact moment the agent had
+// succeeded. Shape and cap live in runner/render.js, shared with lean-server's render()
+// and snippet.js's renderSnippet(), so one error format is used everywhere. The verdict
+// the header states is computed by runner/verdict.js from the WHOLE result — the
+// server's own `ok` and the statement and axiom verdicts included, which the caller
+// passes in via `opts` — so the first line of a check cannot say CLEAN about a file
+// whose statement was rewritten.
 const PROBE_LINE = /^\s*CMP(?:STMT|VAL)\|/;
-// `#print axioms` reports are probe internals too (since 2026-08-04 they ride on every
-// checkedCompile, not only the grader's request): the verdict is parsed line-gated and
-// surfaced as an explicit axiom-check message, so the raw report lines are stripped
-// from rendered output the same way CMPSTMT lines are.
+// `#print axioms` reports are probe internals too (they ride on every checkedCompile):
+// the verdict is parsed line-gated and surfaced as an explicit axiom-check message, so
+// the raw report lines are stripped from rendered output the same way CMPSTMT lines are.
 const AXIOM_LINE = /^'[^']*' (?:depends on axioms|does not depend on any axioms)/;
 export function renderWithoutProbe(messages, sorries, opts = {}) {
   const visible = (messages ?? []).filter((m) => !PROBE_LINE.test(m.text ?? "") && !AXIOM_LINE.test(m.text ?? ""));
@@ -374,7 +351,7 @@ function writeFullOutput(dir, name, text) {
 }
 
 // --- agent-facing check client ----------------------------------------------
-// The ONE way agent-facing tools (lean_check, plan_check) compile the agent's file:
+// The ONE way agent-facing tools (lean_check) compile the agent's file:
 // probe rides on the same request (no separate compile), probe output is stripped
 // from what the agent sees, and the statement verdict comes back alongside the
 // compile result — so the agent-facing check and the grader cannot drift.
@@ -410,12 +387,9 @@ export async function checkedCompile(code, { original, problemName, client, work
   // The probe body is built exactly like the grader's (stmtProbe + one `#print
   // axioms` per benchmark decl, grade.js): agent-facing checks and the grading
   // request compile the same bytes, so nothing the grader will decide is invisible
-  // in the agent's own loop. The axiom side closed the last gap (2026-08-04): a
-  // smuggled `axiom` + `exact` passed compile, statement and sorry checks, so
-  // lean_check said green and the supervisor let the attempt end on a file the
-  // grader then failed as bad_axioms — the agent-watches-green-gets-graded-red
-  // class, on the one axis the heartbeat work didn't cover (spawn-fatex10-0804
-  // fatex_99, and the 0802 audit's three axiom-gaming incidents before it).
+  // in the agent's own loop — the axiom check included, without which a smuggled
+  // `axiom` + `exact` passes compile, statement and sorry checks and the supervisor
+  // lets the attempt end on a file the grader then fails as bad_axioms.
   const decls = benchmarkDecls(original);
   const probes = axiomProbe(decls);
   const r = await postCheck({ code: `${code}\n${probes}`, client }, CLIENT_WAIT_MS);
@@ -425,12 +399,10 @@ export async function checkedCompile(code, { original, problemName, client, work
   // Axiom verdict, the grader's own parser (axiomReports). sorryAx is kept OUT of
   // axiomsBad — it is a sorry, not a smuggled axiom, and the axiom-channel wording
   // ("can NEVER count") would be wrong for it — but it is NOT dropped: it feeds
-  // `axSorries`, which the verdict (runner/verdict.js) requires empty for `done`.
-  // Dropping it entirely was the apply? false green (audit 2026-08-11: 14 attempts in
-  // 6 grid cells watched a green check on a proof the grader failed as uses_sorry) —
-  // a suggestion tactic admits the goal via sorryAx with no `sorry` the server can
-  // list, and `exact sorryAx ...` written out does the same. The grader has always
-  // caught these (grade.js keeps sorryAx); the gate now reads the same report.
+  // `axSorries`, which the verdict (runner/verdict.js) requires empty for `done`: a
+  // suggestion tactic (apply?/exact?) admits the goal via sorryAx with no `sorry` the
+  // server can list, and `exact sorryAx ...` written out does the same. The grader
+  // fails both as uses_sorry (grade.js keeps sorryAx); the gate reads the same report.
   const reports = axiomReports(r.messages, code.split("\n").length, decls);
   const axiomsBad = {};
   const axSorries = [];
@@ -450,19 +422,12 @@ export async function checkedCompile(code, { original, problemName, client, work
     : bare;
   // No `status` field on the way out, deliberately: the result carries the FACTS
   // (ok, sorries, stmt, axiomsBad) and every consumer reads them through
-  // checkStatus()/verifiedDone(). A cached verdict travelling alongside the facts it was
-  // computed from is a second copy that can go stale, which is the whole bug class this
-  // change exists to close.
+  // checkStatus()/verifiedDone(), so no cached verdict can go stale beside them.
   // `stmtOriginal` rides along so the statement-modified blocker can QUOTE the file to
-  // restore. Measured need (0807-freeze audit, 2026-08-12): 357 of ~640 attempts tripped
-  // the blocker, 2,745 flagged checks, 49 attempts thrashed >=10 rounds re-guessing a
-  // line they had overwritten — snippet fatex_33 burned 69 rounds on `Type` vs `Type*`
-  // with the answer sitting in a file the harness had and the agent no longer did.
-  // FLAG-GATED (CMP_STMT_QUOTE=1), default OFF, because the quote is an experimental
-  // ARM, not a fix: it changes what 56% of attempts read, so it must never leak into a
-  // cell that claims comparability with the 0807 freeze — including the fgrerun
-  // rerun-patches, which must differ from their cells by the sorryAx gate fix ONLY.
-  // The basequote cell launched with the flag on.
+  // restore (agents that trip it have usually overwritten their only copy of the
+  // original and re-guess the line from memory). FLAG-GATED (CMP_STMT_QUOTE=1), default
+  // OFF: the quote changes what the agent reads, so it is an experimental arm, not a
+  // fix, and the grid ran without it.
   const stmtOriginal = process.env.CMP_STMT_QUOTE === "1" ? original : null;
   return { ...r, pretty: shown.pretty, full: bare.full, probe, stmt, axiomsBad, axSorries, stmtOriginal };
 }

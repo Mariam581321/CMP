@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Statement-drift recheck (block D guard): with a library baked into the lean
+// Statement-drift recheck (library-cell guard): with a library baked into the lean
 // server's env, new instances could change how a BENCHMARK STATEMENT elaborates —
 // which would silently change what is being proved. This script recompiles every
 // statement against the CURRENT server env and compares each declaration's
@@ -8,7 +8,7 @@
 // precondition for the library cell; any drift means pruning the offending library
 // instances and re-freezing.
 //
-//   node runner/drift-check.js problems-fatex problems-fatex/scoreable95.txt
+//   node runner/drift-check.js problems-fatex problems-fatex/safe90.txt
 //
 // Run it with the LIBRARY server up (it checks /health and tells you which env it
 // measured). It never writes the stmt-types cache — the cache stays the bare-env

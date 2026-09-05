@@ -8,8 +8,7 @@
 // Flags: --combo a,b ("" = baseline) --problems <file> --budget-std <usd> (1.00)
 //        --timeout <s> (172800, wall-clock backstop)
 //        --concurrency <n> (25) --model <id> --thinking <level> (high) --run-id <s>
-//        --problems-dir <dir> (problems/; e.g. problems-nl/ for statements with
-//        the informal NL docstring kept)
+//        --problems-dir <dir> (problems-fatex/)
 //
 // What "compiles" means is not a flag: it is the lean server's per-declaration
 // maxHeartbeats cap (MAX_HEARTBEATS in common.js), recorded in run.json as
@@ -43,31 +42,23 @@ try {
       "problems-dir": { type: "string", default: join(ROOT, "problems-fatex") },
       "budget-std": { type: "string", default: "1.00" },
       timeout: { type: "string", default: "172800" },
-      // 25: sized for the 64 GB server (2026-08-02). With checks served warm by the
-      // 8-worker REPL pool the LLM is the bottleneck — the fatex-rest90 run held
-      // "0 checks queued" at concurrency 12 — and under the deterministic heartbeat
-      // verdict load can stretch wall clock but can no longer flip a verdict, so
-      // concurrency is purely a throughput knob. The laptop-era caution (25-30 put a
-      // run plus a Claude session over the 12 GB memory floor, the 0727 VM death)
-      // does not apply on this box.
+      // A throughput knob only: under the deterministic heartbeat verdict, load can
+      // stretch wall clock but cannot flip a verdict.
       concurrency: { type: "string", default: "25" },
       model: { type: "string", default: "deepseek/deepseek-v4-flash" },
-      // Thinking is fixed config for the whole grid, not an arm (PLAN: a model knob,
-      // not a harness answer; the on/off pilot found thinking-on same-or-better and
-      // cheaper). It defaults to the grid value so a forgotten flag can no longer
-      // produce an off-protocol run that looks perfectly normal in the output.
+      // Fixed for the whole grid; defaults to the grid value so a forgotten flag
+      // cannot produce an off-protocol run that looks normal in the output.
       thinking: { type: "string", default: "high" },
       "max-tokens": { type: "string", default: "384000" },
-      // Block D: a finished library phase's results dir (runner/library.js). The
-      // library must ALREADY be baked into the running lean server (CMP_LIB_FILE);
-      // this flag makes the run verify that, advertise the library in the prompt,
-      // and stamp library_sha into every record.
+      // A finished library phase's results dir (runner/library.js). The library must
+      // already be baked into the running lean server (CMP_LIB_FILE); this flag makes
+      // the run verify that, advertise the library in the prompt, and stamp
+      // library_sha into every record.
       library: { type: "string" },
       "run-id": { type: "string" },
-      // Continue dead attempts of an EXISTING run in their own sessions (pi -c):
-      // the session jsonl is the durable record, and the tail reads it from byte 0,
-      // so spend, turns, and the budget all bind cumulatively across segments. Built
-      // for the 2026-08-16 402 outage; only ever revives attempts, never re-prompts
+      // Continue dead attempts of an EXISTING run in their own sessions (pi -c): the
+      // session jsonl is read from byte 0, so spend, turns and the budget bind
+      // cumulatively across segments. Only ever revives attempts, never re-prompts
       // finished ones. --problems must list exactly the attempts to revive.
       resume: { type: "boolean", default: false },
     },
@@ -85,20 +76,16 @@ const PROBLEMS_DIR = resolve(A["problems-dir"]);
 // (tokens at the fixed off-peak table, so the cap is peak-invariant). Checked after each
 // assistant message, so enforcement lags by up to one message — accepted overshoot.
 // Wall clock stays only as a generous backstop: a hung REPL or silent provider emits no
-// usage events, so a spend cap alone would never fire. 0 disables the budget.
-// Backstop sizing: burn varies hugely — check-queue-bound attempts at high concurrency
-// spend <$0.08/h (fateh81 0727: three attempts killed at 14 h with budget unspent), so
-// the backstop must sit far above the slowest plausible path to $1. 48 h means a timeout
-// verdict is "genuinely hung", never "slow but working".
+// usage events, so a spend cap alone would never fire. 0 disables the budget. The
+// backstop sits far above the slowest plausible path to $1, so a timeout means
+// "genuinely hung", never "slow but working".
 const BUDGET_STD = parseFloat(A["budget-std"]);
 const TIMEOUT_S = parseInt(A.timeout);
 const CONCURRENCY = parseInt(A.concurrency);
 const MODEL = A.model;
 const THINKING = A.thinking;
-// Flag NAMES are strict above; VALUES were not: `--budget-std 1..0` parsed to NaN and
-// silently disabled the cap (recorded as if intentional), and a NaN --timeout became a
-// ~1 ms setTimeout that SIGKILLed every attempt at birth. A typo'd number must be as
-// hard an error as a typo'd flag.
+// Flag VALUES are validated too: a NaN budget would silently disable the cap and a
+// NaN timeout would SIGKILL every attempt at birth.
 for (const [flag, v, min] of [
   ["budget-std", BUDGET_STD, 0],
   ["timeout", TIMEOUT_S, 1],
@@ -110,22 +97,15 @@ for (const [flag, v, min] of [
     process.exit(1);
   }
 }
-// Always send an explicit output cap — DeepSeek's server default is 8192/response when
-// none is sent, and PLAN's protocol says a tight cap may only ever be a manipulated
-// factor. Capped experiment cells pass e.g. --max-tokens 8192; 0 falls back to the
-// provider default (don't use in real runs).
-// The flag is the CEILING on a single response, not a flat reservation: the model max
-// (384000) stays the default, and extensions/max-tokens.ts injects
-// clamp(window - context - slack, 131072, ceiling) per request, which offers the model
-// whatever room physically exists. (Sending the ceiling FLAT was wrong — the cap is
-// charged against the context window at admission, so it capped conversation at 664576
-// and 400'd everything past it; fatex-rest90's 19867 assistant messages never exceeded
-// 122423 output.) Near the window the 131072 floor forces an admission 400 — free,
-// pre-inference — which triggers pi's compact-and-retry, and the attempt continues
-// with a fresh window for as long as it runs.
+// Always send an explicit output cap (DeepSeek's server default is 8192/response when
+// none is sent). The flag is the CEILING on a single response, not a flat reservation:
+// extensions/max-tokens.ts injects clamp(window - context - slack, 131072, ceiling) per
+// request, which offers the model whatever room physically exists. Near the window the
+// floor forces a pre-inference admission 400, which triggers pi's compact-and-retry.
+// 0 falls back to the provider default (don't use in real runs).
 const MAX_TOKENS = parseInt(A["max-tokens"]);
-// Library cell (block D): resolve the phase artifacts up front — a missing or
-// half-written phase dir must fail the launch, not the 40th attempt.
+// Library cell: resolve the phase artifacts up front — a missing or half-written
+// phase dir must fail the launch, not the 40th attempt.
 let LIBRARY = null;
 if (A.library) {
   const dir = resolve(A.library);
@@ -139,13 +119,8 @@ if (A.library) {
 }
 const RUN_ID = A["run-id"] ?? `${COMBO.join("+") || "baseline"}-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "")}`;
 
-// No peak-hour guard. DeepSeek "will soon adopt" peak-valley pricing (2x during
-// 01:00–04:00 and 06:00–10:00 UTC), but billing checked 2026-07-31 was flat, so the
-// windows currently cost nothing and blocking launches inside them only got in the way
-// of testing. The comparison never depended on it: cost_std is peak-invariant by
-// construction, so peak pricing can waste real money but cannot move an arm result.
-// If it does activate, billed_usd (below) shows it and run.json's started_at plus each
-// attempt's wall_s are enough to work out the overlap after the fact.
+// No peak-hour guard: cost_std is priced at a fixed table, so peak pricing can cost
+// real money but cannot move a result; billed_usd (below) shows it.
 const IS_DEEPSEEK = MODEL.includes("deepseek");
 
 // ---------- setup ----------
@@ -168,13 +143,9 @@ process.env.PI_CODING_AGENT_DIR = join(ROOT, "pi-agent");
 // cannot corrupt the JSON event stream.
 process.env.OPENAI_LOG = "info";
 
-// A reused server is the normal case, not the exception — the watchdog keeps one alive
-// across runs — so without this every run inherited whatever state hours of serving had
-// left the workers in: ~2.5 GB of accumulated heap each, part swapped, and drifted onto
-// different slices of the .olean cache so they barely shared any (measured 2026-07-31).
-// The recycle costs ~1 min and nothing is queued behind it yet. Best effort by design:
-// a stale-but-working server beats losing the launch, which is the same reason the
-// import bound below is generous.
+// A reused server is the normal case (the watchdog keeps one alive across runs), so
+// recycle its workers before launching to clear hours of accumulated heap. Best effort
+// by design: a stale-but-working server beats losing the launch.
 async function recycleWorkers() {
   process.stdout.write(dim("  reusing lean server — recycling workers... "));
   try {
@@ -204,16 +175,10 @@ async function ensureLeanServer(logPath) {
   const health = () =>
     fetch(`${LEAN_URL}/health`, { signal: AbortSignal.timeout(2000) })
       .then((r) => r.json()).then((j) => j.ready).catch(() => null);
-  // CMP_NO_RECYCLE: launch onto a live server WITHOUT restarting its workers. The
-  // recycle is hygiene for the gap between runs (heap, .olean page sharing) and the
-  // server's 409 guard is supposed to stop it landing on a busy pool — but that guard
-  // is one instantaneous test, so a launch that arrives while the running cell is down
-  // to its last attempts can slip through an idle gap and kill ITS in-flight checks.
-  // That happened 2026-08-10: base-fatex90-0807-r2 stranded grep-fatex90-0807-r2's
-  // fatex_91 and fatex_95 for the full 5.5 h client wait. Skipping the recycle costs
-  // only the hygiene — accumulated heap, worse page sharing, so a slower cell — and
-  // cannot touch a verdict, which is the heartbeat cap's job and lives in check_sha.
-  // Agent-invisible and check_sha-invariant, so it does not move the freeze.
+  // CMP_NO_RECYCLE: launch onto a live server WITHOUT restarting its workers, for when
+  // another cell is still running on it (the server's 409 guard is one instantaneous
+  // test, and a recycle slipping through an idle gap kills that cell's in-flight
+  // checks). Skipping the recycle costs only hygiene and cannot touch a verdict.
   if (await health()) {
     if (process.env.CMP_NO_RECYCLE) console.log(dim("  reusing lean server — recycle skipped (CMP_NO_RECYCLE; another cell is live)"));
     else await recycleWorkers();
@@ -221,16 +186,13 @@ async function ensureLeanServer(logPath) {
   }
   const fd = openSync(logPath, "a");
   const child = spawn("node", [join(ROOT, "runner/lean-server.js")], { env: process.env, stdio: ["ignore", fd, fd] });
-  // Register the kill BEFORE anything below can throw. Both throws here abort the whole
-  // run, and until this existed the server we just spawned — plus its detached 6 GB
-  // repl — survived as orphans nobody knew to look for (2026-07-30). lean-server.js
-  // turns SIGTERM into exit, which kills its repl process groups.
+  // Register the kill BEFORE anything below can throw, or the spawned server and its
+  // repl outlive an aborted launch as orphans. lean-server.js turns SIGTERM into exit,
+  // which kills its repl process groups.
   process.on("exit", () => { try { child.kill("SIGTERM"); } catch {} });
   process.stdout.write(dim("  starting lean server (importing Mathlib)... "));
-  // Wait out the server's OWN import bound plus a margin, read from the same env var, so
-  // the two can't drift: a runner deadline shorter than the import bound shoots a
-  // healthy-but-slow import and costs the whole launch (which is exactly what a 9 min
-  // runner deadline did against a 15 min import bound).
+  // Wait out the server's OWN import bound plus a margin, read from the same env var,
+  // so a runner deadline shorter than the import bound cannot shoot a slow import.
   const waitMs = parseInt(process.env.CMP_IMPORT_TIMEOUT_MS ?? "900000") + 120_000;
   const deadline = Date.now() + waitMs;
   while (Date.now() < deadline) {
@@ -245,11 +207,7 @@ async function ensureLeanServer(logPath) {
 // keeps one server alive across runs — and across checkouts. So the code on disk is not
 // evidence about today's checks: ask the process that will decide them, and refuse to
 // launch on a mismatch rather than record a run.json that describes a different harness.
-//
-// This compared only `max_heartbeats` until 2026-08-07, which is the ONE number that has
-// not moved since July — so a server started before the linter suppressions, the
-// typeclass budget and the new fuses landed passed the check and would have served a
-// whole grid cell with none of them. CHECK_SHA covers everything the server decides.
+// CHECK_SHA covers everything the server decides (runner/check-env.js).
 async function verifyCheckVerdict() {
   const h = await fetch(`${LEAN_URL}/health`, { signal: AbortSignal.timeout(5000) })
     .then((r) => r.json()).catch(() => null);
@@ -260,7 +218,7 @@ async function verifyCheckVerdict() {
         `this checkout is ${CHECK_SHA}. Restart the server (scripts/lean-server-watchdog.sh) before launching.\n` +
         checkEnvDiff(h.check_env).join("\n"),
     );
-  // The env identity is the verdict's other half (block D): a library cell against a
+  // The env identity is the verdict's other half: a library cell against a
   // bare server would grade every library-using proof compile_error, and a plain cell
   // against a library server would let attempts lean on declarations the arm does not
   // include — both silently, hence the refusal either way.
@@ -349,21 +307,13 @@ try { gitSha = execSync("git rev-parse --short HEAD", { cwd: ROOT }).toString().
 // harness_git_sha alone under-identifies the harness (one `npm update` wide hole).
 let piVersion = "unknown";
 try { piVersion = execSync("pi --version", { env: process.env }).toString().trim(); } catch {}
-// cost_usd is pi's own arithmetic over a baked-in price table, and it only sees requests
-// that returned a completed message — reconciled against DeepSeek's billing it runs a few
-// percent low. DeepSeek exposes no per-request cost, and its dashboard aggregates by UTC
-// day, which cannot separate two runs that share a day or one run that straddles midnight.
-// The account balance is the only per-run source of truth: sample it either side and the
-// delta is what was actually billed. Sampling has to happen live — a run whose boundaries
-// went unrecorded can never be priced afterwards.
-// Caveats, all recorded rather than corrected for: the balance is account-wide, so
-// concurrent runs on the same key make every delta meaningless; a mid-run top-up shows up
-// as a negative delta (flagged, not trusted); and the balance carries 2 decimals, so the
-// floor on resolution is $0.01 — exact enough for a grid cell, coarse for a smoke test.
+// cost_usd is pi's own arithmetic over a baked-in price table and runs a few percent
+// low against DeepSeek's billing. The account balance sampled either side of the run is
+// the only per-run billed number. It is account-wide, so concurrent runs on one key make
+// the delta meaningless, and a mid-run top-up shows as a negative delta (flagged, not
+// trusted).
 const BALANCE_SETTLE_MS = 20_000;
-// A few retries at each boundary: the two samples are the run's only ground-truth
-// billing numbers, an unrecorded boundary is unrecoverable, and a single wifi blip at
-// launch used to null BOTH (the closing sample is skipped when the opening one is null).
+// A few retries at each boundary: an unrecorded boundary is unrecoverable.
 async function deepseekBalance() {
   if (!IS_DEEPSEEK || !process.env.DEEPSEEK_API_KEY) return null;
   for (let tries = 3; tries > 0; tries--) {
@@ -388,11 +338,9 @@ const RUN_STARTED = Date.now();
 // launch's config, sha, and opening balance.
 if (!RESUME) writeFileSync(join(runDir, "run.json"), JSON.stringify({ run_id: RUN_ID, combo: COMBO, model: MODEL, thinking: THINKING, max_tokens: MAX_TOKENS || null, budget_std: BUDGET_STD || null, timeout_s: TIMEOUT_S, max_heartbeats: MAX_HEARTBEATS, check_sha: CHECK_SHA, library_sha: LIBRARY?.sha ?? null, library_run: LIBRARY?.run_id ?? null, concurrency: CONCURRENCY, problems, problems_dir: PROBLEMS_DIR, git_sha: gitSha, pi_version: piVersion, balance_before: balanceBefore, started_at: new Date(RUN_STARTED).toISOString() }, null, 2));
 
-// Benchmark-neutral by design: no "competition" framing, since the problem source
-// changes between blocks (Putnam -> FATE -> whatever is next) and the prompt must not
-// have to change with it. The lean_check rule states the tool's RETURN SHAPE (errors +
-// per-sorry goal states) rather than teaching what to do with it: disclosure is
-// baseline, technique ("leave a step sorry'd to read off the goal") would be an arm.
+// Benchmark-neutral: no "competition" framing, so the prompt need not change with the
+// problem source. The lean_check rule states the tool's RETURN SHAPE rather than
+// teaching what to do with it: disclosure is baseline, technique would be an arm.
 const SYSTEM_PROMPT = `Your goal is to solve a mathematics problem, formalized in Lean 4 with Mathlib.
 
 The file problem.lean in your working directory contains the theorem statement, with the proof left as \`sorry\`.
@@ -441,11 +389,9 @@ leanServer?.unref(); // don't let the child keep the event loop alive after the 
 const stopServer = () => { try { leanServer?.kill("SIGTERM"); } catch {} };
 process.on("exit", stopServer);
 // Killing the runner must kill the attempts. The pi children are detached (their own
-// process groups, so the budget SIGKILL can target a group), which also means they do
-// NOT die with us: an interrupted run used to leave every in-flight agent alive and
-// spending against DeepSeek with all enforcement gone, and their attempts unrecorded.
-// SIGTERM matters as much as SIGINT — `pkill -f run.js` is the documented ops move,
-// and Node's default SIGTERM death runs no 'exit' handlers (the 2026-07-30 orphan).
+// process groups, so the budget SIGKILL can target a group), so they would otherwise
+// outlive an interrupted run, spending with all enforcement gone. SIGTERM matters as
+// much as SIGINT: Node's default SIGTERM death runs no 'exit' handlers.
 const liveAttempts = new Set(); // pids of in-flight pi children
 for (const sig of ["SIGINT", "SIGTERM"]) {
   process.on(sig, () => {
@@ -460,7 +406,7 @@ async function attempt(name, idx) {
   const probDir = join(runDir, name);
   const work = join(probDir, "work");
   const sessionDir = join(probDir, "session");
-  // Worker dirs (block C) live BESIDE work/, not inside it: the file sandbox roots at
+  // Worker dirs live BESIDE work/, not inside it: the file sandbox roots at
   // work/, so the parent agent cannot browse worker transcripts — workers report back
   // as summaries, which is the manipulation the spawn arm is supposed to test.
   const workersRoot = join(probDir, "workers");
@@ -475,11 +421,9 @@ async function attempt(name, idx) {
   // through them (a write would corrupt the shared original for every attempt).
   // Library cell: library.lean documents the baked declarations.
   if (LIBRARY) try { symlinkSync(join(LIBRARY.dir, "library.lean"), join(work, "library.lean")); } catch {}
-  // Grep arm: the Mathlib checkout itself — the paths grep_mathlib prints
-  // (`Mathlib/...lean`) resolve through this link with the ordinary read tool.
-  // Measured demand: 546 reads of tool-printed Mathlib paths in the 0730b/0731 grep
-  // logs, every one blocked; read access rides WITH grep (one symbolic-retrieval
-  // modality), never with base, which must stay the no-retrieval floor.
+  // Grep arm: the Mathlib checkout itself, so the paths grep_mathlib prints
+  // (`Mathlib/...lean`) resolve through this link with the ordinary read tool. Read
+  // access rides WITH grep, never with base, which stays the no-retrieval floor.
   if (COMBO.includes("lean-grep")) try { symlinkSync(MATHLIB_SRC, join(work, "Mathlib")); } catch {}
   // Worker session dirs appear mid-attempt (first spawn call creates them); re-listed
   // every tail tick.
@@ -490,16 +434,11 @@ async function attempt(name, idx) {
   };
 
   const args = [
-    // NOT --mode json. That mode serialises every session event to stdout, and
-    // `message_update` fires once per stream delta carrying the WHOLE accumulated
-    // message, so one assistant message of T deltas costs O(T^2) bytes — 2.55 GB
-    // measured for a single 35k-token message. pi queues those writes in memory with no
-    // backpressure, so whenever the runner fell behind (one thread, 12 children) the
-    // child hit V8's heap cap and aborted mid-attempt: 11 attempts across 0727-0802,
-    // each recorded `agent_died`, the last four in fatex-rest90. --mode text runs the
-    // identical print-mode path with a subscriber that emits nothing per delta
-    // (modes/print-mode.js), and the runner reads the session file instead — which
-    // carries every number it used to scrape, byte-exactly. See runner/session-tail.js.
+    // NOT --mode json. That mode re-emits the WHOLE accumulated message once per
+    // stream delta (O(T^2) bytes per message) with no backpressure, and long-thinking
+    // children died on V8's heap cap. --mode text runs the identical print-mode path
+    // with a subscriber that emits nothing per delta, and the runner reads the session
+    // file instead, which carries every number byte-exactly. See runner/session-tail.js.
     "--mode", "text",
     "--no-extensions", "--no-skills", "-nc", "--no-prompt-templates", "--no-themes",
     "--model", MODEL, "--thinking", THINKING,
@@ -517,9 +456,7 @@ async function attempt(name, idx) {
     // exactly one) and the sentinel tells runner/pi-continue.mjs to run pi's own
     // continuation loop (public Agent.continue()) with nothing appended — the model
     // sees exactly the context it had at its last healthy entry. The sentinel never
-    // reaches the session file or the LLM. Rewind the outage scar first
-    // (a session rewind); an error-stopped leaf is pi's retry-removal target,
-    // never a continuation point.
+    // reaches the session file or the LLM.
     ...(RESUME ? ["-c", "<<cmp-pi-continue-sentinel>>"] : [PROMPT]),
   ];
 
@@ -547,11 +484,8 @@ async function attempt(name, idx) {
       cwd: work,
       env: {
         ...process.env,
-        // A fuse, not a fix: the GC aborts that killed 11 attempts came from pi's json
-        // event stream (see --mode text above), and that flood is now gone. This just
-        // keeps a child from dying on V8's 4 GB default should anything else ever grow.
-        // Backlog was ~quadratic in message length, so 4 GB → 8 GB would have bought
-        // only ~1.4x more message; nothing here is load-bearing.
+        // A fuse, not a fix: keeps a child from dying on V8's 4 GB default should
+        // anything grow; the json-event flood that used to cause it is gone (--mode text).
         NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --max-old-space-size=8192`.trim(),
         CMP_CONFIG: JSON.stringify({
           original_file: join(PROBLEMS_DIR, `${name}.lean`),
@@ -583,9 +517,9 @@ async function attempt(name, idx) {
 
     // Accounting follows the session files, one completed message at a time — the same
     // granularity the budget always enforced at ("overshoot ≤ 1 message"), now with up
-    // to one poll interval of extra latency. Worker sessions (block C) are tailed
-    // alongside the parent's into a separate bucket, and the budget binds their SUM:
-    // child usage rolls into the shared per-problem cap (PLAN), and the group SIGKILL
+    // to one poll interval of extra latency. Worker sessions are tailed alongside the
+    // parent's into a separate bucket, and the budget binds their SUM: child usage
+    // rolls into the shared per-problem cap, and the group SIGKILL
     // reaps workers with the parent (they are spawned undetached, in its group).
     const untail = tailSessions(() => [sessionDir, ...workerSessionDirs()], (entry, _raw, dir) => {
       applyEntry(dir === sessionDir ? stats : wStats, entry);
@@ -594,18 +528,13 @@ async function attempt(name, idx) {
         kill();
       }
     });
-    // No silence fuse. A "no message completed in N minutes" kill was tried (2026-08-02)
-    // and dropped: every way an attempt can sit inside ONE operation is already bounded
-    // well under the wall backstop — lean_check by the server's 900 s wall / 600 s CPU
-    // fuses under a 30 min client wait, a stalled provider stream
-    // by pi's 5 min HTTP idle timeout, and a provider retry storm not at all, since pi
-    // persists each failed assistant message (stopReason "error") like any other. A
-    // single message is capped by --max-tokens, and the 60 min fuse was sized against the
-    // then-default 384k (~58 min of generation at the rate this model streams), so it sat
-    // barely above a legitimate long message and was likelier to kill a working attempt
-    // than a stuck one. The supervisor's server-outage wait — the one genuinely unbounded
-    // silence — is bounded in the extension itself, where it belongs.
-    // An attempt that hangs anyway rides the 48 h backstop and is there to inspect.
+    // No silence fuse: every way an attempt can sit inside ONE operation is already
+    // bounded well under the wall backstop (lean_check by the server's fuses and the
+    // client wait, a stalled provider stream by pi's HTTP idle timeout, a single
+    // message by --max-tokens), and a silence fuse sized near a legitimately long
+    // message is likelier to kill a working attempt than a stuck one. The supervisor
+    // bounds its own server-outage wait. An attempt that hangs anyway rides the 48 h
+    // backstop and is there to inspect.
     child.stderr.on("data", (d) => stderrLog.write(d));
     child.on("close", (code, signal) => {
       liveAttempts.delete(child.pid);
@@ -641,23 +570,17 @@ async function attempt(name, idx) {
     } catch {}
   }
   const wallMs = Date.now() - started + priorWallS * 1000;
-  // A death the runner did not order — OOM kill, pi crash, provider-retry exhaustion —
-  // is not "completed": it used to be recorded as one and silently counted as an
-  // ordinary arm failure (one such record already exists in the 0727 data). The file
-  // still grades on its merits; `end` says the attempt is a rerun candidate, not a
-  // clean sample of the arm.
+  // A death the runner did not order (OOM kill, pi crash, provider-retry exhaustion) is
+  // not "completed": the file still grades on its merits, but `end` marks the attempt
+  // a rerun candidate rather than a clean sample of the arm.
   const end = timedOut ? "timeout" : budgetExceeded ? "budget_exceeded" : exit.code === 0 ? "completed" : "agent_died";
-  // Verdict (grade) and outcome (end) are orthogonal and both recorded truthfully:
-  // the grader's judgment of the final file is never overwritten by how the attempt
-  // ended, so "how close were the timeouts?" is a query, not a re-grading session.
-  // Nothing about the metric is passed in: the grader compiles against the same server
-  // and the same heartbeat cap as the agent's own lean_check, so the agent-observed
-  // verdict and the recorded one cannot differ (2026-08-01). The one place `end`
-  // enters the grade is the statement checks: on an abnormal end, a missing or
-  // altered benchmark declaration is the file state the kill happened to catch, not
-  // evidence of tampering, and grade.js records the end cause instead of
-  // `statement_changed` (2026-08-03; the 0802 fatex run had three such mislabels —
-  // fatex_25/33/34).
+  // Verdict (grade) and outcome (end) are orthogonal and both recorded: the grader's
+  // judgment of the final file is never overwritten by how the attempt ended. The
+  // grader compiles against the same server and heartbeat cap as the agent's own
+  // lean_check, so the agent-observed verdict and the recorded one cannot differ. The
+  // one place `end` enters the grade is the statement checks: on an abnormal end, a
+  // missing or altered benchmark declaration is the file state the kill caught, not
+  // tampering, and grade.js records the end cause instead of `statement_changed`.
   const g = await grade(name, join(work, "problem.lean"), join(PROBLEMS_DIR, `${name}.lean`), { end });
 
   // The solved high-water mark: did this attempt ever HOLD a proof, whatever it ended
@@ -692,7 +615,7 @@ async function attempt(name, idx) {
   } catch {}
 
   // Top-level tokens/cost are the attempt TOTAL (parent + workers): child usage rolls
-  // into the parent's ledger (PLAN), and cost_std here is what the budget enforced on.
+  // into the parent's ledger, and cost_std here is what the budget enforced on.
   // turns/tool_calls/nudges stay parent-only; the per-worker breakdown carries its own.
   const tokensAll = {
     in: stats.tokens.in + wStats.tokens.in,

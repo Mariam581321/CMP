@@ -3,11 +3,10 @@
 // is a pure function so it can be probed exhaustively without booting pi, because every
 // branch here is a sentence the agent reads and acts on.
 //
-// Motivated by baseline-p100/putnam_1965_b6: the agent hallucinated an absolute path one
-// level above its cwd (dropped the /work segment), wrote its proof there for the entire
-// hour, and every lean_check silently graded the untouched work/problem.lean. Blocking
-// out-of-tree paths turns that silent divergence into an immediate, self-explanatory
-// error.
+// Without it an agent that hallucinates an absolute path one level above its cwd
+// writes its proof there for the whole attempt while every lean_check silently grades
+// the untouched work/problem.lean. Blocking out-of-tree paths turns that silent
+// divergence into an immediate, self-explanatory error.
 
 import { statSync } from "node:fs";
 import { resolve, sep, basename, relative } from "node:path";
@@ -20,7 +19,7 @@ const under = (abs, dir) => dir != null && (abs === dir || abs.startsWith(dir + 
  * @param {string} o.root         the attempt's work dir; everything is confined to it
  * @param {string} o.toolName     read | write | edit (anything else is not ours)
  * @param {unknown} o.path        whatever the model passed
- * @param {string|null} o.libraryFile  block D: library.lean, readable but not writable
+ * @param {string|null} o.libraryFile  library cells: library.lean, readable but not writable
  * @param {string|null} o.mathlibDir   grep arm: the Mathlib symlink, same deal
  * @param {(p:string)=>boolean} [o.isDir]  injected for probing; defaults to statSync
  * @returns {null | {block: true, reason: string}}  null = allow
@@ -39,15 +38,12 @@ export function sandboxDecision({ root, toolName, path, libraryFile, mathlibDir,
         `All your files live in ${root} — use a path relative to it (e.g. "problem.lean").`,
     );
 
-  // A directory read came back as `EISDIR: illegal operation on a directory, read` — a
-  // raw Node errno, 91 times across the two block-A cells (39 grep, 52 semantic), each
-  // costing a turn to decode. Both arms do it; the semantic one more per read (2.4% vs
-  // 0.9%), for the same reason its reads fail four times as often overall — it is handed
-  // no file paths and no tree, so it guesses at a filesystem that is not there.
-  // The capability is deliberately unchanged (no listing: read/write/edit and nothing
-  // else is the floor every arm shares, and a directory listing is an `ls`); only the
-  // errno becomes a sentence. Under Mathlib/ that sentence also says what WOULD work,
-  // because there the agent has a real tree and a plausible reason to be walking it.
+  // A directory read would come back as `EISDIR: illegal operation on a directory,
+  // read`, a raw Node errno that costs a turn to decode. The capability is deliberately
+  // unchanged (no listing: read/write/edit and nothing else is the floor every arm
+  // shares, and a directory listing is an `ls`); only the errno becomes a sentence.
+  // Under Mathlib/ that sentence also says what WOULD work, because there the agent has
+  // a real tree and a plausible reason to be walking it.
   const dirCheck = isDir ?? ((p) => { try { return statSync(p).isDirectory(); } catch { return false; } });
   if (dirCheck(abs))
     return block(

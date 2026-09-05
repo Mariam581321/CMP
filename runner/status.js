@@ -60,15 +60,12 @@ const reasonOf = (r) => (r.end ? (r.end !== "completed" ? r.end : r.grade?.reaso
 // session file and each tick reads only the new bytes. The number trails reality by the
 // message currently being generated; that is inherent to reading logs. Cache
 // corruption/absence just means one full re-read, never a wrong verdict.
-// (Pre-0802 runs logged pi's json event stream to events.jsonl instead; the session
-// file has always been written alongside it, so one code path covers both.)
 // Versioned filename: a cache written by an older status.js holds totals accumulated
-// under a different scheme, and silently adding to them double-counts (observed once —
-// it read a $1.00-capped attempt as $1.93 and made the budget look broken).
+// under a different scheme, and silently adding to them double-counts.
 const CACHE = join(tmpdir(), `cmp-status-v2-${runId}.json`);
 let cache = {};
 try { cache = JSON.parse(readFileSync(CACHE, "utf8")); } catch {}
-// Parent session plus any worker sessions (block C): live spend must converge to the
+// Parent session plus any worker sessions: live spend must converge to the
 // recorded cost_std, which since workers rolls up parent + children. (Live turns/checks
 // merge parent and workers here — a display simplification; the record keeps them apart.)
 const sessionFiles = (p) => {
@@ -125,8 +122,7 @@ for (const p of run.problems) {
   if (r) {
     cost += r.cost_usd ?? 0;
     const chk = r.tool_calls?.lean_check ?? 0;
-    const plan = r.tool_calls?.plan_check;
-    const extras = `${r.turns ?? "?"}t ${chk}chk${plan != null ? ` ${plan}plan` : ""} ${money(r.cost_usd ?? 0)} ${r.wall_s ?? "?"}s`;
+    const extras = `${r.turns ?? "?"}t ${chk}chk ${money(r.cost_usd ?? 0)} ${r.wall_s ?? "?"}s`;
     if (r.solved) { solved++; console.log(`  ${green("✓ solved ")}  ${p.padEnd(20)} ${dim(extras)}`); }
     else console.log(`  ${red(`✗ ${reasonOf(r).padEnd(7)}`)}  ${p.padEnd(20)} ${dim(extras)}`);
   } else if (existsSync(join(runDir, p))) {

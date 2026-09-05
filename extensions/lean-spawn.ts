@@ -1,15 +1,14 @@
 // @tools spawn_subagents
-// Experimental arm (PLAN.md block C): model-owned subagents. One tool, blocking
-// batch: the agent hands over 1–N task briefs, workers run in parallel, and the call
-// returns every report — parallelism with zero bookkeeping in the agent's view (no
-// ids, no polling, no collect step to forget). Worker mechanics in runner/spawn.js.
+// Model-owned subagents. One tool, blocking batch: the agent hands over 1–N task
+// briefs, workers run in parallel, and the call returns every report — parallelism
+// with zero bookkeeping in the agent's view (no ids, no polling, no collect step to
+// forget). Worker mechanics in runner/spawn.js.
 //
-// Like the search/snippet arms, the whole prompt delta lives in the tool description;
-// the spawn+plan arm's steering line rides separately in delegate.prompt.md.
+// Like the search/snippet arms, the whole prompt delta lives in the tool description.
 //
 // Cost roll-up: the runner tails worker session files alongside the parent's, so
-// child usage lands in the same budget SIGKILL and in the attempt record (PLAN:
-// "child usage rolls into the shared per-problem cap"). This extension additionally
+// child usage lands in the same budget SIGKILL and in the attempt record (child usage
+// rolls into the shared per-problem cap). This extension additionally
 // keeps workers/ledger.json current so the IN-PROCESS soft stop — the supervisor's
 // "budget spent, stop nudging" check, which only sees parent messages — agrees with
 // the runner's hard cap.
@@ -48,7 +47,7 @@ export default function (pi: ExtensionAPI) {
     // another copy of itself; sequential keeps two batches from interleaving their
     // worker numbering and budget picture.
     executionMode: "sequential",
-    // No budget/spend language anywhere the model can see (2026-08-04): the harness
+    // No budget/spend language anywhere the model can see: the harness
     // never tells the agent how much budget exists or is left, and dollar telemetry
     // in worker reports invited exactly the strategic early wrap-ups the arm is not
     // supposed to induce. Cost stays in the tool-result `details` (session log only)

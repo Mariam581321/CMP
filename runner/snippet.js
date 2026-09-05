@@ -1,7 +1,7 @@
 // check_snippet core: compile a standalone snippet against Mathlib on the lean
 // server. Stateless by design — no files involved, and no statement probe: a
 // snippet is not the graded file, so there is nothing to preserve. Shared by
-// extensions/lean-snippet.ts (and block-C workers, which get this instead of
+// extensions/lean-snippet.ts (and workers, which get this instead of
 // lean_check).
 
 import { postCheck, MAX_HEARTBEATS } from "./common.js";
@@ -16,7 +16,7 @@ import { renderCheck } from "./render.js";
 // a server-side label param would poison the memo (keyed by code hash alone, so the
 // first caller's label would be served to everyone compiling identical code).
 // Format is otherwise renderCheck's, so the agent sees one error shape across both check
-// tools. No `outputName` here: a snippet is stateless and block-C workers have no file
+// tools. No `outputName` here: a snippet is stateless and workers have no file
 // tools at all, so there is nothing for a pointer to point at — the digest is the whole
 // channel, which is why it gets the same 16 KB cap rather than a smaller one.
 const renderSnippet = (messages, sorries) =>

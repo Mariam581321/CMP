@@ -1,9 +1,7 @@
 // @tools grep_mathlib
-// Experimental arm (PLAN.md block A): symbolic search — grep over the pinned local
-// Mathlib checkout, vs lean-search's semantic API. Tests confirmation-retrieval
-// (verify a name the model can nearly guess) against discovery-retrieval. Like
-// lean-search, the arm's whole prompt delta lives in the tool description below.
-// Core logic in runner/grep.js.
+// Text search over the pinned local Mathlib checkout (vs lean-search's semantic API).
+// The arm's whole prompt delta lives in the tool description below. Core logic in
+// runner/grep.js.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -13,16 +11,9 @@ import { ToolFailure, cmpConfig } from "../runner/common.js";
 // Fixed result count, deliberately not a tool parameter — same reasoning as
 // lean-search's NUM_RESULTS: retrieval depth is a property of the arm, not a
 // decision for the agent. Higher than semantic's 6 on purpose: each tool runs at its
-// mechanism's natural depth (decided 0729), and a text search's natural depth is not a
-// semantic search's.
-// 10 -> 25 (2026-08-07), measured rather than argued: 4,088 of the grep cell's 9,428
-// calls truncated, and re-running those queries with the cap lifted showed a median of
-// 38 matching declarations (p75 83, p90 ≥ 200). At 10 the arm was answering nearly half
-// of all retrievals with roughly a quarter of what matched, selected by filename —
-// results are ordered by grep's directory traversal. runner/grep.js now ranks
-// name matches above signature matches first, so the cut at least falls in the right
-// place; 25 is what keeps it from falling at all on the median query. Cost is ~2.6 KB
-// per call against lean_check's measured 3.2 KB average.
+// mechanism's natural depth, and a ranked semantic list degrades gracefully at the tail
+// where a text search does not. 25 keeps the cut from falling on a typical query, at a
+// cost per call comparable to a lean_check.
 const MAX_RESULTS = 25;
 
 export default function (pi: ExtensionAPI) {
@@ -72,15 +63,12 @@ export default function (pi: ExtensionAPI) {
         }
         // The heading is the assembled name, not the file location — the source text
         // under it carries the name as *written* (`r_zero`), which is not what a proof
-        // can call (`DihedralGroup.r_zero`), so the name must lead (0730b/0731 logs).
-        // The location's fate depends on whether it is actionable. Originally paths
-        // were dropped entirely BECAUSE they were a trap: agents tried to read them —
-        // 546 reads of tool-printed Mathlib paths against 8 guessed, in an environment
-        // where no such read had ever succeeded. With read access active
-        // (cfg.mathlib_read: the grep arm ships a work-dir Mathlib/ symlink), the
-        // incentive inverts and the location returns as a secondary line the read tool
-        // can open directly. Without read access, rendering stays path-free exactly as
-        // before; locations then live only in `details` for the run logs.
+        // can call (`DihedralGroup.r_zero`), so the name must lead. The location is
+        // shown only when it is actionable: with read access (cfg.mathlib_read: the grep
+        // arm ships a work-dir Mathlib/ symlink) it returns as a secondary line the read
+        // tool can open directly. Without read access a printed path is a trap agents
+        // keep trying to read, so rendering stays path-free and locations live only in
+        // `details` for the run logs.
         const readable = cmpConfig().mathlib_read === true;
         const blocks = r.hits.map((h) => {
           const head = h.name

@@ -9,8 +9,7 @@
 //    round-trips losslessly.
 // 2. A failed match returns the closest-matching region of the file (best
 //    bigram-similarity line window), so the model can fix its oldText in one cheap
-//    turn instead of re-reading or thrashing (7.3% of edit calls failed to match in
-//    the 0727 81-run). Error wording is harness design surface.
+//    turn instead of re-reading or thrashing. Error wording is harness design surface.
 //
 // Error messages otherwise mirror pi's so run comparisons before/after the swap stay
 // interpretable.
@@ -21,8 +20,6 @@
 // Lives here rather than inside the tool because a session transcript records the RAW
 // model arguments, so anything replaying an attempt's edits (scripts/highwater-scan.mjs)
 // has to normalize them the same way the tool did or it reconstructs a different file.
-// Measured: the legacy pair form accounts for every replay divergence in the 0805 grep
-// cell — 5 attempts, up to 109 checks each, reconstructed against the wrong bytes.
 export function normalizeEditArgs(args) {
   if (!args || typeof args !== "object") return args;
   if (typeof args.edits === "string") {
@@ -65,10 +62,8 @@ export function closestRegion(content, oldText) {
   const lines = content.split("\n");
   const W = Math.min(Math.max(oldText.split("\n").length, 1), lines.length);
   const target = bigrams(oldText.split("\n").map((l) => l.trim()).join("\n"));
-  // Trim once, not once per window: every line used to be re-trimmed, re-joined and
-  // re-bigrammed for each of the W windows containing it, so a failed edit on a long
-  // file did O(lines x W) string work and allocated a Map per window. Roughly 7% of edit
-  // calls miss, and this runs on every one of them.
+  // Trim once, not once per window: this runs on every failed edit, and a long file
+  // has many windows.
   const trimmed = lines.map((l) => l.trim());
   let best = { score: -1, start: 0 };
   for (let s = 0; s + W <= lines.length; s++) {
@@ -78,19 +73,11 @@ export function closestRegion(content, oldText) {
   const from = Math.max(0, best.start - 1);
   const to = Math.min(lines.length, best.start + W + 1);
   let snippet = lines.slice(from, to).join("\n");
-  // 600 -> 2000 (2026-08-07). This snippet is the whole point of the failed-edit path —
-  // it is what lets the model fix its oldText in one turn instead of re-reading the file
-  // — and 600 cut it on 99 of 212 failed edits in the grep cell and 101 of 242 in the
-  // semantic one, i.e. on exactly the multi-line edits where copying the region verbatim
-  // matters most. Note how close those two are: edit failure is 5.4% / 6.7% of calls
-  // across nearly identical volumes, so this cap binds on a property of editing Lean,
-  // not on anything either arm does — which is what makes moving it a fix rather than a
-  // treatment.
-  // 2000 and not more, sized from the region sizes those 454 failures would have
-  // produced (p50 749, p75 1465, p90 3477, max 14025 bytes): it covers p75 whole for
-  // ~1.15 KB per attempt of extra context, against 1.78 KB to reach p92. The regions
-  // past it are ones where the model sent an enormous oldText, and handing back 4 KB of
-  // file is not what fixes that — re-reading is, which the message already says.
+  // This snippet is the whole point of the failed-edit path — it is what lets the model
+  // fix its oldText in one turn instead of re-reading the file — so the cap is sized
+  // to cover typical multi-line edits whole. The regions past it are ones where the
+  // model sent an enormous oldText, and handing back more file is not what fixes that;
+  // re-reading is, which the message already says.
   if (snippet.length > 2000) snippet = snippet.slice(0, 2000) + " …";
   return { fromLine: from + 1, toLine: to, snippet, score: best.score };
 }

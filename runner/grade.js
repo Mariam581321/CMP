@@ -28,8 +28,8 @@ import { benchmarkDecls, axiomProbe, axiomReports, parseStmtProbe, originalStmtT
 export { serverCheck } from "./stmt.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-// Defined in common.js since 2026-08-04 (stmt.js needs it too, and importing from
-// here would cycle); re-exported so existing importers keep working.
+// Defined in common.js (stmt.js needs it too, and importing from here would cycle);
+// re-exported so existing importers keep working.
 export { ALLOWED_AXIOMS };
 
 // --- lexical tripwire (advisory only) ----------------------------------------
@@ -53,18 +53,16 @@ export function suspiciousKeywords(source) {
 }
 
 /**
- * Takes no budget: since 2026-08-01 the check verdict is the server's per-declaration
- * heartbeat cap, identical for every client, so there is no longer a number the grader
- * could hold differently from the agent (it used to receive the run's `--check-cpu`
- * explicitly, because an ambient read in the runner process would have pinned it to the
- * default while the agent ran on the flag).
+ * Takes no budget: the check verdict is the server's per-declaration heartbeat cap,
+ * identical for every client, so there is no number the grader could hold differently
+ * from the agent.
  *
  * `opts.end` is the attempt's outcome ("completed" | "timeout" | "budget_exceeded" |
  * "agent_died"). It flavors the statement checks only: `statement_changed` asserts the
  * agent renamed/deleted/altered the statement it was asked to prove — an accusation a
  * killed attempt does not support. SIGKILL at the budget cap and SIGABRT crashes
- * routinely catch the file mid-edit (0-byte fatex_33, mid-refactor fatex_34, 0802),
- * and a statement found altered at kill time proves nothing about what a finished
+ * routinely catch the file mid-edit, and a statement found altered at kill time proves
+ * nothing about what a finished
  * attempt would have submitted (agents demonstrably park rewritten statements while
  * developing and restore them after). So on an abnormal end, every statement-check
  * failure (missing / type differs / kind changed / body differs) records the end cause
@@ -107,12 +105,12 @@ export async function grade(problemName, solutionPath, originalPath, opts = {}) 
   } catch (e) {
     return fail("grader_error", `lean server unreachable: ${e.message}`);
   }
-  // No resource outcome is a fail any more (2026-08-01). A file too expensive to compile
-  // on this machine comes back `unavailable` after the server has retried it on a second
-  // REPL instance, and lands here as `grader_error`: visible, re-gradeable, and honest —
-  // the run learned nothing about the proof. Recording it as `compile_error` (what the
-  // CPU budget did until fateh_32) would be a permanent verdict resting on a measurement
-  // that the same bytes can fail one minute and pass the next.
+  // No resource outcome is a fail. A file too expensive to compile on this machine comes
+  // back `unavailable` after the server has retried it on a second REPL instance, and
+  // lands here as `grader_error`: visible, re-gradeable, and honest — the run learned
+  // nothing about the proof. Recording it as `compile_error` would be a permanent
+  // verdict resting on a measurement that the same bytes can fail one minute and pass
+  // the next.
   if (r.error) return fail("grader_error", `${r.error}${r.bound ? ` [bound: ${r.bound}]` : ""}`);
   // Probe/axiom internals stay out of recorded details — only real compiler output.
   const { pretty } = renderWithoutProbe(r.messages, r.sorries);
@@ -145,12 +143,11 @@ export async function grade(problemName, solutionPath, originalPath, opts = {}) 
     if (s.kind !== orig[d].kind)
       return stmtFail(`${d}: declaration kind changed (${orig[d].kind} -> ${s.kind})`);
     // Setup-definition bodies are part of the statement: the theorem's type references
-    // them by NAME, so type equality alone lets a gutted body through (verified with
-    // dist_to_int := fun _ => 0, 2026-07-28). Compared exactly where the original's
-    // own value is sorry-free — the sorry'd slots (proofs, _solution) stay the agent's.
-    // For class/structure/inductive the "value" is the constructor telescope, which is
-    // where the field types live — the inductive's own type is only `… → Prop` and does
-    // not move when a field is gutted (fatex_74: `injDim_le_infity : True`, 2026-08-05).
+    // them by NAME, so type equality alone lets a gutted body through. Compared exactly
+    // where the original's own value is sorry-free — the sorry'd slots (proofs,
+    // _solution) stay the agent's. For class/structure/inductive the "value" is the
+    // constructor telescope, which is where the field types live — the inductive's own
+    // type is only `… → Prop` and does not move when a field is gutted.
     if (!orig[d].direct_sorry && orig[d].value != null && orig[d].value !== "-" && s.value !== orig[d].value)
       return stmtFail(
         `${d}: ${orig[d].kind === "induct" ? "class/structure fields differ" : "definition body differs"} from original ` +

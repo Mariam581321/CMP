@@ -1,13 +1,13 @@
 #!/usr/bin/env node
-// Block D library phase (PLAN.md): one librarian agent builds the shared library for
-// a problem set, through the same machinery attempts use — spawn_subagents for
-// parallel workers, add_fact as the only write path (the bank IS the library), the
+// Library phase (not part of the paper's grid): one librarian agent builds a shared
+// library for a problem set, through the same machinery attempts use — spawn_subagents
+// for parallel workers, add_fact as the only write path (the bank IS the library), the
 // run's search arms, check_snippet with the bank in scope. The phase cap is enforced
 // here by SIGKILL, silently; the librarian, like every agent, is budget-blind.
 //
 //   node runner/library.js --combo lean-search,lean-snippet \
-//     --problems problems-fatex/scoreable95.txt --problems-dir problems-fatex \
-//     --run-id library-fatex-0805 [--cap-std 5.00] [--worker-cap-std 1.00]
+//     --problems problems-fatex/safe90.txt --problems-dir problems-fatex \
+//     --run-id library-fatex [--cap-std 5.00] [--worker-cap-std 1.00]
 //
 // The librarian's view is deliberately small: the problem statements (all of them,
 // inline — no fetch tools, no pagination), the add_fact contract, spawn, search. No
@@ -91,7 +91,7 @@ const digest = problems
   .join("\n\n");
 // Benchmark declaration names are reserved: a bank fact under one of them would
 // collide with the statement itself once the library is baked (add_fact rejects
-// with a rename instruction — the 0804 smoke found the librarian doing exactly this).
+// with a rename instruction).
 const blockedNames = [
   ...new Set(problems.flatMap((p) => benchmarkDecls(readFileSync(join(PROBLEMS_DIR, `${p}.lean`), "utf8")))),
 ];
@@ -203,8 +203,8 @@ const sha = createHash("sha256").update(bank).digest("hex");
 // signature-ending `:=`. A human-facing artifact (the graded run points agents at the
 // readable source instead). The cut looks for `:=` at bracket depth 0 only: named
 // arguments (`QuotientGroup.mk (s := H) a`) and structure-instance fields put `:=`
-// INSIDE brackets, and cutting at the first occurrence truncated a signature mid-term
-// (found in the 0804 smoke).
+// INSIDE brackets, and cutting at the first occurrence would truncate a signature
+// mid-term.
 function buildIndex(source) {
   const entries = [];
   const lines = source.split("\n");

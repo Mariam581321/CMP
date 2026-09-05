@@ -7,11 +7,10 @@
 // (TOOL_RESULT_MAX_CHARS = 2000) — assistant thinking and tool-call arguments go in
 // verbatim. But every LIVE provider request drops assistant messages with stopReason
 // error/aborted (pi-ai transform-messages.ts, "Skip errored/aborted assistant messages").
-// So a stream that dies inside a write leaves a 500-700 KB partial file that the model
+// So a stream that dies inside a write leaves a huge partial message that the model
 // never saw on any turn and cannot act on, yet the summarizer still pays full price for
-// it. Measured over the 500 attempts that reached the wall: this dead weight is a median
-// of 0 bytes on the ones that recovered, and 1.47 MB (up to 9.79 MB, 4.7x their live
-// context) on the ones that did not.
+// it, and on the attempts that fail to compact this dead weight can be several times
+// their live context.
 //
 // When it tips the summarization request over the window the failure is silent in every
 // channel this harness records: auto-compaction failures are emitted as an in-process
@@ -20,7 +19,7 @@
 // stderr.log. Compaction then never happens, the supervisor reads stopReason "error" as
 // transport death and nudges, every nudge makes an already-inadmissible context larger,
 // and the attempt dies at max_error_streak recorded as end=completed with budget
-// unspent. 14 attempts across the corpus, 10 of them base.
+// unspent.
 //
 // Two properties are deliberate:
 //
@@ -36,10 +35,9 @@
 //     compaction stays comparable with the ones that never needed rescuing, and this
 //     file cannot drift from pi's summarization contract.
 //
-// Escalates only as far as it must: drop the dead messages first (rescues 12 of the 14),
-// and only if pi fails AGAIN cap the two channels serializeConversation leaves
-// uncapped. Capping is arm-neutral by construction — thinking is ~2/3 of the payload in
-// every arm (67% with grep_mathlib, 66% without).
+// Escalates only as far as it must: drop the dead messages first (which rescues most
+// cases), and only if pi fails AGAIN cap the two channels serializeConversation leaves
+// uncapped. Capping is arm-neutral: thinking is the bulk of the payload in every arm.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 

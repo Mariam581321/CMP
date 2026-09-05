@@ -12,7 +12,7 @@ import { sandboxDecision } from "../runner/sandbox.js";
 export default function (pi: ExtensionAPI) {
   const root = process.cwd(); // run.js spawns pi with cwd = the attempt's work dir
   // Read-only views of the compiled environment's sources, exposed as work-dir symlinks
-  // to the single canonical originals: library.lean (block D) and the Mathlib/ tree
+  // to the single canonical originals: library.lean (library cells) and the Mathlib/ tree
   // (grep arm).
   const cfg = cmpConfig();
   const libraryFile: string | null = cfg.library_file ?? null;

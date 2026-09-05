@@ -2,8 +2,8 @@
 // Always-on tool: compile the agent's problem.lean against Mathlib and report errors.
 // Checks go to the persistent lean server (runner/lean-server.js), which keeps Mathlib
 // resident so a check takes seconds instead of a full olean reload. All compile +
-// statement-verdict plumbing lives in runner/stmt.js (checkedCompile) — shared with
-// plan_check, so agent-facing checks can never drift from the grader.
+// statement-verdict plumbing lives in runner/stmt.js (checkedCompile), so agent-facing
+// checks can never drift from the grader.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -17,8 +17,8 @@ import { recordHighWater } from "../runner/highwater.js";
 
 export default function (pi: ExtensionAPI) {
   // Hash of problem.lean at the last check that returned a result. Lets the tool
-  // flag "you re-checked without changing the file" — the observation the
-  // putnam_1965_b6 agent needed to escape its wrong-path loop.
+  // flag "you re-checked without changing the file", which is how an agent editing
+  // the wrong path finds out.
   let lastCheckedHash: string | null = null;
 
   // The solved high-water mark (runner/highwater.js). Stamped HERE rather than in the
@@ -28,7 +28,7 @@ export default function (pi: ExtensionAPI) {
   // go to the attempt dir, one level above the sandbox root, and the tool's returned
   // text is not touched.
   const cfg = cmpConfig();
-  const isWorker = cfg.worker != null; // block C workers don't own problem.lean
+  const isWorker = cfg.worker != null; // workers don't own problem.lean
   let checkIndex = 0;
   let turns = 0;
   const tokens = { in: 0, out: 0, cache_read: 0 };
@@ -77,7 +77,7 @@ export default function (pi: ExtensionAPI) {
         // inside the tool, where waiting costs zero tokens. Bouncing the error to
         // the model instead costs a full turn per retry — with the whole growing
         // context re-billed as input — and a dead server turns that into an hours-
-        // long paid spiral (2026-07-26: ~70 min x 10 agents of ECONNREFUSED loops).
+        // long paid spiral of ECONNREFUSED loops.
         // Typed server responses (unavailable, crash) are NOT retried; only
         // throws where no server response arrived at all.
         const deadline = Date.now() + 5 * 60_000;
@@ -102,7 +102,7 @@ export default function (pi: ExtensionAPI) {
         }
 
         if (r.error) {
-          // Since 2026-08-01 an error here is never a verdict. Verdicts arrive as Lean's
+          // An error here is never a verdict. Verdicts arrive as Lean's
           // own messages — including the deterministic heartbeat timeout, which is an
           // ordinary compile error and comes back through the normal path below. The
           // server swallows and requeues every resource kill (runCheck), so what reaches
@@ -153,10 +153,8 @@ export default function (pi: ExtensionAPI) {
             cost_std: +(costStd(tokens) + workerSpendStd(cfg, ctx.cwd)).toFixed(5),
           });
         }
-        // full_bytes/cut are write-only bookkeeping (details never reach the model): they
-        // are how "how often does the 16 KB digest still overflow, and by how much" stops
-        // being unanswerable. Under the old renderer the tail of a truncated check was
-        // recorded nowhere, so every count of what the cap destroyed was a lower bound.
+        // full_bytes/cut are write-only bookkeeping (details never reach the model): how
+        // often the digest still overflows, and by how much.
         return {
           content: [{ type: "text", text }],
           details: {

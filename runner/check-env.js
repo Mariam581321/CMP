@@ -2,31 +2,23 @@
 // submitted file, the bounds that stop one check owning a worker forever, and the
 // fingerprint that ties a running server to this checkout.
 //
-// It lives in its own module because BOTH sides need it. The lean server enforces it;
-// run.js has to verify that the server it is about to launch 87 attempts against is
-// enforcing THIS checkout's version of it. Until 2026-08-07 run.js compared only
-// `max_heartbeats`, which has not changed since July — so a server started from an
-// older checkout (the watchdog keeps one alive for days, across git pulls) passed the
-// launch check while injecting a different `set_option` head and running different
-// fuses, and the run recorded numbers produced by code nobody was looking at. That is
-// exactly the class of silent harness effect a freeze is supposed to make impossible,
-// so everything server-side that can move a verdict or a check's visible output is
-// hashed into CHECK_SHA and refused on mismatch.
+// It lives in its own module because BOTH sides need it: the lean server enforces it,
+// and run.js verifies that the server it is about to launch against (the watchdog keeps
+// one alive for days, across git pulls) is enforcing THIS checkout's version of it.
+// Everything server-side that can move a verdict or a check's visible output is hashed
+// into CHECK_SHA and refused on mismatch.
 
 import { createHash } from "node:crypto";
 import { MAX_HEARTBEATS } from "./common.js";
 
 // --- what every check gets injected ------------------------------------------
 
-// Style linters, off at source. They are advice about tidiness — none of them can
+// Style linters, off at source. They are advice about tidiness, none of them can
 // change a verdict (the grade is compiles / sorry-free / statement intact / axioms
-// clean) — and they were 25% of every byte the check channel spent in the first two
-// block-A cells: 20,652 `unusedSimpArgs`, 13,546 `unnecessarySimpa`, 3,794
-// `unusedVariables` and the rest, 9.8 MB of 39.2. Suppressing them recovers 92%/83% of
-// the truncated checks in those cells without touching one bit of what Lean decides.
-// Deliberately NOT in the list:
+// clean), and they were a quarter of every byte the check channel spent, the main
+// cause of truncated check output. Deliberately NOT in the list:
 //   * `linter.deprecated` — `Use \`map_add\` instead` is free retrieval, the compiler
-//     handing the agent the modern name (~1,180 occurrences across the two cells);
+//     handing the agent the modern name;
 //   * `linter.dupNamespace` — the only lint here that flags a GRADER-visible fault: a
 //     file that nests `Problem1` inside `Problem1` compiles fine and grades as
 //     "declaration missing", because the grader looks declarations up by qualified name;
@@ -40,20 +32,14 @@ export const LINTERS = [
 ];
 const LINTERS_OFF = LINTERS.map((l) => `set_option linter.${l} false`).join(" ");
 
-// Typeclass synthesis gets the same budget as everything else (2026-08-07). Lean's
-// default is 20 000 heartbeats per instance problem — 20x below our elaboration cap
-// and, on this benchmark, the tightest limit in the harness: instance synthesis was the
-// most common timeout site in the two block-A cells (1,448 of 4,049), ahead of `whnf`,
-// and the ONLY budget agents ever asked to raise (99 writes in 29 attempts, against 2
-// writes of the bare option, both LOWERING it). FATE-X is PhD algebra — quotients,
-// localizations, algebra towers — so those searches are deep, and a limit nobody chose
-// was deciding what compiles.
-// One number now governs both: a search may use up to the whole declaration's
-// allowance, and `clampHeartbeats` still lets a file LOWER either. The cost, stated so
-// the reruns can check it: an instance that does NOT exist now fails after up to
-// MAX_HEARTBEATS instead of 20 000, so a fast, informative "failed to synthesize" can
-// become a timeout at the outer cap. If the block-A reruns show that trade going the
-// wrong way, this line is the one to change.
+// Typeclass synthesis gets the same budget as everything else. Lean's default is
+// 20 000 heartbeats per instance problem, 20x below our elaboration cap and, on this
+// benchmark (quotients, localizations, algebra towers), the most common timeout site and
+// the only budget agents ever asked to raise, so a limit nobody chose was deciding what
+// compiles. One number now governs both: a search may use up to the whole declaration's
+// allowance, and `clampHeartbeats` still lets a file LOWER either. The cost: an instance
+// that does NOT exist fails after up to MAX_HEARTBEATS instead of 20 000, so a fast
+// "failed to synthesize" can become a timeout at the outer cap.
 const SYNTH_INSTANCE_BUDGET = `set_option synthInstance.maxHeartbeats ${MAX_HEARTBEATS}`;
 
 // One physical line, always. Lean parses commands whitespace-separated, so several
@@ -113,39 +99,25 @@ export function prepare(code) {
 //   CPU fuse  <  wall fuse  <  retry deadline  <  client wait
 //
 // Break the order and raising the CPU fuse makes things WORSE, not better: the client
-// hangs up before the fuse fires and the agent gets a connection error — a harsher
-// failure than the `unavailable` it replaced, and one that says even less. That is not
-// hypothetical; the numbers were three independent constants until 2026-08-07 and the
-// chain did not actually hold. RETRY_DEADLINE_MS was documented as "must exceed
-// MAX_KILLS x WALL_FUSE_MS ... and stay under CLIENT_WAIT_MS", but the deadline is only
-// tested BETWEEN attempts, so the last attempt could still run a full wall fuse past it
-// — 170 min + 80 min against a 190 min client wait. A `mem` kill (never counted against
-// MAX_KILLS, by design) could ride that loop all the way to the deadline and then blow
-// the socket. Deriving the outer bounds from the inner ones makes that arithmetic
-// impossible to get wrong again.
+// hangs up before the fuse fires and the agent gets a connection error, a harsher
+// failure than the `unavailable` it replaced. The retry deadline is only tested BETWEEN
+// attempts, so the last attempt can run a full wall fuse past it; deriving the outer
+// bounds from the inner ones keeps that arithmetic right.
 //
-// CPU fuse — machine protection, NOT a budget and never a verdict (2026-08-01). It was
-// THE check budget (120 CPU-s) until the fateh_32 incident: any verdict defined by a
-// measured quantity has a noise band around its threshold, and the same 49 KB file
-// measured four times landed on both sides twice. Deciding is the heartbeat cap's job
+// CPU fuse — machine protection, NOT a budget and never a verdict. Any verdict defined
+// by a measured quantity has a noise band around its threshold (the same file measured
+// repeatedly lands on both sides of it), so deciding is the heartbeat cap's job
 // (MAX_HEARTBEATS); this exists only to stop one check occupying a worker indefinitely,
 // set far from the action, where tripping it says "this file cannot be compiled on this
-// machine at all", not "this file fails".
-// 600 s was NOT far from the action (raised to 3600 s, 2026-08-06). A real 2113-line
-// FATE-X proof compiles in ~250 s, so 600 sat at 2.4x a legitimate large file, and it
-// showed: 86 kills across the two block-A cells, every one landing between 600 and 605 s
-// — files pressed right against the line, not runaways — and semantic/fatex_10 was
-// killed at 605 s, requeued, and PASSED on the retry. The rate was also arm-dependent
-// (0 kills across the grep cell, 19 across semantic, 24 in base's first two hours), so
-// the fuse was quietly taxing the arm it was most important to measure cleanly. At
-// 3600 s a check may hold a worker for an hour; a worker hour is cheap and a lost
-// verdict is not.
+// machine at all", not "this file fails". A large FATE-X proof compiles in minutes, and
+// a fuse close to that was killing legitimate files at an arm-dependent rate. A worker
+// hour is cheap and a lost verdict is not.
 export const CPU_FUSE_MS = parseInt(process.env.CMP_CPU_FUSE_MS ?? "3600000");
 // Wall-clock backstop. A check consuming no CPU at all (true hang, or .olean page-fault
 // thrash under memory pressure) can never reach the CPU fuse, so something has to break
 // it. Kept ABOVE the CPU fuse so that a CPU-bound check trips the bound that describes
 // it: on a busy box wall >= cpu always, and a wall kill on a file that was in fact
-// burning CPU would log the less informative of the two. It has never fired, in any run.
+// burning CPU would log the less informative of the two.
 export const WALL_FUSE_MS = parseInt(process.env.CMP_WALL_FUSE_MS ?? "5400000");
 // Retries are capped because a check that really IS the balloon would otherwise re-kill
 // a worker on every attempt — the exact starvation the fuses exist to stop. Retrying is
