@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Independent re-derivation of the glued grid view from raw results/ dirs, checked
 against mined/attempts.jsonl. Rules re-implemented from:
-  - rerun-falsegreen.sh / rerun-contextwall{,2}.sh  (patched views stack: cwrerun > fgrerun > raw)
+  - the rerun patch views (patched views stack: cwrerun > fgrerun > raw)
   - results/402-rerun-list-0816.json glue_rule       (snippetonly r2 split: keep-last per dir,
                                                        one real verdict per problem across dirs)
 """

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Scripted probes for the block C machinery (PLAN.md): the add_fact gate, the
+// Scripted probes for the fact-bank and worker machinery: the add_fact gate, the
 // check_snippet bank prefix, and (with --worker, costs ~1 cent of DeepSeek) one real
 // worker subprocess end-to-end. Needs the lean server up.
 //

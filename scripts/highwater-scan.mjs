@@ -13,7 +13,7 @@
 //     --verify-all   re-grade the first-green file of EVERY green attempt, not just
 //                    the ones that graded unsolved (hours of Lean time)
 //     --no-verify    skip the lean server entirely; leave ambiguous checks unresolved
-//     --out <path>   markdown report (default drafts/DRAFT-highwater-audit-<date>.md)
+//     --out <path>   markdown report (default results/highwater-audit-<date>.md)
 //     --csv <path>   per-attempt csv
 //
 // How a check is coloured. `details.ok` on a lean_check result already folds in the
@@ -53,8 +53,8 @@ const NO_VERIFY = flag("no-verify");
 // waiting to happen.
 const now = new Date();
 const DATE = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-const OUT = opt("out", join(ROOT, "drafts", `DRAFT-highwater-audit-${DATE.slice(5).replace("-", "")}.md`));
-const CSV = opt("csv", join(ROOT, "drafts", `DRAFT-highwater-audit-${DATE.slice(5).replace("-", "")}.csv`));
+const OUT = opt("out", join(ROOT, "results", `highwater-audit-${DATE.slice(5).replace("-", "")}.md`));
+const CSV = opt("csv", join(ROOT, "results", `highwater-audit-${DATE.slice(5).replace("-", "")}.csv`));
 
 const md5 = (s) => createHash("md5").update(s).digest("hex");
 // Positional args are run dirs; --out/--csv swallow the token after them.
@@ -346,7 +346,7 @@ for (const a of attempts.filter((x) => x.high_water)) {
 writeFileSync(CSV, rows.map((r) => r.map((x) => (typeof x === "string" && /[",]/.test(x) ? `"${x.replace(/"/g, '""')}"` : x)).join(",")).join("\n") + "\n");
 console.log(dim(`\n  per-attempt csv: ${CSV}`));
 
-// Markdown: the narrative the drafts/ audits are written in, generated from the same
+// Markdown: the narrative the audit reports are written in, generated from the same
 // numbers so the report and the csv cannot disagree.
 const lines = [];
 lines.push(`# Solved high-water audit — ${DATE}`, "");

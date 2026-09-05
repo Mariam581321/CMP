@@ -42,7 +42,7 @@ empty list, each of `lean-grep`, `lean-search` and `lean-snippet` alone,
 | `scripts/` | analysis pipeline, probe tests (`npm test`), audit tools |
 | `problems-fatex/` | problem lists (`safe90.txt` is the paper's set); problem files are generated, not committed |
 | `pi-agent/` | pi agent directory used by runs (retry settings) |
-| `archive/` | code of arms that were cut before the experiment |
+| `archive/` | code of arms that were cut before the experiment, kept for reference; moved out of `runner/` and `extensions/`, so its relative imports no longer resolve and it does not run as is |
 
 ## Running
 

@@ -40,8 +40,6 @@ and spend at cap `c` is `min(spend, c)`.
 
 - `mine-checkerrors-0828.py`, `mine-queries-0828.py`, `query-anatomy-0828.py`: mine
   compiler errors and search queries for the behavioural sections.
-- `analyze-mined-0817.py`, `paper-stats.py`, `mcnemar-report.py`: statistics batteries
-  over the same data.
 - `highwater-scan.mjs`, `falsegreen-scan.mjs`, `render-replay.mjs`: audits of the grading
   and of what the agent was shown.
 - `type-eq.mjs`, `scope-scan.mjs`, `wipe-audit.mjs`, `setup-tamper.mjs`: tools used for

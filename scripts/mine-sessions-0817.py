@@ -71,7 +71,7 @@ def load_rows(path):
     return out
 
 def cell_rows(name):
-    """Same patched-view logic as paper-stats.py cell()."""
+    """Resolve the patched view of a cell (context-wall rerun > false-green rerun > raw)."""
     d, patched = {}, None
     for rid in CELLS[name]:
         base = os.path.join(RES, rid)

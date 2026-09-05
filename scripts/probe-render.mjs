@@ -61,7 +61,7 @@ const full = (over = {}) => ({ ok: true, messages: [], sorries: [], stmt: { ok: 
   check("snippet label is used for positions", s.pretty.includes("error: snippet:3:0: boom"), s.pretty);
 }
 
-// The blocker paragraphs are shared by lean_check, plan_check and the supervisor, so
+// The blocker paragraphs are shared by lean_check and the supervisor, so
 // they must exist for exactly the faults that are not ordinary compiler output.
 {
   check("no notes for an ordinary failure", blockerNotes(checkStatus(full({ ok: false, messages: [err(1, "boom")] }))).length === 0);
