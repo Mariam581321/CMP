@@ -93,6 +93,29 @@ included (`costStd` in `runner/common.js`). Every dollar figure in the paper is 
 `cost_std`, a function of the transcript alone, not the amount billed. Worker sessions
 are tailed alongside the parent and counted in the same budget.
 
+## Retrieval and scratch compilation
+
+`search_mathlib` (`extensions/lean-search.ts`) sends the query to the public LeanSearch
+API and returns its six nearest declarations with type signatures. Requests are paced
+and retried inside the tool, so a rate limit costs wall-clock time and never reaches the
+model. The result count is fixed on purpose: when it was a parameter the agent set it on
+most calls, so the design would have measured a mix of depths.
+
+`grep_mathlib` (`extensions/lean-grep.ts`, core in `runner/grep.js`) searches the
+Mathlib source of the compiled version and tries readings of the pattern in order until
+one matches: a fully qualified declaration name, literal text, literal text ignoring
+case, a regular expression, the same ignoring case, and finally a match across the line
+breaks of a wrapped signature. Each hit is expanded to the whole declaration and given
+the name Lean assembles from the enclosing namespaces, which is often not the name
+written in the source. Declarations whose name matches rank before those that merely
+mention the pattern. At most 25 are returned, each with file and line, and the sandbox
+exposes the Mathlib tree read-only so that `read` can open them.
+
+`check_snippet` (`extensions/lean-snippet.ts`, core in `runner/snippet.js`) compiles a
+standalone snippet through the same server and renders the result like `lean_check`,
+without the statement and axiom facts a snippet does not have. In fact-bank designs the
+snippet is compiled with the bank in scope.
+
 ## Workers and the fact bank
 
 A worker (`runner/spawn.js`) is a fresh pi session with the same model and thinking
