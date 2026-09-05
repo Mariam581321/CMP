@@ -5,12 +5,12 @@ comparing them. We used it to test which tools help the [pi](https://github.com/
 coding agent, driven by DeepSeek V4 Flash, prove graduate-level algebra problems from
 [FATE-X](https://github.com/frenzymath/FATE).
 
-- `paper/`: the full paper (TMLR format).
-- `paper-workshop/`: the 4-page MATH-AI @ NeurIPS 2026 version.
-- `paper/data/`: the per-attempt result tables both papers are built from. Transcripts
-  and proofs are not released, to keep FATE-X uncontaminated.
+- `data/`: the per-attempt result tables the papers are built from, numbers only.
+  Transcripts and proofs are not released, to keep FATE-X uncontaminated.
 - `docs/HARNESS.md`: how an attempt runs, the Lean server, grading, budget.
-- `docs/ANALYSIS.md`: how attempts are scored and how `paper/data/` is produced.
+- `docs/ANALYSIS.md`: how attempts are scored and how `data/` is produced.
+
+The papers themselves are not in this repository.
 
 ## Tools
 

@@ -27,15 +27,14 @@ and spend at cap `c` is `min(spend, c)`.
    (design, replicate, problem) row, since some attempts were rerun after harness
    defects or provider outages and one replicate ran split across two machines, and
    checks it against the mined file.
-3. `scripts/build-paper-data.py` reshapes `mined/attempts.jsonl` into `paper/data/`:
-   `attempts.csv`, `behaviour.csv`, `cells.csv`, `problems.csv` and the unreleased
-   `provenance.csv`. Columns are documented in `paper/data/README.md`.
-4. `paper/figures/*.py` build every figure and table of the paper from `paper/data/`
-   alone (`python3 paper/figures/<name>.py`; needs matplotlib, numpy, pandas and scipy).
-   `paper-workshop/figures/` are copies.
+3. `scripts/build-paper-data.py` reshapes `mined/attempts.jsonl` into the tables in
+   `data/`: `attempts.csv`, `behaviour.csv`, `cells.csv`, `problems.csv`, plus an
+   unreleased `provenance.csv`. Columns are documented in `data/README.md`.
+4. The figure scripts, kept with the papers outside this repository, build every figure
+   and table from those four tables alone.
 
 `results/` and `mined/` contain verbatim agent transcripts and are not released;
-`paper/data/` is.
+`data/` is.
 
 ## Other scripts
 

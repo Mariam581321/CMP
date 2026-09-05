@@ -1,0 +1,13 @@
+arm,rep,tools,block,replicated,n,solved,spend
+base,1,,A,1,90,43,35.06
+base,2,,A,1,90,40,39.21
+grep,1,grep,A,1,90,50,32.91
+grep,2,grep,A,1,90,49,34.81
+semantic,1,search,A,0,90,50,30.59
+snippetonly,1,check_snippet,A,1,90,47,35.07
+snippetonly,2,check_snippet,A,1,90,47,33.89
+snippet,1,grep+check_snippet,A/B,1,90,53,31.46
+snippet,2,grep+check_snippet,A/B,1,90,52,30.77
+spawn,1,grep+check_snippet+spawn,B,0,90,52,34.10
+spawnfacts,1,grep+check_snippet+spawn+add_fact,B,0,90,54,42.87
+snippetfacts,1,grep+check_snippet+add_fact,B,0,90,52,35.08
