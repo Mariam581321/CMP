@@ -33,22 +33,27 @@ Budget curve: `S(c) = #{cost <= c}`. Total-spend plane at cap c: `sum(min(spend,
 If you want "harness stops at the first solve" spend instead, use `min(cost, spend)` for
 solved rows — post-solve spend is ~8% of the total.
 
-## behaviour.csv  — same keys; what the agent did (full harness, uncensored unless noted)
+## behaviour.csv  — same keys; what the agent did, under the no-nudge harness
+
+Every count is censored at the first give-up, like `cost` and `spend`: it is what the
+attempt did *before* the agent first gave up, and the whole attempt when it never did.
+Columns with a `_full` suffix are the full-harness (nudges allowed) view instead.
 
 | column | meaning |
 |---|---|
 | proof_lines, proof_decls | non-blank lines and `theorem`/`lemma` declarations in the first green file (solved rows only) |
-| checks_pre_nudge | `lean_check` calls before the first give-up (censored like `cost`) |
-| end | how the attempt ended: completed / budget_exceeded |
-| nudges | supervisor nudges received over the whole attempt, of every kind |
+| checks_pre_nudge | `lean_check` calls before the first give-up |
+| end | how the attempt ended, full harness: completed / budget_exceeded |
+| nudges | supervisor nudges received over the whole attempt, of every kind (a full-harness quantity by nature) |
 | gave_up | 1 iff the attempt is unsolved and ended, under the no-nudge harness, by the agent giving up (see Conventions); unsolved rows with `gave_up == 0` ran to the cap |
-| ever_green_full, cost_full_first_green | full-harness (nudges allowed) outcome and first-green cost — the "as-recorded" estimand for the appendix reconciliation |
+| ever_green_full, cost_full_first_green | full-harness outcome and first-green cost — the "as-recorded" estimand for the appendix reconciliation |
 | spend_full | whole-attempt spend, main + workers |
-| turns, tokens_in, tokens_out, tokens_cache_read | whole attempt, workers included |
-| lean_check, check_snippet, grep_mathlib, search_mathlib, read, write, edit, spawn_calls, add_fact | tool-call counts, main agent only |
-| add_fact_workers | `add_fact` calls made by the attempt's workers (spawn arms) |
-| workers, worker_spend | subagents spawned and their spend |
-| compactions | context compactions the main session went through |
+| turns | main-agent turns before the first give-up; `turns_full` the whole attempt |
+| tokens_in_full, tokens_out_full, tokens_cache_read_full | whole attempt, workers included (tokens are not tracked at the give-up; use `spend` for the censored quantity) |
+| lean_check, check_snippet, grep_mathlib, search_mathlib, read, write, edit, spawn_calls, add_fact | tool-call counts, main agent only, before the first give-up |
+| add_fact_workers | `add_fact` calls made by the attempt's workers before the first give-up (spawn arms) |
+| workers, worker_spend | subagents started before the first give-up, and their spend up to it |
+| compactions | context compactions of the main session before the first give-up; `compactions_full` the whole attempt |
 
 ## cells.csv — one row per run: tools, block, replicated flag, n, solves, total no-nudge spend
 ## problems.csv — the 90 ids with their theorem name and how many of the 12 runs solve each

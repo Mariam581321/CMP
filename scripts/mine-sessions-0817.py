@@ -19,6 +19,9 @@ parse the session event logs (main + workers) and extract:
   * post-green segment: cost, tool calls, checks, wrecks, final vs green md5
   * error fingerprints (normalized body hash) for stuck-loop detection
   * spawn usage: calls, worker count, worker cost/tools, task text heads
+  * pre_giveup: the same tool / turn / compaction / worker counts restricted to what
+    happened before the first give-up -- the no-nudge harness's view of the attempt's
+    behaviour, which is what paper/data/behaviour.csv reports
 
 Selection of session files: an attempt dir may hold several session files
 (promptless resume, or a discarded earlier attempt superseded by keep-last).
@@ -224,6 +227,7 @@ def mine_worker_curve(wdir):
     pts, tin = [], 0
     tout = tcr = 0
     tools = Counter()
+    call_ts = []          # (ts, tool name) for every tool call, for the give-up censor
     for f in sessions:
         for e in read_events(f):
             if e.get("type") != "message":
@@ -238,8 +242,10 @@ def mine_worker_curve(wdir):
                 for c in m.get("content") or []:
                     if isinstance(c, dict) and c.get("type") == "toolCall":
                         tools[c.get("name")] += 1
+                        call_ts.append((e.get("timestamp") or "", c.get("name")))
     return pts, {"tokens": {"in": tin, "out": tout, "cache_read": tcr},
-                 "cost_std": cost_std(tin, tout, tcr), "tool_calls": dict(tools)}
+                 "cost_std": cost_std(tin, tout, tcr), "tool_calls": dict(tools),
+                 "_call_ts": call_ts}
 
 # ---------------------------------------------------------------- attempt miner
 
@@ -285,6 +291,8 @@ def mine_attempt(arm, prob, row):
     checks = []           # per lean_check dicts
     snippet_checks = 0
     tools = Counter()
+    call_ts = []          # (ts, tool name) for every main-agent tool call
+    compaction_ts = []
     stop_reasons = Counter()
     truncations = 0
     last_sr = None        # stopReason of the latest assistant message
@@ -299,6 +307,7 @@ def mine_attempt(arm, prob, row):
         et = e.get("type")
         if et == "compaction":
             compactions += 1
+            compaction_ts.append(ts)
             continue
         if et != "message":
             continue
@@ -324,6 +333,7 @@ def mine_attempt(arm, prob, row):
             for c in m.get("content") or []:
                 if isinstance(c, dict) and c.get("type") == "toolCall":
                     tools[c.get("name")] += 1
+                    call_ts.append((ts, c.get("name")))
                     if c.get("name") == "spawn_subagents":
                         args = c.get("arguments") or {}
                         tasks = args.get("tasks") or []
@@ -411,6 +421,30 @@ def mine_attempt(arm, prob, row):
             return None
         return bool(first_green and first_green["ts"] <= u["ts"])
 
+    # The no-nudge view: everything the attempt did strictly before its first give-up
+    # (the give-up nudge is a user message, so every call of the turn before it sorts
+    # earlier). Without a give-up the view is the whole attempt. Worker calls are
+    # censored on the same clock; a worker's cost is its curve at the give-up.
+    give_ts = fi_give["ts"] if fi_give else None
+    before = lambda t: give_ts is None or t < give_ts
+    pre_workers = []
+    for w, cur in zip(workers, wcurves):
+        wt = Counter(n for t, n in w["_call_ts"] if before(t))
+        pre_workers.append({
+            "started": bool(cur) and before(cur[0][0]),
+            "cost_std": (max((c for t, c in cur if before(t)), default=0.0)),
+            "tool_calls": dict(wt)})
+    pre_giveup = {
+        "tools": dict(Counter(n for t, n in call_ts if before(t))),
+        "turns": fi_give["turn"] if fi_give else turns,
+        "compactions": sum(1 for t in compaction_ts if before(t)),
+        "n_workers": sum(1 for w in pre_workers if w["started"]),
+        "workers_cost_std": round(sum(w["cost_std"] for w in pre_workers), 5),
+        "worker_tools": dict(sum((Counter(w["tool_calls"]) for w in pre_workers), Counter())),
+    }
+    for w in workers:
+        w.pop("_call_ts", None)
+
     out.update({
         "mined_tokens": {"in": tin, "out": tout, "cache_read": tcr},
         "mined_cost_main": round(cur_cost, 5),
@@ -418,6 +452,7 @@ def mine_attempt(arm, prob, row):
         "mined_turns": turns,
         "n_checks": len(checks), "n_snippet_checks": snippet_checks,
         "tools": dict(tools),
+        "pre_giveup": pre_giveup,
         "truncations": truncations,
         "compactions": compactions,
         "first_ts": first_ts, "last_ts": last_ts,
