@@ -67,3 +67,9 @@ Prerequisites: Node 22, pi 0.80.6 (`npm i -g @earendil-works/pi-coding-agent@0.8
    one directory per problem with the pi session file and the final `problem.lean`, plus
    `results.jsonl` and `summary.json` for the run. Defaults are the paper's: $1 per
    problem, thinking `high`, 25 attempts in parallel.
+
+## License
+
+MIT, see `LICENSE`. `vendor/repl.patch` is a diff against
+[`leanprover-community/repl`](https://github.com/leanprover-community/repl), which is
+Apache-2.0; the patched REPL you build in step 2 keeps that license.
