@@ -134,7 +134,7 @@ export function cmpConfig() {
 }
 
 // --- TTY colors -------------------------------------------------------------
-// FORCE_COLOR: keep ANSI when piped through watch(1) (scripts/watch.sh sets it).
+// FORCE_COLOR: keep ANSI when piped through watch(1).
 const tty = process.stdout.isTTY || !!process.env.FORCE_COLOR;
 const c = (code, s) => (tty ? `\x1b[${code}m${s}\x1b[0m` : s);
 export const green = (s) => c(32, s);

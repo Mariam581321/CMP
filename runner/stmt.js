@@ -462,7 +462,7 @@ export async function checkedCompile(code, { original, problemName, client, work
   // ARM, not a fix: it changes what 56% of attempts read, so it must never leak into a
   // cell that claims comparability with the 0807 freeze — including the fgrerun
   // rerun-patches, which must differ from their cells by the sorryAx gate fix ONLY.
-  // The basequote cell launches with the flag on (scripts/launch-basequote.sh).
+  // The basequote cell launched with the flag on.
   const stmtOriginal = process.env.CMP_STMT_QUOTE === "1" ? original : null;
   return { ...r, pretty: shown.pretty, full: bare.full, probe, stmt, axiomsBad, axSorries, stmtOriginal };
 }

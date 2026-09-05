@@ -29,7 +29,7 @@ AgentSession.prototype.prompt = async function (text, options) {
   if (text !== SENTINEL) return origPrompt.call(this, text, options);
   // _runAgentPrompt minus the initial prompt append (agent-session.js). The leaf of
   // the restored session must not be an error-stopped assistant message — that is
-  // rewind-scar.mjs's contract (leaf is a toolResult or a real supervisor nudge).
+  // the rewind contract (leaf is a toolResult or a real supervisor nudge).
   this._isAgentRunActive = true;
   try {
     await this.agent.continue();

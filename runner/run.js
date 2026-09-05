@@ -518,7 +518,7 @@ async function attempt(name, idx) {
     // continuation loop (public Agent.continue()) with nothing appended — the model
     // sees exactly the context it had at its last healthy entry. The sentinel never
     // reaches the session file or the LLM. Rewind the outage scar first
-    // (scripts/rewind-scar.mjs); an error-stopped leaf is pi's retry-removal target,
+    // (a session rewind); an error-stopped leaf is pi's retry-removal target,
     // never a continuation point.
     ...(RESUME ? ["-c", "<<cmp-pi-continue-sentinel>>"] : [PROMPT]),
   ];
