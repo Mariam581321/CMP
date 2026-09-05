@@ -8,36 +8,26 @@ lean-env/*
 !lean-env/lean-toolchain
 !lean-env/lake-manifest.json
 !lean-env/Cmp.lean
-problems/*
-!problems/dev.txt
+problems/
 problems-nl/
+problems-fateh/
+problems-fatem/
+problems-fc/
+problems-fatex/*
+!problems-fatex/safe90.txt
 papers/
 vendor/*
 !vendor/repl.patch
-problems-fateh/*
-!problems-fateh/dev10.txt
-!problems-fateh/pick12.txt
-problems-fatem/*
-!problems-fatem/dev10.txt
-!problems-fatem/pick12.txt
-problems-fc/
 COSTS.md
 pi-agent/auth.json
 pi-agent/sessions/
-problems-fatex/*
-!problems-fatex/pilot10-0802.txt
-!problems-fatex/safe93.txt
-!problems-fatex/safe87.txt
 .venv-paper/
 _server-final-0827/
-
-# session-mined transcript derivatives (contain verbatim agent content)
-mined/
 _server-pull-backup-0818/
-# draft working artifacts
-drafts/*.html
-drafts/figs-0817/
-drafts/.artifact-rebuilt-runs
+
+# transcripts, their derivatives and working notes: contain verbatim agent content
+mined/
+drafts/
 texput.log
 
 # never commit compiled papers, bundles or Windows download droppings at the root

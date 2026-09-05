@@ -3,7 +3,7 @@
 // isolated scratch dir, pi's own session file as the log, independent grading, pretty
 // output.
 //
-//   node runner/run.js --combo lean-search --problems problems/dev.txt
+//   node runner/run.js --combo lean-grep,lean-snippet --problems problems-fatex/safe90.txt --problems-dir problems-fatex
 //
 // Flags: --combo a,b ("" = baseline) --problems <file> --budget-std <usd> (1.00)
 //        --timeout <s> (172800, wall-clock backstop)
@@ -39,8 +39,8 @@ try {
   A = parseArgs({
     options: {
       combo: { type: "string", default: "" },
-      problems: { type: "string", default: join(ROOT, "problems/dev.txt") },
-      "problems-dir": { type: "string", default: join(ROOT, "problems") },
+      problems: { type: "string", default: join(ROOT, "problems-fatex/safe90.txt") },
+      "problems-dir": { type: "string", default: join(ROOT, "problems-fatex") },
       "budget-std": { type: "string", default: "1.00" },
       timeout: { type: "string", default: "172800" },
       // 25: sized for the 64 GB server (2026-08-02). With checks served warm by the
