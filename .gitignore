@@ -11,9 +11,9 @@ lean-env/*
 problems/*
 !problems/dev.txt
 problems-nl/
-papers/*
-!papers/INDEX.md
-vendor/
+papers/
+vendor/*
+!vendor/repl.patch
 problems-fateh/*
 !problems-fateh/dev10.txt
 !problems-fateh/pick12.txt

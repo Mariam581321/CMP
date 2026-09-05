@@ -1,0 +1,66 @@
+diff --git a/REPL/Main.lean b/REPL/Main.lean
+index 9b36b27..114c40a 100644
+--- a/REPL/Main.lean
++++ b/REPL/Main.lean
+@@ -82,16 +82,57 @@ abbrev M (m : Type → Type) := StateT State m
+ 
+ variable [Monad m] [MonadLiftT IO m]
+ 
+-/-- Record an `CommandSnapshot` into the REPL state, returning its index for future use. -/
++/--
++Retention limit for a snapshot array, read from `name` in the environment.
++`none` (unset, or unparseable) means unbounded — stock upstream behaviour.
++
++Snapshots exist so a client can come back to a state: `{"cmd": ..., "env": 17}`
++resumes from command snapshot 17, `{"tactic": ..., "proofState": 3}` from proof
++snapshot 3. Holding them forever is the price of that, and for a client that
++uses it there is nothing to fix. A client that never resumes pays the price for
++nothing: every snapshot it makes is unreachable from its side and immortal from
++ours, because the arrays only ever grow (`push`, no eviction — an index handed
++out has to stay valid).
++
++That is CMP's case. It sends `env: <base>` on every check and discards the
++returned id, so past the base environments each snapshot is pure garbage — and
++not small garbage: a snapshot pins the `Environment` the command produced, which
++for a 2000-line proof file is every declaration it elaborated. Measured on the
++grep-fatex87-0805 run: ~1.4 GB of growth per worker per 10 minutes of serving,
++which walked the pool into a 9 GB RSS fuse 234 times and cost two attempts their
++verdict outright.
++-/
++def snapshotLimit (name : String) : IO (Option Nat) :=
++  return (← IO.getEnv name).bind String.toNat?
++
++/--
++Record a `CommandSnapshot` into the REPL state, returning its index for future use.
++
++Past `REPL_CMD_SNAPSHOT_LIMIT` the snapshot is dropped rather than stored. The
++FIRST n are the ones kept, because those are the base environments a
++non-resuming client still needs to name (for CMP: the Mathlib import, plus a
++baked library if there is one). The id returned is the index the snapshot would
++have had, so a client that does try to resume from a dropped one gets
++"Unknown environment" — a loud failure, never a silently wrong env.
++-/
+ def recordCommandSnapshot (state : CommandSnapshot) : M m Nat := do
+   let id := (← get).cmdStates.size
+-  modify fun s => { s with cmdStates := s.cmdStates.push state }
++  if (← snapshotLimit "REPL_CMD_SNAPSHOT_LIMIT").all (id < ·) then
++    modify fun s => { s with cmdStates := s.cmdStates.push state }
+   return id
+ 
+-/-- Record a `ProofSnapshot` into the REPL state, returning its index for future use. -/
++/--
++Record a `ProofSnapshot` into the REPL state, returning its index for future use.
++
++Bounded by `REPL_PROOF_SNAPSHOT_LIMIT` on the same terms as
++`recordCommandSnapshot`. These accumulate faster than command snapshots for the
++files CMP checks: one is recorded per `sorry`, and a proof under development is
++mostly sorries.
++-/
+ def recordProofSnapshot (proofState : ProofSnapshot) : M m Nat := do
+   let id := (← get).proofStates.size
+-  modify fun s => { s with proofStates := s.proofStates.push proofState }
++  if (← snapshotLimit "REPL_PROOF_SNAPSHOT_LIMIT").all (id < ·) then
++    modify fun s => { s with proofStates := s.proofStates.push proofState }
+   return id
+ 
+ def sorries (trees : List InfoTree) (env? : Option Environment) (rootGoals? : Option (List MVarId))
