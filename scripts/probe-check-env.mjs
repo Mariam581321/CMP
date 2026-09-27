@@ -1,12 +1,6 @@
 #!/usr/bin/env node
-// Probes for runner/check-env.js — what every check gets injected, the clamp that stops
-// a file writing its own verdict, and the bound chain.
-//
-// The Lean half (do those eight linter options actually exist in this toolchain pin? an
-// unknown option is an ERROR, so a typo here reds every check in a run) needs a server
-// and runs only when one is up; everything else is pure string work.
-//
-//   node scripts/probe-check-env.mjs
+// Probes for runner/check-env.js: injected options, the heartbeat clamp, the timeout bound chain.
+// The Lean half runs only if the lean server is up.
 import { PREPARE_HEAD, LINTERS, prepare, clampHeartbeats, CPU_FUSE_MS, WALL_FUSE_MS, MAX_KILLS, RETRY_DEADLINE_MS, CLIENT_WAIT_MS, CHECK_SHA, checkEnv, checkEnvDiff } from "../runner/check-env.js";
 import { MAX_HEARTBEATS, LEAN_URL, postCheck } from "../runner/common.js";
 
@@ -17,15 +11,12 @@ const check = (name, cond, detail = "") => {
 };
 
 // ------------------------------------------------------------------ the clamp
-// A file that could raise its own maxHeartbeats would be writing its own verdict. Every
-// numeral form Lean accepts has to be covered, or the gate is one an agent walks around
-// with `400_000_000`.
 {
   const cases = [
     ["plain, over the cap", `set_option maxHeartbeats 4000000`, true],
     ["underscores", `set_option maxHeartbeats 4_000_000`, true],
     ["hex", `set_option maxHeartbeats 0xF4240`, true],
-    ["binary", `set_option maxHeartbeats 0b1111`, false], // 15 — a LOWER value, left alone
+    ["binary", `set_option maxHeartbeats 0b1111`, false],
     ["zero means no limit", `set_option maxHeartbeats 0`, true],
     ["the `in` form", `set_option maxHeartbeats 999999999 in theorem foo : True := trivial`, true],
     ["typeclass budget", `set_option synthInstance.maxHeartbeats 10000000`, true],
@@ -41,9 +32,6 @@ const check = (name, cond, detail = "") => {
 }
 
 // ---------------------------------------------------------------- line numbers
-// Reported line numbers have to match the file the agent is editing, so the injected
-// head replaces the import line rather than being prepended — and every suppression
-// rides on that ONE physical line.
 {
   const withImport = prepare("import Mathlib\n\ntheorem foo : True := trivial\n");
   check("import replaced, no shift", withImport.shifted === 0 && withImport.text.startsWith(PREPARE_HEAD), withImport.text.slice(0, 60));
@@ -62,9 +50,6 @@ const check = (name, cond, detail = "") => {
 }
 
 // ------------------------------------------------------------- the bound chain
-// Derived, not asserted: a kill the server hides must fit inside the client's patience,
-// including the final attempt that starts just under the retry deadline. Getting this
-// wrong turns a hidden fuse into a connection error the agent sees.
 {
   check("cpu < wall", CPU_FUSE_MS < WALL_FUSE_MS, `${CPU_FUSE_MS} / ${WALL_FUSE_MS}`);
   check("retry deadline covers every kill the budget promises", RETRY_DEADLINE_MS > MAX_KILLS * WALL_FUSE_MS);
@@ -83,9 +68,6 @@ const check = (name, cond, detail = "") => {
 }
 
 // ----------------------------------------------------------------- against Lean
-// The one thing no amount of string work can check: are these registered options in the
-// toolchain we pin? An unknown `set_option` is an error, and it would red every check of
-// a whole run.
 const up = await fetch(`${LEAN_URL}/health`, { signal: AbortSignal.timeout(2000) }).then((r) => r.json()).catch(() => null);
 if (!up?.ready) {
   console.log("  skip  Lean checks (no server on " + LEAN_URL + ")");

@@ -1,20 +1,7 @@
-// Scan results.jsonl files for gate-vs-grader disagreements on the solved high-water
-// mark: attempts where the in-loop done-gate stamped a green check (high_water.greens
-// > 0) but the grader failed every stamped snapshot (ever_solved false). Written for
-// the 2026-08-11 apply?/sorryAx false-green audit (the gate dropped sorryAx from the
-// in-loop axiom parse; fixed in runner/verdict.js + stmt.js the same day) and kept so
-// the audit can be re-run when in-flight cells close.
+// List attempts where the done-gate stamped a green but no snapshot graded solved
+// (false_green), or the first green failed grading but a later one passed (recovered).
 //
-//   node scripts/falsegreen-scan.mjs <results.jsonl | run-dir>...
-//   node scripts/falsegreen-scan.mjs --json <...>       machine-readable, to stdout
-//
-// Two classes come out:
-//   false_green — greens > 0, no snapshot ever graded solved. The agent was told
-//                 COMPLETE on a file grading rejects; if `end` is "completed" it
-//                 almost certainly stopped there. These are the rerun candidates.
-//   recovered   — the FIRST green was false but a later one graded solved. No rerun
-//                 (the attempt's verdict is fine); listed because the false green
-//                 still cost budget between the two stamps.
+//   node scripts/falsegreen-scan.mjs [--json] <results.jsonl | run-dir>...
 import { readFileSync, existsSync, statSync } from "node:fs";
 import { join, basename } from "node:path";
 

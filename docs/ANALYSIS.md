@@ -34,7 +34,8 @@ and spend at cap `c` is `min(spend, c)`.
    and table from those four tables alone.
 
 `results/` and `mined/` contain verbatim agent transcripts and are not released;
-`data/` is.
+`data/` is. The scripts here read those directories, so they do not run from this
+repository alone.
 
 ## Other scripts
 

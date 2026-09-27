@@ -1,11 +1,6 @@
 #!/usr/bin/env node
-// One-shot status render of a run directory, designed to sit under `watch`:
-//
-//   watch -n 10 node runner/status.js            # latest run
-//   watch -n 10 node runner/status.js <run-id>   # specific run
-//
-// Shows per-problem state (finished from results.jsonl; running = problem dir exists
-// but no attempt.json yet; pending otherwise) plus totals.
+// One-shot status render of a run directory.
+//   watch -n 10 node runner/status.js [run-id]
 
 import { readFileSync, readdirSync, existsSync, statSync, writeFileSync, openSync, readSync, closeSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
@@ -32,10 +27,6 @@ if (existsSync(join(runDir, "results.jsonl")))
 
 console.log(`${bold(`run ${runId}`)}   ${dim(`combo: ${run.combo?.join("+") || "baseline"}   model: ${run.model}   rendered ${new Date().toLocaleTimeString()}`)}`);
 
-// Lean server health — a dead server doesn't stop a run, it silently burns budget
-// (agents loop on ECONNREFUSED "transient" errors), so surface it where eyes already
-// are. Only checked while the run is live; after summary.json the server is expected
-// to be gone.
 const runComplete = existsSync(join(runDir, "summary.json"));
 if (!runComplete) {
   try {
@@ -50,24 +41,12 @@ if (!runComplete) {
 }
 console.log();
 
-// abnormal end if there was one, else the grader's reason; ?? = legacy fail_reason fallback
 const reasonOf = (r) => (r.end ? (r.end !== "completed" ? r.end : r.grade?.reason) : r.fail_reason) ?? "failed";
 
-// --- live spend for running attempts ----------------------------------------
-// Sums usage out of each running attempt's pi session file the same way run.js does
-// (assistant `usage`; costStd over in/out/cacheRead), so the live number converges to
-// the recorded one. Incremental: a per-run cache in tmpdir keeps a byte offset per
-// session file and each tick reads only the new bytes. The number trails reality by the
-// message currently being generated; that is inherent to reading logs. Cache
-// corruption/absence just means one full re-read, never a wrong verdict.
-// Versioned filename: a cache written by an older status.js holds totals accumulated
-// under a different scheme, and silently adding to them double-counts.
+// Live spend for running attempts, read incrementally from session files via a tmpdir offset cache.
 const CACHE = join(tmpdir(), `cmp-status-v2-${runId}.json`);
 let cache = {};
 try { cache = JSON.parse(readFileSync(CACHE, "utf8")); } catch {}
-// Parent session plus any worker sessions: live spend must converge to the
-// recorded cost_std, which since workers rolls up parent + children. (Live turns/checks
-// merge parent and workers here — a display simplification; the record keeps them apart.)
 const sessionFiles = (p) => {
   const dirs = [join(runDir, p, "session")];
   try {
@@ -89,7 +68,7 @@ function liveStats(p) {
   for (const f of files) {
     const size = statSync(f).size;
     const off = ent.offs[f] ?? 0;
-    if (size < off) { ent.offs[f] = 0; continue; } // truncated: re-read next tick
+    if (size < off) { ent.offs[f] = 0; continue; }
     if (size === off) continue;
     const fd = openSync(f, "r");
     const buf = Buffer.alloc(size - off);
@@ -127,9 +106,6 @@ for (const p of run.problems) {
     else console.log(`  ${red(`✗ ${reasonOf(r).padEnd(7)}`)}  ${p.padEnd(20)} ${dim(extras)}`);
   } else if (existsSync(join(runDir, p))) {
     const startMs = statSync(join(runDir, p)).ctimeMs;
-    // "active" = time since the last COMPLETED message, not since the last byte moved.
-    // Nothing kills on it (run.js has no silence fuse — see the comment there): it is
-    // here so a stuck attempt is visible long before the 48 h backstop reaps it.
     const sess = sessionFiles(p).at(-1);
     const lastMs = sess ? statSync(sess).mtimeMs : startMs;
     const s = liveStats(p);

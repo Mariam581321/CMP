@@ -1,10 +1,5 @@
 // @tools plan_check
-// Arm 1 (plan): explicit plan artifact. Registers `plan_check`, which validates that
-// problem.lean is currently a *plan*: compiles, statement preserved, and every `sorry`
-// lies outside the benchmark declarations (only helper lemmas may be sorry'd).
-// Soft gate: lean_check never refuses anything; planning stays observable in tool_calls.
-// Every checked plan is snapshotted to ../plans/ (outside the agent's cwd) so plans can
-// be judged post-hoc (real decomposition vs restated theorem).
+// plan_check: checks problem.lean is a plan (compiles, statement intact, sorries only in helper lemmas).
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -27,9 +22,6 @@ export default function (pi: ExtensionAPI) {
     promptSnippet: "plan_check - verify problem.lean is a valid plan (compiling skeleton, sorries only in helper lemmas)",
     parameters: Type.Object({}),
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-      // Failures THROW; pi ignores a returned isError (see runner/common.js). A RED
-      // plan (compiles but sorries in the wrong places) is this tool's normal output,
-      // not a failure, and still returns normally.
       const src = join(ctx.cwd, "problem.lean");
       if (!existsSync(src)) {
         throw new ToolFailure("error: problem.lean not found in working directory");
@@ -41,9 +33,6 @@ export default function (pi: ExtensionAPI) {
       try {
         const solution = readFileSync(src, "utf8");
         const r = await planCheck(readFileSync(origPath, "utf8"), solution, basename(origPath, ".lean"));
-        // Snapshot every checked plan for post-hoc judging; the index and the
-        // "planning phase already succeeded" state are derived from disk, so they
-        // are robust to any process restart and visible to the analyst.
         let hadGreen = false;
         try {
           const plansDir = join(ctx.cwd, "..", "plans");
@@ -52,8 +41,6 @@ export default function (pi: ExtensionAPI) {
           hadGreen = prior.some((f) => f.endsWith("-green.lean"));
           writeFileSync(join(plansDir, `plan-${String(prior.length + 1).padStart(2, "0")}-${r.ok ? "green" : "red"}.lean`), solution);
         } catch {}
-        // A lean-server failure (flagged by runner/plan.js) is a tool failure, not a
-        // red plan — throw so it is recorded as one. The snapshot above already ran.
         if ((r as any).isError === true) throw new ToolFailure(r.text);
         let text = r.text;
         if (!r.ok && hadGreen) {
@@ -64,7 +51,7 @@ export default function (pi: ExtensionAPI) {
         }
         return { content: [{ type: "text", text }], details: { ...r.details, had_green: hadGreen } };
       } catch (e: any) {
-        if (e instanceof ToolFailure) throw e; // already classified (server error above)
+        if (e instanceof ToolFailure) throw e;
         throw new ToolFailure(`plan_check temporarily unavailable (${e?.message ?? e}) — try again`);
       }
     },

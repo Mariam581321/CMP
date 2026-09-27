@@ -1,11 +1,5 @@
-// Probe extensions/compaction-guard.ts — the REAL module under --experimental-strip-types,
-// driven by a fake pi, plus a replay against a session that actually died this way.
-//
-// Two properties carry the whole design and both are pinned here:
-//   - the guard is a strict no-op until pi's own compaction has already failed once, so
-//     the ~490 compactions that work today are untouched (a/d below);
-//   - it sanitises preparation IN PLACE but never mutates the session's own message
-//     objects, which are shared with the live context and the session file (c below).
+// Probes extensions/compaction-guard.ts with a fake pi, run under --experimental-strip-types.
+// Case (f) replays a session from results/ and is skipped if absent.
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
@@ -98,10 +92,7 @@ const prep = (msgs, prefix = []) => ({ messagesToSummarize: msgs, turnPrefixMess
   check("e: fourth firing tightens further", at4 < at3, `${at3} -> ${at4}`);
 }
 
-// (g) the drop must never hand compact() two empty lists — pi's prepareCompaction never
-//     produces that state, so compact() summarises an empty <conversation> and overwrites
-//     real history with a summary of nothing. Shape is the one this guard exists for: a
-//     turn starting at the previous compaction boundary that died on one giant write.
+// (g) the drop never leaves compact() two empty lists
 {
   const { emit } = boot();
   const p = prep([], [dead(700_000)]);
@@ -114,7 +105,6 @@ const prep = (msgs, prefix = []) => ({ messagesToSummarize: msgs, turnPrefixMess
   check("g: the kept message is capped on the same firing",
     kept && JSON.stringify(kept.content[0].arguments).length < 20_000,
     kept ? `${JSON.stringify(kept.content[0].arguments).length}` : "nothing kept");
-  // and it still tightens if pi keeps refusing
   await emit("session_before_compact", { preparation: p });
   await emit("session_before_compact", { preparation: p });
   check("g: still tightens on later firings",
@@ -132,8 +122,7 @@ const prep = (msgs, prefix = []) => ({ messagesToSummarize: msgs, turnPrefixMess
     p.messagesToSummarize.length === 1 && p.turnPrefixMessages.length === 0);
 }
 
-// (f) replay: a session that really died this way must shrink a lot; one that recovered
-//     must be a no-op on its first firing (which is the only firing it ever gets).
+// (f) replay of a real session
 {
   const size = (l) => l.reduce((n, m) => n + (m.content ?? []).reduce((k, b) =>
     k + (b.type === "text" ? b.text.length : b.type === "thinking" ? b.thinking.length :

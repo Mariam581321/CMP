@@ -1,10 +1,5 @@
 #!/usr/bin/env node
-// Re-grade finished runs with the current grader and report verdict flips.
-// Read-only: results.jsonl / attempt.json are never touched — the recorded verdicts
-// document what the run measured at the time; this shows how the current grader
-// would judge the same files (e.g. after the line-level statement check was replaced
-// by the type-level one). Needs the lean server up.
-//
+// Re-grades finished runs with the current grader and reports verdict flips (read-only).
 //   node runner/regrade.js results/<run-id> [more run dirs...]
 
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
@@ -21,16 +16,9 @@ if (!dirs.length) {
   process.exit(1);
 }
 
-// The env identity gate: regrading a run against a server with a different
-// library baked in (or none, when the run had one) would flip verdicts for reasons that
-// have nothing to do with the grader — silently. Same refusal as run.js's launch check.
 const health = await fetch(`${LEAN_URL}/health`, { signal: AbortSignal.timeout(3000) })
   .then((r) => r.json()).catch(() => null);
 const serverLib = health?.library_sha256 ?? null;
-// The check environment is the other half of that identity. Unlike the library this is a
-// WARNING, not a refusal: regrading a pre-freeze run against today's harness is exactly
-// what this tool is for, and the flips it prints are the answer. It just has to say so,
-// or a re-cut check environment reads as the grader changing its mind.
 if (health && health.check_sha !== CHECK_SHA)
   console.error(
     yellow(`note: the lean server's check environment is ${health.check_sha ?? "(pre-fingerprint)"}, this checkout is ${CHECK_SHA}`) +
@@ -48,9 +36,6 @@ for (const runDir of dirs) {
     continue;
   }
   const problemsDir = runMeta.problems_dir ?? join(ROOT, "problems");
-  // No budget is passed: the verdict is the server's heartbeat cap, so a regrade
-  // reproduces a run's metric exactly when the server enforces the cap that run recorded
-  // (run.json `max_heartbeats`, recorded from the live server).
   const probs = readdirSync(runDir).filter((f) => statSync(join(runDir, f)).isDirectory());
   console.log(bold(`\n${runMeta.run_id} (${probs.length} attempts)`));
 
@@ -60,12 +45,7 @@ for (const runDir of dirs) {
     const solPath = join(runDir, name, "work", "problem.lean");
     if (!existsSync(attemptPath) || !existsSync(solPath)) { skipped++; continue; }
     const old = JSON.parse(readFileSync(attemptPath, "utf8"));
-    // Pass the recorded outcome so the missing-declaration attribution matches what a
-    // fresh run would record (kill artifact vs statement tampering, grade.js).
     const now = await grade(name, solPath, join(problemsDir, `${name}.lean`), { end: old.end ?? "completed" });
-    // v2 records carry the grader's verdict separately (grade.*) — compare it to the
-    // fresh grade directly. Legacy records merged run outcome into fail_reason, so
-    // timeout/budget/provider must be carried over to stay comparable.
     const legacy = !old.grade;
     const oldReason = legacy ? (old.solved ? "solved" : old.fail_reason) : old.grade.solved ? "solved" : old.grade.reason;
     const newReason = now.solved ? "solved" : legacy && ["timeout", "budget_exceeded", "provider_error"].includes(oldReason) ? oldReason : now.reason;

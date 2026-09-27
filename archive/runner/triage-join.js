@@ -1,15 +1,5 @@
 #!/usr/bin/env node
-// The triage counterfactual: reweight an existing cell with a triage run's verdicts.
-//
-//   node runner/triage-join.js results/triage-pilot10-0804 results/snippet-fatex10-0804
-//
-// Two-stage simulation: judge every problem, attempt only the "yes" ones. Valid
-// because the gate is separable — the reference attempts ran independently of the
-// judge, so their outcomes stand in for "what the yes-problems would have done".
-// No-verdict problems are EXCLUDED from the counterfactual (decided 2026-08-04: an
-// infra artifact must never become a filter decision) and reported separately; the
-// two-stage numbers therefore live on the judged subset, and the exclusion count is
-// printed next to every headline so the denominator is never silently shrunk.
+// Reweights a reference cell's results with a triage run's verdicts.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

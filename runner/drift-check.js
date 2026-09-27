@@ -1,18 +1,6 @@
 #!/usr/bin/env node
-// Statement-drift recheck (library-cell guard): with a library baked into the lean
-// server's env, new instances could change how a BENCHMARK STATEMENT elaborates —
-// which would silently change what is being proved. This script recompiles every
-// statement against the CURRENT server env and compares each declaration's
-// canonical type/value/kind against the cached no-library answers
-// (problems/stmt-types.json, computed on a bare env). Zero drift is a launch
-// precondition for the library cell; any drift means pruning the offending library
-// instances and re-freezing.
-//
-//   node runner/drift-check.js problems-fatex problems-fatex/safe90.txt
-//
-// Run it with the LIBRARY server up (it checks /health and tells you which env it
-// measured). It never writes the stmt-types cache — the cache stays the bare-env
-// truth. Exits 1 on any drift or missing cache entry.
+// Recompile every statement against the running server env and diff against the cached types.
+// Usage: node runner/drift-check.js <problems-dir> <list.txt>
 
 import { readFileSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";

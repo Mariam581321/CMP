@@ -2,7 +2,8 @@
 
 Produced by `scripts/build-paper-data.py` from the session-mined `mined/attempts.jsonl`
 (the glue of reruns and resumes into 90-problem cells is verified independently by
-`scripts/verify-glue.py`). Transcripts, session files and proofs are not released.
+`scripts/verify-glue.py`). The script writes to `paper/data/`; this folder is a copy of
+its output. Transcripts, session files and proofs are not released.
 
 ## Conventions
 

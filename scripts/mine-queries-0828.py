@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
-"""Mine every search_mathlib / grep_mathlib query text from the exact attempts that
-paper/data is built from (provenance.csv run_id), plus what came back.
-Writes mined/queries.jsonl: one row per tool call."""
+"""Mine every search_mathlib/grep_mathlib query and its result; writes mined/queries.jsonl."""
 import csv, glob, json, os, re
 
 CMP = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

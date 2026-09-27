@@ -1,36 +1,6 @@
 #!/usr/bin/env node
-// Triage judge (PLAN.md, off the hill-climb): one feasibility judge per problem —
-// an agentic loop with the attempt arm's RETRIEVAL tool (from --combo) plus
-// submit_verdict, which ends the session. No compiler of any kind: check_snippet was
-// removed 2026-08-15 (Mariam's decision) — snippetonly showed verified scratch
-// compilation is the grid's active ingredient, so a judge that can compile is halfway
-// to an attempt arm, and its "yes" drifts from prediction ("that agent would prove
-// this") toward trial ("I part-proved it"), with the judge fee drifting toward attempt
-// cost. A judge of a search-less arm therefore holds ONLY submit_verdict: pure prior
-// prediction from the statement. The arm is never "run" as an attempt arm:
-// runner/triage-join.js reweights an existing cell with these verdicts. Judges ride
-// the worker machinery (runner/spawn.js) with a judge view.
-//
-//   node runner/triage.js --combo lean-grep \
-//     --problems problems-fatex/pilot10-0802.txt --problems-dir problems-fatex \
-//     --cap-std 0.15 --target-budget-std 1.00 --run-id triage-grep1-pilot10-0815
-//
-// Add --print-view to the same command to print the judge's ENTIRE view for the first
-// problem — system prompt, user message, tool schemas, request params, exactly as the
-// provider receives them — and exit without running or spending anything.
-//
-// The judge is told which arm it is judging — that arm's tools and that arm's
-// per-problem budget (--combo, --target-budget-std), since the join's counterfactual
-// is about one cell, not about provability in principle. It is told nothing about how
-// to decide (prompt variant plain-0815, recorded per verdict; see the judgePrompt note).
-//
-// The cap (--cap-std, default 0.50) is generous by intent: a judge that runs out
-// mid-deliberation records no verdict, and no-verdict problems are EXCLUDED from the
-// counterfactual — an infra artifact must not become a filter decision. The judge
-// never learns any of this: no language about ITS OWN budget anywhere, the session
-// simply ends.
-// Belt and braces on session end: submit_verdict sets pi's terminate flag AND this
-// runner watches for verdict.json and stops the process itself.
+// Triage judge: one agent per problem predicts whether an attempt arm would prove it.
+// --print-view prints the judge's full provider payload for the first problem and exits.
 
 import { parseArgs } from "node:util";
 import { execSync } from "node:child_process";
@@ -55,11 +25,8 @@ try {
       model: { type: "string", default: "deepseek/deepseek-v4-flash" },
       thinking: { type: "string", default: "high" },
       "max-tokens": { type: "string", default: "384000" },
-      // The budget of the ARM BEING JUDGED (run.js --budget-std), quoted to the judge
-      // as a property of that agent. Not the judge's own cap — see the prompt note.
       "target-budget-std": { type: "string", default: "1.00" },
       "run-id": { type: "string" },
-      // Print the judge's whole view for the first problem and exit — no run, no spend.
       "print-view": { type: "boolean", default: false },
     },
     strict: true,
@@ -97,63 +64,19 @@ if (!PRINT_VIEW) {
   mkdirSync(runDir, { recursive: true });
 }
 
-// Only search_mathlib talks to the server now (grep_mathlib greps source on disk, the
-// verdict tool writes a file) — a compile-free judge should not be blocked by a REPL
-// that it will never call.
 if (COMBO.includes("lean-search") && !PRINT_VIEW) {
   const health = await fetch(`${LEAN_URL}/health`, { signal: AbortSignal.timeout(3000) }).then((r) => r.json()).catch(() => null);
   if (!health?.ready) { console.error("lean server not ready — search_mathlib judges need it"); process.exit(1); }
 }
 
-// The whole judge view: the question, the agent it is about, the theorem, submit.
-//
-// PROMPT VARIANT plain-0815 (was no-compile-0815, itself was target-arm-0815). Same
-// question, stripped: everything that told the judge HOW to answer is gone, and what
-// is left is only what the question is unintelligible without. Cut, and why —
-//   - "for example: the required theory is absent from Mathlib and far too large to
-//     build within that limit, or the statement is false as formalized" — two failure
-//     modes named in the question is a checklist. A judge that finds neither has been
-//     handed a reason to say yes; whether it generates its own failure modes IS the
-//     measurement.
-//   - "Investigate however you see fit with the tools you have" — permission nobody
-//     withheld, and naming investigation invites turns to be spent proving it happened.
-//   - "You are judging feasibility, not producing a solution" — the prompt no longer
-//     needs a disclaimer about a solution it never asks for.
-//   - The editorial trim ("It works alone", "stopped where it stands, proved or not"):
-//     the same facts, said once.
-// Kept, because the counterfactual is not defined without them:
-//   1. The subject arm described explicitly, not by analogy — "same tools you have" was
-//      false in both directions, and is worse now that the judge holds at most a search
-//      tool (nothing at all for a search-less arm).
-//   2. The arm's per-problem budget. "Provable in principle" and "provable at $1" are
-//      different predicates on this tier — the reference grep cell's failures burned
-//      $0.75 mean against a $1 cap — and the gate is only a gate if the judge answers
-//      the second. This does NOT breach the no-budget-language rule (2026-08-04): that
-//      rule keeps the judge's OWN cap out of its view, because enforcement must never
-//      become information. The subject's budget is the opposite thing — it is the
-//      counterfactual being predicted. The judge's own cap stays unmentioned, and a
-//      capped judge still just ends.
-//   3. "you cannot compile, run or test anything ... a prediction, not your own
-//      attempt". Without it the judge's own emptyhandedness reads as evidence about the
-//      subject, which is a much larger thumb on the scale than the sentence is.
-// Residual, deliberately not narrated to the judge: its grep results are rendered
-// path-free (cfg.mathlib_read is unset for judges), so it cannot open Mathlib sources
-// the way the grep arm can. The judge is told what the arm has; it is not told that it
-// has less. That asymmetry biases verdicts pessimistic, so it is a caveat on "no", not
-// a silent thumb on "yes".
 const retrievalLine = COMBO.includes("lean-grep")
   ? "- Searches Mathlib with grep_mathlib: text and regex search over the Mathlib source at the version it compiles against. It can open the source files those results name."
   : COMBO.includes("lean-search")
     ? "- Searches Mathlib with search_mathlib: semantic search returning matching declarations with their signatures."
     : "- Has no search tool.";
-// The SUBJECT holds check_snippet when its combo says so — the bullet mirrors the
-// attempt-side tool description (extensions/lean-snippet.ts). The judge still never
-// does: this is description, not equipment.
 const snippetLine = COMBO.includes("lean-snippet")
   ? "\n- Also compiles standalone snippets with check_snippet: the snippet is checked on its own against Mathlib, in a fresh environment that does not see problem.lean, and returns every error with its line number and the goal state at each `sorry`."
   : "";
-// Facts arm: mirrors extensions/lean-facts.ts + lean-facts.prompt.md — the bank, the
-// admission gate, and the not-in-scope-for-problem.lean catch, stated without comment.
 const factsLine = COMBO.includes("lean-facts")
   ? "\n- Also keeps a fact bank with add_fact: verified Lean declarations, compiled against Mathlib and the existing bank and admitted only if they have no errors, no `sorry`, and no new axioms. Bank facts are automatically in scope for its check_snippet calls, but not for problem.lean — the final proof must copy in every bank fact it uses."
   : "";
@@ -174,9 +97,7 @@ The theorem:
 ${statement}
 \`\`\``;
 
-// Judge toolset = the arm's retrieval tool + the verdict tool, nothing else.
-// check_snippet, lean_check, files, spawn and facts never appear here, whatever the
-// combo says; a judge of a search-less arm holds only submit_verdict.
+// Judge toolset: the arm's retrieval tool plus submit_verdict.
 const extTools = (name) => {
   const m = /^\/\/ @tools\s+(.+)$/m.exec(readFileSync(join(ROOT, "extensions", `${name}.ts`), "utf8"));
   return m ? m[1].split(",").map((s) => s.trim()).filter(Boolean) : [];
@@ -184,14 +105,8 @@ const extTools = (name) => {
 const exts = [...COMBO.filter((x) => ["lean-search", "lean-grep", "lean-loogle"].includes(x)), "lean-verdict"];
 const view = { exts, tools: exts.flatMap(extTools) };
 
-// The one user message. The system prompt already asks the question; this only starts
-// the turn, so it says nothing the system prompt has not said.
 const TASK = "Answer the question in your instructions with submit_verdict.";
 
-// Verdicts are only interpretable against the question that produced them, so the
-// variant id rides in every record and in the summary — and so do the same freeze
-// identifiers run.js records (git sha + pi version; the sha alone under-identifies the
-// harness, one `npm update` wide hole).
 const PROMPT_VARIANT = "plain-0815";
 let gitSha = "unknown";
 try { gitSha = execSync("git rev-parse --short HEAD", { cwd: ROOT }).toString().trim(); } catch {}
@@ -202,12 +117,6 @@ console.log(bold(`\ntriage ${RUN_ID}`));
 console.log(dim(`  judge tools: ${view.tools.join(", ")}   cap: ${money(CAP_STD)} @std   problems: ${problems.length}`));
 console.log(dim(`  prompt:      ${PROMPT_VARIANT} — subject arm: ${COMBO.join(" + ") || "(baseline)"} + lean_check + files @ ${money(TARGET_BUDGET)}/problem\n`));
 
-// --print-view: the judge's ENTIRE view for the first problem, read off the provider
-// payload (extensions/dump-view.ts dumps it and exits before the request is sent, so
-// this costs nothing) rather than reconstructed here — the prompt this file writes is
-// not the prompt the model gets: pi appends its own trailer to a custom system prompt,
-// and the tool schemas come from the extensions. Reconstruction would drift; this
-// cannot. Nothing is written to results/.
 if (PRINT_VIEW) {
   const name = problems[0];
   const tmpDir = mkdtempSync(join(tmpdir(), "triage-view-"));
@@ -247,7 +156,7 @@ if (PRINT_VIEW) {
 async function judge(name, idx) {
   const statement = readFileSync(join(PROBLEMS_DIR, `${name}.lean`), "utf8").trim();
   const cfg = {
-    problem: name, // REPL round-robin client id
+    problem: name,
     model: A.model,
     thinking: A.thinking,
     max_tokens: MAX_TOKENS > 0 ? MAX_TOKENS : null,
@@ -262,8 +171,7 @@ async function judge(name, idx) {
     cfg,
     view: { ...view, systemPrompt: judgePrompt(statement) },
   });
-  // Stop the process once the verdict lands (grace period lets pi flush the session)
-  // — terminate-on-tool plus this watcher covers both pi behaviors.
+  // Stop the process once verdict.json appears.
   const verdictPath = join(runDir, name, "work", "verdict.json");
   const watcher = setInterval(() => {
     if (existsSync(verdictPath)) {

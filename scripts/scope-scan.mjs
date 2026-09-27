@@ -6,8 +6,7 @@ import { classifyLines } from "../runner/common.js";
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const OPEN = "([{⟨⦃", CLOSE = ")]}⟩⦄";
 
-// Walk the binder body from `start`; report if a top-level ↔ appears before the
-// binder's enclosing bracket closes. That is exactly the fatex_81 shape.
+// Index of a top-level ↔ reached before the enclosing bracket closes, else null.
 function swallows(text, start) {
   let depth = 0;
   for (let i = start; i < text.length; i++) {
@@ -25,7 +24,6 @@ for (const [name, dir] of CORPORA) {
   for (const f of readdirSync(join(ROOT, dir)).filter(x => x.endsWith(".lean")).sort((a,b)=>parseInt(a)-parseInt(b))) {
     const src = readFileSync(join(join(ROOT, dir), f), "utf8");
     const code = classifyLines(src).filter(l => l.kind === "code").map(l => l.line).join("\n");
-    // statement text: from the theorem head to `:= by`
     const m = /\btheorem\b([\s\S]*?):=\s*by/.exec(code);
     if (!m) continue;
     const stmt = m[1];
@@ -34,7 +32,6 @@ for (const [name, dir] of CORPORA) {
       if (comma < 0) continue;
       const hit = swallows(stmt, comma + 1);
       if (hit !== null) {
-        // does the bound variable appear on the right of the ↔ ?
         const binder = stmt.slice(bm.index + 1, comma).replace(/[(){}\[\]:]/g, " ").trim().split(/\s+/)[0] ?? "";
         const rhs = stmt.slice(hit + 1);
         const usesVar = binder && new RegExp(`(^|\\W)${binder.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")}(\\W|$)`).test(rhs);

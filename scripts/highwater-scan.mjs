@@ -1,35 +1,12 @@
 #!/usr/bin/env node
-// Retroactive solved high-water mark: find every attempt that ever HELD a verified
-// proof, and say what it did next.
-//
-// extensions/lean-check.ts stamps this live from 2026-08-07 on (runner/highwater.js).
-// Every run recorded before that has no stamp, so this reconstructs one from the pi
-// session files, which are the durable linear record of an attempt (see
-// runner/session-tail.js). It is read-only with respect to results/ — the same contract
-// as runner/regrade.js: recorded verdicts document what a run measured at the time, and
-// this reports on them rather than rewriting them.
+// Reconstruct each attempt's problem file from its pi session, find the first verified
+// green lean_check (the solved high-water mark) and report what happened after it.
 //
 //   node scripts/highwater-scan.mjs [results/<run-id> ...]   (default: every run)
-//     --verify-all   re-grade the first-green file of EVERY green attempt, not just
-//                    the ones that graded unsolved (hours of Lean time)
-//     --no-verify    skip the lean server entirely; leave ambiguous checks unresolved
-//     --out <path>   markdown report (default results/highwater-audit-<date>.md)
+//     --verify-all   re-grade the first-green file of every green attempt
+//     --no-verify    skip the lean server; leave ambiguous checks unresolved
+//     --out <path>   markdown report
 //     --csv <path>   per-attempt csv
-//
-// How a check is coloured. `details.ok` on a lean_check result already folds in the
-// compile, statement and axiom verdicts (extensions/lean-check.ts sets ok=false for the
-// last two), so the ONE thing it does not cover is sorries — a file full of them has
-// ok:true. Sorries are read from the rendered text, which is where the trap is: the
-// render is capped at 8000 chars and prints sorries LAST, so a truncated ok-check may
-// be hiding a sorry list. Those are marked `ambiguous` and resolved by recompiling the
-// reconstructed bytes, never by guessing. Measured on the corpus: every uses_sorry
-// attempt that looked green did so through a truncated check.
-//
-// How the file is reconstructed. Replay every successful write/edit tool call over the
-// original problem file, in session order, through the same applyEdits the agent's edit
-// tool uses. Each lean_check prints `md5 <hex>` of the bytes it compiled, so the replay
-// is CHECKED at every step rather than trusted: a check whose md5 disagrees is reported
-// as unverified and never fed to the compiler as if it were the agent's file.
 
 import { readFileSync, readdirSync, existsSync, statSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { join, resolve, dirname, basename } from "node:path";
@@ -48,16 +25,12 @@ const flag = (n) => argv.includes(`--${n}`);
 const opt = (n, d) => { const i = argv.indexOf(`--${n}`); return i >= 0 ? argv[i + 1] : d; };
 const VERIFY_ALL = flag("verify-all");
 const NO_VERIFY = flag("no-verify");
-// Local date, not toISOString(): a run analysed at 23:30 UTC+1 belongs to that day in
-// the notebook, and a filename that disagrees with its own header is a filing error
-// waiting to happen.
 const now = new Date();
 const DATE = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 const OUT = opt("out", join(ROOT, "results", `highwater-audit-${DATE.slice(5).replace("-", "")}.md`));
 const CSV = opt("csv", join(ROOT, "results", `highwater-audit-${DATE.slice(5).replace("-", "")}.csv`));
 
 const md5 = (s) => createHash("md5").update(s).digest("hex");
-// Positional args are run dirs; --out/--csv swallow the token after them.
 const TAKES_VALUE = new Set(["--out", "--csv"]);
 let runDirs = [];
 for (let i = 0; i < argv.length; i++) {
@@ -66,8 +39,6 @@ for (let i = 0; i < argv.length; i++) {
   runDirs.push(resolve(argv[i]));
 }
 if (!runDirs.length) {
-  // results/ is gitignored, so it exists in the main checkout and not in a worktree —
-  // where this script is likely being developed. Say so instead of throwing ENOENT.
   const results = join(ROOT, "results");
   if (!existsSync(results)) {
     console.error(`no results/ under ${ROOT} — pass run dirs explicitly, e.g. node scripts/highwater-scan.mjs ~/CMP/results/<run-id>`);
@@ -79,21 +50,11 @@ if (!runDirs.length) {
     .sort();
 }
 
-// --- one attempt --------------------------------------------------------------
-
-// Success wording of the file tools, which is how a replay knows an edit LANDED.
-// A rejected edit (oldText not found, sandbox block, non-unique match) leaves the file
-// untouched, and replaying it anyway would desynchronise every later md5.
+// Success wording of the file tools; only edits that landed are replayed.
 const WROTE = /^Successfully wrote \d+ bytes to /;
 const REPLACED = /^Successfully replaced \d+ block\(s\) in /;
 const HEADER = /^checked (.*?) \((\d+) bytes, md5 ([0-9a-f]+)\)/;
 
-// Models address problem.lean both relatively and absolutely. The absolute form names
-// the attempt's ORIGINAL location, so a dir that has since been moved (results/_archive)
-// would resolve to nothing and the replay would silently drop every edit — which the md5
-// check would then report as a corpus-wide mismatch rather than as a moved directory.
-// The sandbox (extensions/file-sandbox.ts) guarantees every successful write landed
-// inside that attempt's own work/, so the path tail identifies the file unambiguously.
 function targetsProblemFile(p, attemptDir, workFile) {
   return resolve(join(attemptDir, "work"), p) === workFile || /(^|\/)work\/problem\.lean$/.test(p);
 }
@@ -106,8 +67,6 @@ function sessionEntries(attemptDir) {
   const dir = join(attemptDir, "session");
   let files;
   try { files = readdirSync(dir).filter((f) => f.endsWith(".jsonl")).sort(); } catch { return []; }
-  // Several files = the pre-2026-07-29 respawn era, one session per nudge cycle. The
-  // file on disk survived across respawns, so filename order IS attempt order.
   const out = [];
   for (const f of files) {
     for (const line of readFileSync(join(dir, f), "utf8").split("\n")) {
@@ -126,10 +85,10 @@ function scanAttempt(runDir, name, problemsDir) {
 
   const original = readFileSync(origPath, "utf8");
   const workFile = resolve(join(attemptDir, "work", "problem.lean"));
-  let state = original; // run.js copies the problem file in as the starting problem.lean
+  let state = original;
   let turns = 0, checkIndex = 0;
   const tokens = { in: 0, out: 0, cache_read: 0 };
-  const pending = new Map(); // toolCallId -> {name, args}
+  const pending = new Map();
   const checks = [];
   let edits = 0, writes = 0, failedEdits = 0, desynced = false;
 
@@ -140,7 +99,6 @@ function scanAttempt(runDir, name, problemsDir) {
       turns++;
       const u = m.usage;
       if (u) { tokens.in += u.input ?? 0; tokens.out += u.output ?? 0; tokens.cache_read += u.cacheRead ?? 0; }
-      // Raw recorded arguments, normalized exactly as the tool's prepareArguments does.
       for (const b of m.content ?? []) if (b.type === "toolCall") pending.set(b.id, { name: b.name, args: normalizeEditArgs(b.arguments ?? {}) });
       continue;
     }
@@ -154,7 +112,7 @@ function scanAttempt(runDir, name, problemsDir) {
         if (call.name === "write" && WROTE.test(text)) { state = String(call.args.content ?? ""); writes++; }
         else if (call.name === "edit" && REPLACED.test(text)) {
           try { state = applyEdits(state, call.args.edits ?? [], "problem.lean").newContent; edits++; }
-          catch { desynced = true; } // replay diverged; the md5 check below will say so
+          catch { desynced = true; }
         } else failedEdits++;
       }
       continue;
@@ -164,11 +122,7 @@ function scanAttempt(runDir, name, problemsDir) {
     checkIndex++;
     const h = HEADER.exec(text);
     const d = m.details ?? null;
-    // Both renderers, because this scanner reads transcripts from before and after the
-    // 2026-08-07 check-output re-cut: the old one ended a cut result with "(truncated)"
-    // and printed sorries last (hence "ambiguous" — an ok-looking check that may have
-    // hidden a sorry list); the new one cuts only the ERROR section, marks it inline, and
-    // states every sorry line in its header, so `ambiguous` cannot arise in new runs.
+    // An ok-check whose output was truncated may hide sorries: marked ambiguous.
     const truncated = text.trimEnd().endsWith("(truncated)") || text.includes("[... errors truncated");
     const sorried = /sorr(?:y|ies) at line/.test(text) || text.includes("declaration uses 'sorry'");
     const replayMd5 = md5(state);
@@ -179,14 +133,14 @@ function scanAttempt(runDir, name, problemsDir) {
       header_md5: h ? h[3] : null,
       header_bytes: h ? +h[2] : null,
       replay_md5: replayMd5,
-      // The header md5 is 12 hex chars (a prefix), so compare prefixes.
+      // header md5 is a 12-hex prefix
       verified: h ? replayMd5.startsWith(h[3]) : null,
       code: state,
       truncated,
       colour:
         d?.ok === true ? (sorried ? "sorry" : truncated ? "ambiguous" : "green")
         : d?.ok === false ? "fail"
-        : "error", // thrown ToolFailure: unavailable/crash, no verdict about the file
+        : "error",
     };
     checks.push(rec);
   }
@@ -203,7 +157,6 @@ function scanAttempt(runDir, name, problemsDir) {
   };
 }
 
-// What happened after the first proof — the question this whole audit exists to answer.
 function after(a, firstIdx) {
   const first = a.checks.find((c) => c.index === firstIdx);
   const later = a.checks.filter((c) => c.index > firstIdx);
@@ -213,17 +166,13 @@ function after(a, firstIdx) {
     first,
     checks_after: later.length,
     checks_after_by_colour: byColour,
-    // Bytes, not intentions: did the file the attempt submitted differ from the proof?
     changed_after: a.final_replay_md5 !== first.replay_md5,
     turns_after: a.turns - first.turn,
     cost_std_after: +(a.cost_std_end - first.cost_std).toFixed(5),
     cost_std_at_proof: +first.cost_std.toFixed(5),
-    // A later green means it wrecked the proof and got it back (or improved it).
     last_green_index: later.filter((c) => c.colour === "green").at(-1)?.index ?? firstIdx,
   };
 }
-
-// --- scan ---------------------------------------------------------------------
 
 const attempts = [];
 for (const runDir of runDirs) {
@@ -254,9 +203,7 @@ for (const a of attempts) {
   for (const c of a.checks) { totals.checks++; totals[c.colour]++; if (c.verified === false) totals.unverified++; }
 }
 
-// --- resolve the ambiguous checks --------------------------------------------
-// A truncated ok-check might be a proof or might be a wall of sorries. Recompile the
-// reconstructed bytes and ask the same gate the harness asks (runner/highwater.js).
+// Recompile ambiguous checks to decide green vs sorry.
 
 const ambiguous = attempts.flatMap((a) => a.checks.filter((c) => c.colour === "ambiguous").map((c) => ({ a, c })));
 let resolved = { green: 0, sorry: 0, unresolved: 0 };
@@ -279,17 +226,12 @@ if (!NO_VERIFY && ambiguous.length) {
   }
 }
 
-// --- the high-water verdict ---------------------------------------------------
-
 for (const a of attempts) {
   const firstGreen = a.checks.find((c) => c.colour === "green");
   a.high_water = firstGreen ? after(a, firstGreen.index) : null;
 }
 
-// Re-grade the first-green file where it matters. "The harness of the day said green"
-// is not the same claim as "this file grades solved today": the axiom gate only entered
-// the agent-facing check on 2026-08-04, and before 2026-08-01 a measured CPU budget
-// could convict a file the agent had watched compile. Only a fresh grade() settles it.
+// Re-grade the first-green file with the current grader.
 const toVerify = attempts.filter((a) => a.high_water && (VERIFY_ALL || a.solved === false));
 if (!NO_VERIFY && toVerify.length) {
   console.log(bold(`\nre-grading ${toVerify.length} first-proof files with the current grader`));
@@ -301,8 +243,6 @@ if (!NO_VERIFY && toVerify.length) {
       const p = join(tmp, `${a.problem}.lean`);
       writeFileSync(p, c.code);
       try {
-        // end:"completed" — a snapshot is a file the agent deliberately produced and
-        // watched pass, so the statement checks apply straight (grade.js opts.end).
         const g = await grade(a.problem, p, a.origPath, { end: "completed" });
         a.high_water.verdict = { solved: g.solved, reason: g.solved ? null : g.reason, detail: g.solved ? null : (g.detail ?? "").split("\n")[0].slice(0, 200) };
       } catch (e) {
@@ -313,8 +253,6 @@ if (!NO_VERIFY && toVerify.length) {
     }
   } finally { rmSync(tmp, { recursive: true, force: true }); }
 }
-
-// --- report -------------------------------------------------------------------
 
 const withProof = attempts.filter((a) => a.high_water);
 const lost = withProof.filter((a) => a.solved === false);
@@ -346,8 +284,6 @@ for (const a of attempts.filter((x) => x.high_water)) {
 writeFileSync(CSV, rows.map((r) => r.map((x) => (typeof x === "string" && /[",]/.test(x) ? `"${x.replace(/"/g, '""')}"` : x)).join(",")).join("\n") + "\n");
 console.log(dim(`\n  per-attempt csv: ${CSV}`));
 
-// Markdown: the narrative the audit reports are written in, generated from the same
-// numbers so the report and the csv cannot disagree.
 const lines = [];
 lines.push(`# Solved high-water audit — ${DATE}`, "");
 lines.push(`Reconstructed from pi session files across ${runDirs.length} runs. Read-only: no recorded verdict was changed.`, "");

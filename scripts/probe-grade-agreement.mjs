@@ -1,18 +1,6 @@
 #!/usr/bin/env node
-// THE invariant of this harness, checked against real Lean: what the agent watches and
-// what the grader records are the same verdict.
-//
-// "A solve must be observable inside the agent's own feedback loop" (2026-07-27) has been
-// violated three times, each time on a new axis and each time only visible after a run:
-//   * the agent's check and the grader disagreed about what "compiles" means;
-//   * a smuggled `axiom` passed compile, statement and sorry checks, so lean_check said
-//     green and the grader failed the finished attempt as bad_axioms (0804, fatex_99);
-//   * the header said CLEAN on a file whose statement had been rewritten (0807).
-// So this probe builds one file per fault class, asks checkedCompile (the agent's path)
-// and grade() (the recorded path) about each, and fails if they ever disagree — including
-// on the WORD the agent reads first.
-//
-//   node scripts/probe-grade-agreement.mjs      (needs the lean server up; ~15 s)
+// Checks that checkedCompile (the agent's check) and grade() agree, header word included, per fault class.
+// Needs the lean server up.
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -33,8 +21,6 @@ if (!up?.ready) {
   process.exit(0);
 }
 
-// A fixture with everything the grader looks at: a setup def whose BODY is part of the
-// statement, a namespace (so the probe has to work with qualified names), and a sorry.
 const ORIGINAL = `import Mathlib
 
 namespace CmpProbe
@@ -56,13 +42,9 @@ const CASES = [
   ["a sorry left", ORIGINAL, "INCOMPLETE", "uses_sorry"],
   ["does not compile", ORIGINAL.replace("  sorry", "  exact absurd rfl (by simp)"), "FAILED", "compile_error"],
   ["statement rewritten", ORIGINAL.replace("helper n = n + 1", "helper n = helper n").replace("  sorry", "  rfl"), "FAILED", "statement_changed"],
-  // The setup-def hole: the theorem's TYPE is untouched (it names `helper`), only the
-  // body moved. Verified exploitable 2026-07-28 before the value probe existed.
+  // setup def body changed, theorem type untouched
   ["setup def gutted", ORIGINAL.replace("def helper (n : ℕ) : ℕ := n + 1", "def helper (n : ℕ) : ℕ := n + 1 + 0"), "FAILED", "statement_changed"],
   ["smuggled axiom", ORIGINAL.replace("theorem probe_thm", "axiom cheat : ∀ n : ℕ, helper n = n + 1\n\ntheorem probe_thm").replace("  sorry", "  exact cheat n"), "FAILED", "bad_axioms"],
-  // Renaming the theorem makes `#print axioms` in the probe region fail to resolve; the
-  // statement verdict has to speak first, and the probe's own error must not read as the
-  // agent's file failing to compile.
   ["theorem renamed away", ORIGINAL.replace("theorem probe_thm", "theorem probe_other").replace("  sorry", "  rfl"), "FAILED", "statement_changed"],
 ];
 

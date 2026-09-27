@@ -1,23 +1,4 @@
-// Independent grading of a finished attempt. Never trusts the agent's own lean_check.
-// Checks: (1) theorem statement preserved — the elaborated TYPE of every benchmark
-//             declaration must match the original's, compared α-invariantly via the
-//             probe in runner/stmt.js (a statement means its type), AND the elaborated
-//             VALUE of every benchmark decl whose original body is sorry-free (setup
-//             defs are referenced by name in the theorem's type, so their bodies are
-//             part of the statement; sorry'd slots — proofs, _solution — are exempt),
-//         (2) declaration kind (thm/defn) unchanged and not marked unsafe/partial
-//             (unsafe code may use kernel bypasses like unsafeCast; the axiom report
-//             does not surface those),
-//         (3) file compiles (via the persistent lean server),
-//         (4) #print axioms for every benchmark declaration is clean
-//             (catches sorry via sorryAx, custom axioms, native_decide via ofReduceBool).
-// Plus an advisory lexical tripwire: metaprogramming/kernel-adjacent keywords in the
-// solution source are logged (suspicious_keywords), never auto-failed — an honest
-// competition proof needs zero metaprogramming, so any hit deserves a human read.
-//
-// Unlike the agent-facing checkedCompile, the grader never pre-rejects anything
-// lexically: it must always measure what is actually in the file (regrading old runs
-// included), so banned constructs are caught by the env-level checks alone.
+// Independent grading of a finished attempt: statement preserved, file compiles, axioms clean.
 
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
@@ -28,16 +9,9 @@ import { benchmarkDecls, axiomProbe, axiomReports, parseStmtProbe, originalStmtT
 export { serverCheck } from "./stmt.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-// Defined in common.js (stmt.js needs it too, and importing from here would cycle);
-// re-exported so existing importers keep working.
 export { ALLOWED_AXIOMS };
 
-// --- lexical tripwire (advisory only) ----------------------------------------
-// Entry points into compile-time execution / kernel-adjacent features. Presence is
-// anomalous in an honest competition proof but NOT proof of cheating (a word can sit
-// in a string or block comment) — so hits are logged for a human, never auto-failed.
-// The env-level checks stay the gate; this covers what they cannot see
-// (environment writes via metaprogramming, kernel-check config tampering).
+// Advisory keyword tripwire: hits are logged, never failed.
 const SUSPICIOUS = [
   "macro", "macro_rules", "elab", "elab_rules", "syntax", "notation",
   "run_elab", "run_cmd", "#eval", "initialize",
@@ -52,25 +26,7 @@ export function suspiciousKeywords(source) {
   });
 }
 
-/**
- * Takes no budget: the check verdict is the server's per-declaration heartbeat cap,
- * identical for every client, so there is no number the grader could hold differently
- * from the agent.
- *
- * `opts.end` is the attempt's outcome ("completed" | "timeout" | "budget_exceeded" |
- * "agent_died"). It flavors the statement checks only: `statement_changed` asserts the
- * agent renamed/deleted/altered the statement it was asked to prove — an accusation a
- * killed attempt does not support. SIGKILL at the budget cap and SIGABRT crashes
- * routinely catch the file mid-edit, and a statement found altered at kill time proves
- * nothing about what a finished
- * attempt would have submitted (agents demonstrably park rewritten statements while
- * developing and restore them after). So on an abnormal end, every statement-check
- * failure (missing / type differs / kind changed / body differs) records the end cause
- * as the reason, keeping the specific diagnosis in the detail. `unsafe_decl`, compile,
- * sorry and axiom verdicts are untouched — they describe the graded file itself, and
- * a solved file counts regardless of `end`.
- * @returns {Promise<{solved: boolean, reason?: string, detail?: string, axioms?: object, suspicious_keywords?: string[]}>}
- */
+// opts.end: the attempt's outcome; after an abnormal end, statement-check failures are reported under it.
 export async function grade(problemName, solutionPath, originalPath, opts = {}) {
   const end = opts.end ?? "completed";
   if (!existsSync(solutionPath)) return { solved: false, reason: "no_file", detail: "problem.lean missing" };
@@ -91,45 +47,24 @@ export async function grade(problemName, solutionPath, originalPath, opts = {}) 
     return fail("grader_error", `original stmt types: ${e.message}`);
   }
 
-  // The same probe body checkedCompile appends, from the same function: agent-facing
-  // checks and the grading request compile identical bytes, so nothing the grader will
-  // decide is invisible in the agent's own loop.
   const probes = axiomProbe(decls);
   let r;
   try {
-    // force: the official verdict always comes from a fresh compile, not the memo —
-    // an agent-side timeout memoized under the same code hash must not stand in for
-    // the grader's own run. Connection failures are retried for 5 min (withConnRetry):
-    // this verdict is permanent, so a REPL mid-restart must be waited out, not recorded.
+    // force: fresh compile, bypassing the memo.
     r = await withConnRetry(() => serverCheck(`${solution}\n${probes}`, "grader", true));
   } catch (e) {
     return fail("grader_error", `lean server unreachable: ${e.message}`);
   }
-  // No resource outcome is a fail. A file too expensive to compile on this machine comes
-  // back `unavailable` after the server has retried it on a second REPL instance, and
-  // lands here as `grader_error`: visible, re-gradeable, and honest — the run learned
-  // nothing about the proof. Recording it as `compile_error` would be a permanent
-  // verdict resting on a measurement that the same bytes can fail one minute and pass
-  // the next.
   if (r.error) return fail("grader_error", `${r.error}${r.bound ? ` [bound: ${r.bound}]` : ""}`);
-  // Probe/axiom internals stay out of recorded details — only real compiler output.
   const { pretty } = renderWithoutProbe(r.messages, r.sorries);
 
-  // Classification order (statement first, matching the old grader's priority):
-  // probe output → statement checks → compile status → axiom checks.
+  // Order: probe output, statement checks, compile status, axioms.
   const got = parseStmtProbe(r.messages);
   if (Object.keys(got).length === 0) {
-    // The probe emits a line per decl even on broken files; total silence means the
-    // parser never reached the end of the file (or, on a clean compile, a grader bug).
     return r.ok
       ? fail("grader_error", "stmt probe produced no output on a clean compile")
       : fail("compile_error", `statement unknown (file did not elaborate to the end)\n${pretty.slice(0, 3500)}`);
   }
-  // Statement-check failures are attributed to the kill when there was one: the file
-  // at kill time is whatever state SIGKILL/SIGABRT happened to catch, and "maybe it
-  // would have reverted the statement given more budget" is unknowable — the honest
-  // reason the attempt is unsolved is that it was stopped. The diagnosis stays in the
-  // detail either way.
   const stmtFail = (detail) =>
     end !== "completed"
       ? fail(end, `${detail}\n  (attempt ended '${end}' — file state at kill time; not graded as statement tampering)`)
@@ -142,12 +77,7 @@ export async function grade(problemName, solutionPath, originalPath, opts = {}) 
       return stmtFail(`${d}: elaborated type differs from original\n  expected: ${orig[d].type.slice(0, 300)}\n  got:      ${s.type.slice(0, 300)}`);
     if (s.kind !== orig[d].kind)
       return stmtFail(`${d}: declaration kind changed (${orig[d].kind} -> ${s.kind})`);
-    // Setup-definition bodies are part of the statement: the theorem's type references
-    // them by NAME, so type equality alone lets a gutted body through. Compared exactly
-    // where the original's own value is sorry-free — the sorry'd slots (proofs,
-    // _solution) stay the agent's. For class/structure/inductive the "value" is the
-    // constructor telescope, which is where the field types live — the inductive's own
-    // type is only `… → Prop` and does not move when a field is gutted.
+    // Setup-definition bodies must match wherever the original's value is sorry-free.
     if (!orig[d].direct_sorry && orig[d].value != null && orig[d].value !== "-" && s.value !== orig[d].value)
       return stmtFail(
         `${d}: ${orig[d].kind === "induct" ? "class/structure fields differ" : "definition body differs"} from original ` +
@@ -158,10 +88,6 @@ export async function grade(problemName, solutionPath, originalPath, opts = {}) 
   }
   if (!r.ok) return fail("compile_error", pretty.slice(0, 4000));
 
-  // Axiom reports, read with the shared line-gated parser (stmt.js axiomReports) — the
-  // same one the agent's lean_check uses, so a green check and a solved grade are the
-  // same computation over the same bytes. The grader keeps sorryAx: an env-level sorry
-  // is `uses_sorry` here, while in-loop it is redundant with the sorries list.
   const allText = (r.messages ?? []).map((m) => m.text).join("\n");
   const axioms = axiomReports(r.messages, solution.split("\n").length, decls);
   for (const d of decls) {

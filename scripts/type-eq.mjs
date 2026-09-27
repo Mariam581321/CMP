@@ -33,7 +33,6 @@ for (const [name, origPath, oursPath] of CASES) {
       const va = a.probe[d]?.value, vb = b.probe[d]?.value;
       if (va !== vb) { allSame = false; notes.push(`VALUE DIFFERS: ${d}`); }
     }
-    // does the theorem's canonical type mention a non-Mathlib Irreducible?
     const mainTy = Object.values(a.probe).map(p => p.type ?? "").join(" ");
     const irr = [...mainTy.matchAll(/[\w.]*Irreducible[\w.]*/g)].map(m => m[0]);
     console.log(`${name}: decls=${a.decls.join(",")} | orig compiles=${a.ok} ours compiles=${b.ok} | IDENTICAL TYPES+VALUES: ${allSame ? "YES" : "NO -> " + notes.join("; ")}${irr.length ? " | Irreducible consts: " + [...new Set(irr)].join(",") : ""}`);

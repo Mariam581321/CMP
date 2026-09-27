@@ -1,26 +1,11 @@
-// Plan-artifact check (arm 1). A *plan* is problem.lean in a state where:
-//   (1) the file compiles,
-//   (2) the statement is preserved,
-//   (3) no benchmark declaration's own proof term reaches `sorry` directly — i.e.
-//       only helper lemmas may be sorry'd; the main theorem's proof (and any
-//       _solution abbrev) is complete *in terms of* the helpers, so the compiler has
-//       verified the reduction "helpers ⟹ theorem".
-// (3) is decided by the statement probe (runner/stmt.js), which walks each benchmark
-// declaration's proof term in the environment — a sorry inside a referenced helper
-// lemma lives in the helper's value and does not count against the plan. No source
-// line heuristics.
-// The one fake this definition admits — a helper that merely restates the theorem —
-// is scored (never gated) via token similarity between each helper's sorry goal and
-// the original theorem's sorry goal, and logged in the tool-result details for
-// post-hoc analysis.
+// Plan check: problem.lean compiles, the statement is intact, and only helper lemmas reach `sorry`.
 
 import { postCheck } from "./common.js";
 import { CLIENT_WAIT_MS } from "./check-env.js";
 import { checkedCompile, benchmarkDecls } from "./stmt.js";
 import { checkStatus, blockerNotes } from "./verdict.js";
 
-// Crude goal similarity: Jaccard over the token sets of the pretty-printed goals.
-// A helper that restates the theorem reproduces its sorry goal almost verbatim.
+// Jaccard similarity over the token sets of two goals.
 export function goalSimilarity(a, b) {
   const toks = (s) => new Set(String(s).split(/[\s(),{}⟨⟩[\]]+/).filter(Boolean));
   const A = toks(a), B = toks(b);
@@ -30,12 +15,7 @@ export function goalSimilarity(a, b) {
   return inter / (A.size + B.size - inter);
 }
 
-/**
- * Check whether `solution` is currently a valid plan for `original`.
- * `problemName` keys the original-side type cache (basename of the problem file);
- * the sha guard keeps a wrong/default name correct, just uncached.
- * Returns { ok, text, details } — text is agent-facing, details are for the log.
- */
+// Returns { ok, text, details }: text is agent-facing, details are for the log.
 export async function planCheck(original, solution, problemName = "adhoc") {
   const check = await checkedCompile(solution, { original, problemName, client: problemName });
   if (check.rejected)
@@ -43,10 +23,6 @@ export async function planCheck(original, solution, problemName = "adhoc") {
   if (check.error)
     return { ok: false, text: check.pretty || `lean server error: ${check.error}`, details: { ok: false, reason: "server_error" }, isError: true };
 
-  // Statement and axiom faults, in the wording lean_check and the supervisor use for
-  // exactly the same faults (runner/verdict.js blockerNotes) plus the one plan-specific
-  // sentence: a "plan" resting on a smuggled axiom is not a reduction the compiler
-  // verified, it is the conclusion assumed.
   const status = checkStatus(check);
   if (status.stmtBad || status.axBad)
     return {
@@ -81,8 +57,7 @@ export async function planCheck(original, solution, problemName = "adhoc") {
   // Main decls are sorry-free, so every reported sorry belongs to a helper.
   const helperSorries = check.sorries ?? [];
 
-  // Restatement score: max similarity of each helper's sorry goal to the original
-  // theorem's sorry goal(s). Logged only — never shown to the agent, never gated.
+  // Restatement score: similarity of each helper's sorry goal to the original theorem's goals (logged only).
   let helpers = [];
   try {
     const orig = await postCheck({ code: original, client: problemName }, CLIENT_WAIT_MS);

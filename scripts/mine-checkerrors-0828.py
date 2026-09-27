@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""What did each lean_check actually tell the agent?
-
-For every lean_check and check_snippet in the attempts the paper uses, parse the compiler
-errors out of the tool result and split them into *name errors* (Lean does not know this
-constant/identifier -- exactly the question a search tool answers) and everything else.
-Name errors are where the compiler is being asked a search tool's question.
-
-Writes mined/check-errors.jsonl, one row per lean_check.
-"""
+"""Parse compiler errors from every lean_check/check_snippet result; writes mined/check-errors.jsonl."""
 import csv, glob, json, os, re
 
 CMP = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

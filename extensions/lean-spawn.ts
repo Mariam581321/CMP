@@ -1,17 +1,5 @@
 // @tools spawn_subagents
-// Model-owned subagents. One tool, blocking batch: the agent hands over 1–N task
-// briefs, workers run in parallel, and the call returns every report — parallelism
-// with zero bookkeeping in the agent's view (no ids, no polling, no collect step to
-// forget). Worker mechanics in runner/spawn.js.
-//
-// Like the search/snippet arms, the whole prompt delta lives in the tool description.
-//
-// Cost roll-up: the runner tails worker session files alongside the parent's, so
-// child usage lands in the same budget SIGKILL and in the attempt record (child usage
-// rolls into the shared per-problem cap). This extension additionally
-// keeps workers/ledger.json current so the IN-PROCESS soft stop — the supervisor's
-// "budget spent, stop nudging" check, which only sees parent messages — agrees with
-// the runner's hard cap.
+// Runs a batch of worker agents in parallel and returns their reports.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -22,15 +10,12 @@ import { cmpConfig, costStd, ToolFailure } from "../runner/common.js";
 
 export default function (pi: ExtensionAPI) {
   const cfg = cmpConfig();
-  // Depth 1 is structural — run.js never loads this extension into a worker — but a
-  // misconfigured adhoc launch should degrade to "tool absent", not to worker trees.
   if (cfg.worker != null) return;
   const workersDir: string = cfg.workers_dir ?? join(process.cwd(), "..", "workers");
   const stopPath = join(process.cwd(), "..", "STOP");
   const hasFacts = (cfg.tools ?? []).includes("add_fact");
 
-  // Cumulative worker usage across every spawn call of the attempt, mirrored to disk
-  // for the supervisor (separate extension instance — module state doesn't cross).
+  // Cumulative worker usage, mirrored to workers/ledger.json for the supervisor.
   const ledger = { tokens: { in: 0, out: 0, cache_read: 0 } };
   const onTokens = (u: any) => {
     ledger.tokens.in += u?.input ?? 0;
@@ -43,15 +28,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "spawn_subagents",
     label: "Spawn subagents",
-    // The batch is the parallelism, so the tool itself never needs to run alongside
-    // another copy of itself; sequential keeps two batches from interleaving their
-    // worker numbering and budget picture.
     executionMode: "sequential",
-    // No budget/spend language anywhere the model can see: the harness
-    // never tells the agent how much budget exists or is left, and dollar telemetry
-    // in worker reports invited exactly the strategic early wrap-ups the arm is not
-    // supposed to induce. Cost stays in the tool-result `details` (session log only)
-    // and in worker.json for analysis.
     description:
       "Delegate subtasks to fresh worker agents that run in PARALLEL and report back. " +
       "Each task launches one worker that sees ONLY the problem statement and your task text — " +
@@ -83,8 +60,6 @@ export default function (pi: ExtensionAPI) {
           runWorker({
             idx: nextIdx++,
             task: t.task,
-            // Harness-side per-worker cap (cfg.worker_cap_std, e.g. the library
-            // phase's) — never surfaced to the model in any form.
             maxCostStd: cfg.worker_cap_std ?? 0,
             cfg: { ...cfg, workers_dir: workersDir },
             onTokens,
@@ -93,9 +68,7 @@ export default function (pi: ExtensionAPI) {
       } catch (e: any) {
         throw new ToolFailure(`spawn_subagents could not launch workers: ${String(e?.message ?? e)}`);
       }
-      // Abort paths while blocked: the attempt's STOP file (the documented per-attempt
-      // abort — the supervisor only sees it at agent_end, which never comes while this
-      // call holds the loop) and pi's own abort signal.
+      // Kill workers on the attempt's STOP file or pi's abort signal.
       const killAll = (reason: string) => handles.forEach((h) => h.kill(reason));
       const watcher = setInterval(() => { if (existsSync(stopPath)) killAll("aborted"); }, 2000);
       const onAbort = () => killAll("aborted");
@@ -108,8 +81,6 @@ export default function (pi: ExtensionAPI) {
         signal?.removeEventListener("abort", onAbort);
       }
 
-      // Report headers carry the outcome word only — no turn counts, no dollars: the
-      // model gets the workers' content, never their cost.
       const endNote: Record<string, string> = {
         completed: "finished",
         task_cap: "stopped early",

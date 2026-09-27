@@ -1,11 +1,5 @@
 // @tools edit
-// Always-on: shadows pi's built-in `edit` tool (extension tools are registered over
-// built-ins by name). Same interface and semantics, two behavioral fixes, both in
-// runner/edit.js: (1) fuzzy matching is trailing-whitespace-only — pi's NFKC
-// normalization corrupts Lean unicode (ℕ→N, x⁻¹→x-1) on fuzzy-matched edits;
-// (2) a failed match returns the closest-matching file region so the model can
-// correct its oldText in one turn. Schema, description, and success wording follow
-// pi's built-in so the model-visible surface changes only where intended.
+// Replaces pi's built-in `edit` tool with runner/edit.js (whitespace-only fuzzy match, closest-region hint on failure).
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -43,14 +37,8 @@ export default function (pi: ExtensionAPI) {
         { description: "One or more targeted replacements. Each edit is matched against the original file, not incrementally." },
       ),
     }),
-    // pi's compatibility shims, kept: some models send edits as a JSON string, or a
-    // single legacy top-level oldText/newText pair. In runner/edit.js so a transcript
-    // replay normalizes the raw recorded arguments exactly as the tool did.
     prepareArguments: normalizeEditArgs,
     async execute(_toolCallId, params: any, _signal, _onUpdate, ctx) {
-      // Failures THROW (pi ignores a returned isError — see ToolFailure in
-      // runner/common.js); applyEdits' messages, closest-region snippet included,
-      // become the result text unchanged.
       const { path, edits } = params;
       if (!Array.isArray(edits) || edits.length === 0) {
         throw new ToolFailure("Edit tool input is invalid. edits must contain at least one replacement.");

@@ -1,36 +1,7 @@
 #!/usr/bin/env python3
-"""Build paper/data/ — the one clean table set every paper figure is drawn from.
+"""Reshape mined/attempts.jsonl into the paper/data/ CSV tables and README.
 
-Source of truth: mined/attempts.jsonl (session-mined, post-fold: false-green reruns,
-context-wall reruns, 402-outage resumes and the snippetonly-r2 server/laptop split are
-already glued in; scripts/verify-glue.py re-derives that glue from results/ and
-checks it). This script only reshapes, it never re-derives outcomes.
-
-Conventions (the paper's, fixed 2026-08-18/20; give-up refined 2026-08-29):
-  * NO-NUDGE harness. An attempt counts as solved iff a verified sorry-free
-    lean_check (a "green") occurred BEFORE the agent's first GIVE-UP: the first
-    supervisor nudge that followed a turn the agent ended itself (stopReason "stop")
-    with the statement intact. Nudges after an output cutoff or a transport error,
-    and nudges that only ask for the statement to be restored, are the harness
-    doing its job -- the attempt continues through them. Cost is the cumulative
-    cost_std at that green (main agent + any worker spend at that instant).
-    Post-give-up greens are not solves; post-give-up spend is not spend.
-  * cost_std throughout (list-price DeepSeek dollars).
-  * All 90 safe90 problems are reported. N = 90.
-  * Arms are design names; replicates are rep 1/2. No run ids, glue seams
-    (safe87+easy3, reruns, laptop tail) or patch flags appear in the analysis
-    tables — they live in provenance.csv only.
-
-Outputs (paper/data/):
-  attempts.csv    arm, rep, problem, solved, cost, spend    <- the analysis table
-  behaviour.csv   same keys + behavioural counts before the first give-up (no-nudge view);
-                  the full-harness columns carry a _full suffix
-  cells.csv       one row per (arm, rep): tools, solves, spend
-  problems.csv    the 90 ids, theorem name, how many runs solve each
-  provenance.csv  run id / rerun / resume / laptop / cost-correction per attempt
-  README.md       column dictionary
-
-    ./scripts/build-paper-data.py            (stdlib only, deterministic)
+    ./scripts/build-paper-data.py
 """
 import csv, json, os, re, sys, collections
 
@@ -39,7 +10,7 @@ MINED = os.path.join(ROOT, "mined", "attempts.jsonl")
 OUT = os.path.join(ROOT, "paper", "data")
 os.makedirs(OUT, exist_ok=True)
 
-EXCLUDED = {}  # nothing — N = 90
+EXCLUDED = {}
 
 # mined arm label -> (paper arm, rep)
 ARMS = {
@@ -53,7 +24,6 @@ ARMS = {
 }
 ARM_ORDER = ["base", "grep", "semantic", "snippetonly", "snippet", "spawn", "spawnfacts",
              "snippetfacts"]
-# tool sets, in the paper's vocabulary (lean_check is in every arm)
 TOOLS = {
     "base": "",
     "grep": "grep", "semantic": "search",
@@ -70,9 +40,7 @@ assert len(A) == 1170, len(A)
 def pnum(p):
     return int(p.split("_")[1])
 
-# ------------------------------------------------------------------ outcomes
 def nn_cost(a):
-    """no-nudge first-solve cost, or None."""
     if not a["ever_green"]:
         return None
     fn = a.get("first_giveup")
@@ -81,13 +49,10 @@ def nn_cost(a):
     return None
 
 def nn_spend(a):
-    """spend under the no-nudge harness: everything up to the first give-up, else the
-    whole attempt (main + workers)."""
     fn = a.get("first_giveup")
     return fn["cost_at"] if fn else a["mined_cost_total"]
 
 def proof_stats(a):
-    """line/declaration counts of the first green file (the proof that was paid for)."""
     if not a["ever_green"]:
         return None, None
     f = os.path.join(ROOT, "results", a["run_id"], a["problem"], "highwater-first.lean")
@@ -97,14 +62,13 @@ def proof_stats(a):
     return lines, decls
 
 def pre_nudge_checks(a):
-    """lean_check calls before the first give-up (traj = one entry per lean_check)."""
     fn = a.get("first_giveup")
     if not fn:
         return len(a["traj"])
     return sum(1 for t in a["traj"] if t[0] <= fn["cost_at"])
 
 rows_att, rows_beh, rows_prov = [], [], []
-A = [a for a in A if a["arm"] in ARMS]  # the grid only; other mined runs stay local
+A = [a for a in A if a["arm"] in ARMS]
 for a in sorted(A, key=lambda r: (ARM_ORDER.index(ARMS[r["arm"]][0]), ARMS[r["arm"]][1], pnum(r["problem"]))):
     arm, rep = ARMS[a["arm"]]
     p = a["problem"]
@@ -117,8 +81,6 @@ for a in sorted(A, key=lambda r: (ARM_ORDER.index(ARMS[r["arm"]][0]), ARMS[r["ar
                          "solved": int(solved),
                          "cost": f"{c:.5f}" if solved else "",
                          "spend": f"{nn_spend(a):.5f}"})
-        # behavioural counts are the no-nudge harness's: what happened before the first
-        # give-up (the miner's pre_giveup view; the whole attempt when there was none)
         pg = a["pre_giveup"]
         t = pg["tools"]
         rows_beh.append({**key,
@@ -152,7 +114,6 @@ for a in sorted(A, key=lambda r: (ARM_ORDER.index(ARMS[r["arm"]][0]), ARMS[r["ar
                          "compactions": pg["compactions"],
                          "compactions_full": a["compactions"],
                          })
-    # provenance for every attempt, excluded problem included
     rid = a["run_id"]
     rerun = "context-wall" if "cwrerun" in rid else ("false-green" if "fgrerun" in rid else "")
     src = "laptop" if "laptop" in rid else "server"
@@ -162,11 +123,10 @@ for a in sorted(A, key=lambda r: (ARM_ORDER.index(ARMS[r["arm"]][0]), ARMS[r["ar
         corr = f"{hwf['cost_std']:.5f}->{a['first_green']['cost_at']:.5f}"
     rows_prov.append({**key, "run_id": rid, "source": src, "rerun": rerun,
                       "easy3_supplement": int(rid.endswith("-easy3")),
-                      "resumed_after_402": "",  # filled below from the raw record
+                      "resumed_after_402": "",
                       "first_green_cost_corrected": corr,
                       "first_giveup_ts": (a.get("first_giveup") or {}).get("ts", "")})
 
-# resumed flag needs the raw record (mined rows don't carry it)
 raw_cache = {}
 def raw_row(rid, p):
     if rid not in raw_cache:
@@ -182,7 +142,6 @@ def raw_row(rid, p):
 for r in rows_prov:
     r["resumed_after_402"] = int(bool(raw_row(r["run_id"], r["problem"]).get("resumed")))
 
-# ------------------------------------------------------------------ cells / problems
 cells = []
 for arm in ARM_ORDER:
     for rep in (1, 2):
@@ -202,7 +161,6 @@ for p in sorted({a["problem"] for a in A}, key=pnum):
     problems.append({"problem": p, "theorem": m.group(1) if m else "",
                      "cells_solving": n_solved})
 
-# ------------------------------------------------------------------ write
 def write(name, rows):
     with open(os.path.join(OUT, name), "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
@@ -289,7 +247,6 @@ over the local Mathlib (+ `read`); `check_snippet` = compile a scratch snippet;
 open(os.path.join(OUT, "README.md"), "w").write(README)
 print("  README.md")
 
-# ------------------------------------------------------------------ summary to stdout
 print("\ncells (no-nudge, N=90):")
 for c in cells:
     print(f"  {c['arm']:13s} rep{c['rep']}  {c['tools']:36s} solved={c['solved']:2d}  spend=${c['spend']}")

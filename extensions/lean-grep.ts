@@ -1,32 +1,17 @@
 // @tools grep_mathlib
-// Text search over the pinned local Mathlib checkout (vs lean-search's semantic API).
-// The arm's whole prompt delta lives in the tool description below. Core logic in
-// runner/grep.js.
+// Text search over the pinned local Mathlib checkout.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { grepMathlib } from "../runner/grep.js";
 import { ToolFailure, cmpConfig } from "../runner/common.js";
 
-// Fixed result count, deliberately not a tool parameter — same reasoning as
-// lean-search's NUM_RESULTS: retrieval depth is a property of the arm, not a
-// decision for the agent. Higher than semantic's 6 on purpose: each tool runs at its
-// mechanism's natural depth, and a ranked semantic list degrades gracefully at the tail
-// where a text search does not. 25 keeps the cut from falling on a typical query, at a
-// cost per call comparable to a lean_check.
 const MAX_RESULTS = 25;
 
 export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "grep_mathlib",
     label: "Grep Mathlib",
-    // What the tool is and what comes back — no when/why steering, mirroring
-    // search_mathlib so the semantic-vs-grep arms differ only in retrieval mode.
-    // In a library cell (CMP_LIB_FILE set) the search surface genuinely includes the
-    // baked library, and the description must say so — from the NAME alone an agent
-    // would never guess grep_mathlib covers it. The name itself stays: renaming per
-    // cell would break tool identity across arms, a bigger uncontrolled delta than
-    // the sentence.
     description:
       "Text search over the Mathlib source code, at the exact version being compiled against" +
       (process.env.CMP_LIB_FILE
@@ -54,21 +39,10 @@ export default function (pi: ExtensionAPI) {
         const r = await grepMathlib(params.pattern, { maxResults }, signal);
         if (r.hits.length === 0) {
           return {
-            // Bare statement of fact, mirroring search_mathlib's "No results." — the
-            // earlier "Try a shorter fragment..." sentence was retry coaching that
-            // semantic-arm agents never got, i.e. a strategy asymmetry, not a result.
             content: [{ type: "text", text: "No matches (case-insensitive included)." }],
             details: { count: 0 },
           };
         }
-        // The heading is the assembled name, not the file location — the source text
-        // under it carries the name as *written* (`r_zero`), which is not what a proof
-        // can call (`DihedralGroup.r_zero`), so the name must lead. The location is
-        // shown only when it is actionable: with read access (cfg.mathlib_read: the grep
-        // arm ships a work-dir Mathlib/ symlink) it returns as a secondary line the read
-        // tool can open directly. Without read access a printed path is a trap agents
-        // keep trying to read, so rendering stays path-free and locations live only in
-        // `details` for the run logs.
         const readable = cmpConfig().mathlib_read === true;
         const blocks = r.hits.map((h) => {
           const head = h.name
@@ -76,16 +50,6 @@ export default function (pi: ExtensionAPI) {
             : "(no enclosing declaration — the matching source line is shown as-is)";
           return `• ${head}\n${h.text}${readable ? `\n  — ${h.path}:${h.line}` : ""}`;
         });
-        // Say which reading of the pattern produced these, so a hit that came from a
-        // looser rung is not mistaken for an exact-text match.
-        // A qualified-name hit answers a different question from the text rungs — "yes,
-        // this declaration exists" — and the note also states why the source looks
-        // nothing like the query, which is the thing the agent cannot see.
-        // No claim about HOW the source splits the name across namespaces: rung 0 also
-        // matches heads written with an explicit prefix (`theorem Foo.bar` inside
-        // `namespace A`), where the last-dot split asserted a decomposition that is
-        // simply false. The existence statement and the why-text-search-fails hint hold
-        // in every case; the split does not.
         const qualifiedNote = () =>
           `note: \`${params.pattern}\` exists. The source may declare it under an enclosing namespace with a shorter written name, which is why a text search for the full name can find nothing.`;
         const MODE_NOTE: Record<string, string> = {
@@ -104,16 +68,10 @@ export default function (pi: ExtensionAPI) {
             count: r.hits.length,
             truncated: r.truncated,
             mode: r.mode,
-            // Log-only (pi sends the model `content`, never `details`): keeps every hit's
-            // location for later analysis now that the agent no longer receives it.
             hits: r.hits.map((h) => ({ name: h.name, path: h.path, line: h.line, private: h.isPrivate })),
           },
         };
       } catch (e: any) {
-        // Bad regexes land here with grep's own message — actionable for the model.
-        // Throws (not a returned isError) so the failure is recorded as one; see
-        // ToolFailure in runner/common.js. A zero-hit search is a result, not a
-        // failure, and still returns normally above.
         throw new ToolFailure(`grep_mathlib failed: ${String(e?.message ?? e)}`);
       }
     },

@@ -1,25 +1,6 @@
-// Edit-tool core (extensions/cmp-edit.ts is the tool wrapper that shadows pi's
-// built-in `edit`). Reimplements pi's exact-replacement semantics with two fixes:
-//
-// 1. Fuzzy matching is trailing-whitespace-only. pi (≤0.80.x) normalizes with NFKC +
-//    quote/dash folding and writes touched lines back from normalized space, which
-//    corrupts Lean unicode on any fuzzy-matched edit: ℕ→N, x⁻¹→x-1 (verified against
-//    pi's edit-diff.ts) — a "successful" edit that breaks the file. Trailing
-//    whitespace is the only mismatch worth auto-healing in Lean source, and it
-//    round-trips losslessly.
-// 2. A failed match returns the closest-matching region of the file (best
-//    bigram-similarity line window), so the model can fix its oldText in one cheap
-//    turn instead of re-reading or thrashing. Error wording is harness design surface.
-//
-// Error messages otherwise mirror pi's so run comparisons before/after the swap stay
-// interpretable.
+// Edit-tool core: exact replacement, trailing-whitespace-only fuzzy matching, closest-region hint on failure.
 
-// --- argument shims -----------------------------------------------------------
-// pi's compatibility shims for how models actually call the edit tool: some send
-// `edits` as a JSON string, some send a single legacy top-level oldText/newText pair.
-// Lives here rather than inside the tool because a session transcript records the RAW
-// model arguments, so anything replaying an attempt's edits (scripts/highwater-scan.mjs)
-// has to normalize them the same way the tool did or it reconstructs a different file.
+// Normalizes stringified `edits` and legacy top-level oldText/newText.
 export function normalizeEditArgs(args) {
   if (!args || typeof args !== "object") return args;
   if (typeof args.edits === "string") {
@@ -34,8 +15,6 @@ export function normalizeEditArgs(args) {
   }
   return args;
 }
-
-// --- text helpers ------------------------------------------------------------
 
 const stripTrailingWS = (text) => text.split("\n").map((l) => l.replace(/[ \t]+$/, "")).join("\n");
 
@@ -56,14 +35,11 @@ function diceSimilarity(a, b) {
   return na + nb === 0 ? 0 : (2 * inter) / (na + nb);
 }
 
-// Best-matching window of the file for a failed oldText, as a numbered snippet.
-// Window height = oldText's line count; scored by bigram Dice over trimmed lines.
+// Region of the file most similar to a failed oldText (bigram Dice over line windows).
 export function closestRegion(content, oldText) {
   const lines = content.split("\n");
   const W = Math.min(Math.max(oldText.split("\n").length, 1), lines.length);
   const target = bigrams(oldText.split("\n").map((l) => l.trim()).join("\n"));
-  // Trim once, not once per window: this runs on every failed edit, and a long file
-  // has many windows.
   const trimmed = lines.map((l) => l.trim());
   let best = { score: -1, start: 0 };
   for (let s = 0; s + W <= lines.length; s++) {
@@ -73,11 +49,6 @@ export function closestRegion(content, oldText) {
   const from = Math.max(0, best.start - 1);
   const to = Math.min(lines.length, best.start + W + 1);
   let snippet = lines.slice(from, to).join("\n");
-  // This snippet is the whole point of the failed-edit path — it is what lets the model
-  // fix its oldText in one turn instead of re-reading the file — so the cap is sized
-  // to cover typical multi-line edits whole. The regions past it are ones where the
-  // model sent an enormous oldText, and handing back more file is not what fixes that;
-  // re-reading is, which the message already says.
   if (snippet.length > 2000) snippet = snippet.slice(0, 2000) + " …";
   return { fromLine: from + 1, toLine: to, snippet, score: best.score };
 }
@@ -97,11 +68,6 @@ function notFoundError(path, content, oldText, editIndex, totalEdits) {
   return new Error(msg);
 }
 
-// --- matching ----------------------------------------------------------------
-
-// Exact match first; if any edit needs it, all matching moves to
-// trailing-whitespace-stripped space (same all-or-nothing rule as pi, so offsets
-// live in one consistent space).
 function findIn(hay, needle) {
   const idx = hay.indexOf(needle);
   return idx === -1 ? null : { index: idx, length: needle.length };
@@ -109,9 +75,7 @@ function findIn(hay, needle) {
 
 const countIn = (hay, needle) => hay.split(needle).length - 1;
 
-// Overlay replacements (offsets in `base`, which differs from `original` only by
-// trailing whitespace, so line counts agree) onto the original: only the touched
-// line ranges are rewritten from base-space, every other line keeps its bytes.
+// Applies replacements from `base` onto `original`, rewriting only touched lines.
 function applyPreservingUntouchedLines(original, base, reps) {
   const origLines = original.split("\n");
   const baseLines = base.split("\n");
@@ -138,10 +102,6 @@ function applyPreservingUntouchedLines(original, base, reps) {
   for (const g of groups) {
     out += origLines.slice(lineIdx, g.startLine).map((l) => l + "\n").join("");
     const gStart = starts[g.startLine];
-    // The slice INCLUDES the group's trailing line separator (when one exists), so a
-    // match that consumed the newline replaces it too. The old form ended the slice at
-    // the last line's text and re-appended "\n" unconditionally — an oldText ending in
-    // "\n" then got its newline twice, silently inserting a blank line per fuzzy edit.
     const gEnd = g.endLine - 1 < baseLines.length - 1 ? starts[g.endLine] : base.length;
     let slice = base.slice(gStart, gEnd);
     for (const r of [...g.reps].sort((a, b) => b.index - a.index)) {
@@ -155,11 +115,6 @@ function applyPreservingUntouchedLines(original, base, reps) {
   return out;
 }
 
-// --- entry -------------------------------------------------------------------
-
-// edits: [{oldText, newText}]. Returns { newContent }. Throws with model-facing
-// messages on: empty oldText, not found (with closest-region snippet), ambiguous,
-// overlapping edits, no-op result.
 export function applyEdits(rawContent, edits, path) {
   const bom = rawContent.startsWith("﻿") ? "﻿" : "";
   const withoutBom = bom ? rawContent.slice(1) : rawContent;

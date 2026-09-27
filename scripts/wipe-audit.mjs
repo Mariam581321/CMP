@@ -5,7 +5,6 @@ import { classifyLines } from "../runner/common.js";
 import { sanitize } from "../runner/sanitize.js";
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
-// any token that would make a dropped line semantically load-bearing
 const CODE_TOKEN = /(^|\W)(import|open|namespace|end|section|variable|universe|set_option|attribute|local|instance|theorem|lemma|def|abbrev|structure|class|inductive|axiom|example|noncomputable|macro|notation|deriving|where|sorry|:=)(\W|$)/;
 
 const CORPORA = [
@@ -23,7 +22,6 @@ for (const [name, src, out, prefix] of CORPORA) {
     for (const { line, kind } of cls) {
       if (kind === "comment" || kind === "docstring") {
         dropped++;
-        // strip the comment delimiters, then see if anything code-like remains
         const bare = line.trim().replace(/^\/--?/, "").replace(/^--/, "").replace(/-\/\s*$/, "").trim();
         if (bare && CODE_TOKEN.test(bare)) suspicious.push([f, kind, line.trim().slice(0, 110)]);
       }

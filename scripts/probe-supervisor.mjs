@@ -1,20 +1,4 @@
-// Probe the supervisor's continuation policy (extensions/supervisor.ts) — the REAL
-// module, not a re-implementation, imported under --experimental-strip-types and driven
-// by a fake pi. The check round-trip is real too: a stub HTTP server stands in for the
-// lean server via CMP_LEAN_PORT (read at module load in runner/common.js, so the stub
-// must be listening BEFORE the import below).
-//
-// Policy under test (the 0805 incident): a transport-errored turn (stopReason "error",
-// zero usage, no tool calls) must NOT spend the nudge budget — three attempts died in
-// error,error,NUDGE,... spirals with money unspent — but it gets its own bound
-// (max_error_streak), because an errored turn books zero tokens and is therefore
-// invisible to the spend cap. Also pinned here: checkStatus(check ?? {ok:false}) — a
-// null check result must nudge ("no check result available"), not end the attempt as
-// verified-done.
-//
-// serverCheck path only (no original_file in CMP_CONFIG): the checkedCompile path
-// read-merge-writes the repo-root problems/stmt-types.json cache, which a probe must
-// never touch.
+// Probes the supervisor continuation policy (extensions/supervisor.ts) with a fake pi and a stub lean server.
 import { createServer } from "node:http";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -32,7 +16,7 @@ function check(name, cond, detail = "") {
 // --- stub lean server (must precede the extension import) --------------------
 const NOT_DONE = { ok: false, messages: [{ severity: "error", line: 3, column: 0, text: "unsolved goals" }], sorries: [], pretty: "unsolved goals" };
 const DONE = { ok: true, messages: [], sorries: [], pretty: "COMPLETE" };
-let reply = NOT_DONE; // JSON body, or a string for a garbage (unparseable) response
+let reply = NOT_DONE;
 let hits = 0;
 const stub = createServer((req, res) => {
   req.resume();
@@ -48,8 +32,6 @@ process.env.CMP_LEAN_PORT = String(stub.address().port);
 const { default: supervisor } = await import(join(HERE, "..", "extensions", "supervisor.ts"));
 
 // --- per-scenario harness ----------------------------------------------------
-// Fresh supervisor per scenario: every ledger is closure state. cwd is captured at
-// registration (supervisor.ts uses process.cwd() as the work dir), so chdir first.
 function boot(cfg = {}) {
   const attempt = mkdtempSync(join(tmpdir(), "cmp-sup-"));
   const work = join(attempt, "work");
@@ -64,8 +46,6 @@ function boot(cfg = {}) {
     sendUserMessage: (text, opts) => sent.push({ text, opts }),
   });
   const emit = async (e, ev) => { for (const h of handlers[e] ?? []) await h(ev); };
-  // One agent-loop turn: optional tool calls, then the run-ending assistant message,
-  // then agent_end carrying that run's messages (the shape agent-loop emits).
   const turn = async (stopReason, tools = [], usage = { input: 0, output: 0, cacheRead: 0 }) => {
     for (const t of tools) await emit("tool_execution_start", { toolName: t });
     const m = { role: "assistant", stopReason, usage, content: [] };
@@ -76,7 +56,7 @@ function boot(cfg = {}) {
   return { attempt, work, sent, turn, emit, done };
 }
 
-// (a) baseline unchanged: 4 stalls -> 3 nudges, 4th silent
+// (a) 4 stalls -> 3 nudges, 4th silent
 {
   reply = NOT_DONE;
   const s = boot();
@@ -103,8 +83,7 @@ function boot(cfg = {}) {
   s.done();
 }
 
-// (c) THE regression: errors do not spend the nudge budget. 5 errors + 4 stalls ->
-// 8 nudges (old code: 3 nudges, dead at turn 4).
+// (c) error turns do not spend the nudge budget
 {
   const s = boot();
   for (let i = 0; i < 5; i++) await s.turn("error");
@@ -188,8 +167,7 @@ function boot(cfg = {}) {
   s.done();
 }
 
-// (l) an unusable check result nudges ("no check result available") instead of
-// ending the attempt as done — the checkStatus(check ?? {ok:false}) contract
+// (l) an unusable check result nudges
 {
   const s = boot();
   reply = "this is not json";
@@ -200,8 +178,7 @@ function boot(cfg = {}) {
   s.done();
 }
 
-// (m) the error-turn continuation is byte-identical to a stall nudge — the fix must be
-// invisible to agents
+// (m) error-turn continuation equals a stall nudge
 {
   const s1 = boot();
   await s1.turn("stop");

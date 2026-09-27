@@ -1,12 +1,8 @@
-// Measure how a REPL's RSS moves across repeated checks of the SAME file.
-// Speaks the same protocol runner/lean-server.js does: import Mathlib once, then
-// submit the prepared file with env:0 N times, sampling the process group's RSS
-// after each response. Stock repl grows per check; a retention-capped one is flat.
+// Sample a REPL process group's RSS across repeated checks of the same file.
 //
 //   node repl-mem-probe.mjs --bin <repl> --file <x.lean> --n 8 [--limits]
 //
-// --limits sets REPL_CMD_SNAPSHOT_LIMIT=1 / REPL_PROOF_SNAPSHOT_LIMIT=0 (what
-// lean-server.js will pass); omit it to measure the same binary unbounded.
+// --limits sets REPL_CMD_SNAPSHOT_LIMIT=1 / REPL_PROOF_SNAPSHOT_LIMIT=0.
 
 import { spawn } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
@@ -23,8 +19,7 @@ const LIMITS = process.argv.includes("--limits");
 const LEAN_ENV = fileURLToPath(new URL("../lean-env", import.meta.url));
 const MAX_HEARTBEATS = 400000;
 
-// prepare(), copied from lean-server.js: import lines become the heartbeat cap so
-// the file elaborates exactly as it would under the harness.
+// Same as prepare() in runner/check-env.js: import lines become the heartbeat cap.
 function prepare(code) {
   const lines = code.split("\n");
   let placed = false;
@@ -54,7 +49,6 @@ function extractJson(buf) {
   return null;
 }
 
-// RSS of the whole process group (lake wrapper + repl), exactly what the fuse reads.
 function groupRssMB(pgid) {
   let pages = 0;
   for (const d of readdirSync("/proc")) {
@@ -71,8 +65,8 @@ function groupRssMB(pgid) {
 
 const env = { ...process.env };
 if (LIMITS) {
-  env.REPL_CMD_SNAPSHOT_LIMIT = "1";   // keep the Mathlib import env only
-  env.REPL_PROOF_SNAPSHOT_LIMIT = "0"; // keep none
+  env.REPL_CMD_SNAPSHOT_LIMIT = "1";
+  env.REPL_PROOF_SNAPSHOT_LIMIT = "0";
 }
 const proc = spawn("lake", ["env", BIN], { cwd: LEAN_ENV, env, stdio: ["pipe", "pipe", "pipe"], detached: true });
 proc.stdout.setEncoding("utf8");

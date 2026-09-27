@@ -1,24 +1,4 @@
-// spawn_subagents core: launch one worker pi subprocess per task, follow its session
-// file, and hand back its final message as the report. Shared by
-// extensions/lean-spawn.ts.
-//
-// A worker is a CHILD PI PROCESS, not an in-process SDK session, deliberately: it is
-// the exact launch shape run.js already trusts (same --mode text/no-stdout discipline,
-// same max-tokens extension, same session-file accounting), and it cannot take the
-// parent down with it.
-//
-// Process hygiene: workers are spawned WITHOUT detaching, so they stay in the parent
-// pi's process group — the runner's budget/backstop SIGKILL of that group reaps them
-// for free. Each worker's pid is dropped in its dir so the runner can sweep leftovers
-// when the parent dies some way that skips the group kill (agent_died).
-//
-// The worker's view (kept deliberately small and free): a role prompt, the problem
-// statement, the bank snapshot when the facts arm is on, and the parent's task text
-// as the one user message. Tools are check_snippet + the run's search arms (+ add_fact
-// with facts) — never lean_check, never file tools, never spawn (depth 1 is mechanical:
-// lean-spawn.ts is simply not loaded into workers). No supervisor either: a worker
-// that stops has stopped, and its report — the final assistant message — goes back to
-// the parent, who decides what happens next.
+// spawn_subagents core: runs one worker pi subprocess per task and returns its final message as the report.
 
 import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync, existsSync, createWriteStream } from "node:fs";
@@ -29,15 +9,11 @@ import { costStd } from "./common.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-// Same convention as run.js: each extension declares its tools in a `// @tools` header.
 const extTools = (name) => {
   const m = /^\/\/ @tools\s+(.+)$/m.exec(readFileSync(join(ROOT, "extensions", `${name}.ts`), "utf8"));
   return m ? m[1].split(",").map((s) => s.trim()).filter(Boolean) : [];
 };
 
-// Workers always get check_snippet, whatever search arms the parent combo carries, and
-// add_fact iff the facts arm is on. Everything else — file tools, lean_check, spawn —
-// is deliberately absent.
 export function workerExtensions(combo) {
   const exts = [
     "lean-snippet",
@@ -50,9 +26,6 @@ export function workerExtensions(combo) {
 const capText = (s, n) => (s.length > n ? s.slice(0, n) + "\n... (truncated)" : s);
 
 function workerSystemPrompt(cfg) {
-  // The context block is the problem statement by default. A phase without a single
-  // problem — the librarian — swaps in its own preamble via cfg.worker_preamble_file
-  // instead; the parent's task text stays the only other channel either way.
   const preamble =
     cfg.worker_preamble_file && existsSync(cfg.worker_preamble_file)
       ? readFileSync(cfg.worker_preamble_file, "utf8").trim()
@@ -84,16 +57,7 @@ Rules:
 - NEVER end your response without a tool call until you are ready to deliver the report.${context}${bankSection}`;
 }
 
-// Launch one worker. Returns { promise, kill }: the promise resolves (never rejects
-// after launch) to { idx, end, report, stats } once the worker exits and its session
-// is drained; kill(reason) stops it early. onTokens(usage) fires per completed
-// assistant message so the caller can keep a live ledger for the supervisor.
-// maxCostStd is a HARNESS-side knob only (per-worker caps in the library phase): it is
-// deliberately not exposed in the spawn tool schema — the model is never given budget
-// or spend language to reason about.
-// `view` ({ exts, tools, systemPrompt }) overrides the worker view for other
-// worker-shaped agents — same process hygiene, session accounting and report channel,
-// different role. `dirName` names the worker dir (default wN).
+// Launches one worker. Returns { promise, kill }; the promise resolves to { idx, end, report, stats }.
 export function runWorker({ idx, task, maxCostStd = 0, cfg, onTokens, view, dirName }) {
   const wDir = join(cfg.workers_dir, dirName ?? `w${idx}`);
   const work = join(wDir, "work");
@@ -129,9 +93,6 @@ export function runWorker({ idx, task, maxCostStd = 0, cfg, onTokens, view, dirN
     cwd: work,
     env: {
       ...process.env,
-      // Same client id as the parent (cfg.problem stays in CMP_CONFIG): the REPL's
-      // round-robin is per ATTEMPT, so an attempt's workers queue behind its own
-      // checks rather than multiplying its share of the run's REPL.
       CMP_CONFIG: JSON.stringify({
         problem: cfg.problem,
         worker: idx,
@@ -141,8 +102,6 @@ export function runWorker({ idx, task, maxCostStd = 0, cfg, onTokens, view, dirN
         blocked_names: cfg.blocked_names ?? null,
       }),
     },
-    // NOT detached: staying in the parent pi's process group is what lets the
-    // runner's group SIGKILL (budget, backstop, ^C) reap workers with the parent.
     stdio: ["ignore", "ignore", "pipe"],
   });
   child.stderr.on("data", (d) => stderrLog.write(d));
@@ -157,7 +116,6 @@ export function runWorker({ idx, task, maxCostStd = 0, cfg, onTokens, view, dirN
     applyEntry(stats, entry);
     const m = entry?.message;
     if (m?.role !== "assistant") return;
-    // The report is the final VISIBLE text — thinking blocks are the worker's own.
     const txt = (m.content ?? [])
       .filter((c) => c?.type === "text")
       .map((c) => c.text ?? "")
@@ -165,8 +123,6 @@ export function runWorker({ idx, task, maxCostStd = 0, cfg, onTokens, view, dirN
       .trim();
     if (txt) lastReport = txt;
     try { onTokens?.(m.usage); } catch {}
-    // Voluntary per-task cap (the parent set it in the spawn call): enforcement at
-    // message granularity, like the runner's attempt budget — overshoot ≤ 1 message.
     if (maxCostStd > 0 && costStd(stats.tokens) >= maxCostStd) kill("task_cap");
   });
 
@@ -175,7 +131,7 @@ export function runWorker({ idx, task, maxCostStd = 0, cfg, onTokens, view, dirN
     const finish = (code) => {
       if (settled) return;
       settled = true;
-      untail(); // final drain: the report often lands between the last poll and exit
+      untail();
       stderrLog.end();
       const end = killedAs ?? (code === 0 ? "completed" : "died");
       const record = {
@@ -193,8 +149,6 @@ export function runWorker({ idx, task, maxCostStd = 0, cfg, onTokens, view, dirN
       try { writeFileSync(join(wDir, "worker.json"), JSON.stringify(record, null, 2)); } catch {}
       resolveDone({ idx, end, report: lastReport, stats });
     };
-    // A failed spawn (pi missing) emits 'error' and, depending on the Node version,
-    // possibly no 'close' — settle on either, first one wins.
     child.on("error", () => { killedAs = killedAs ?? "died"; finish(null); });
     child.on("close", (code) => finish(code));
   });

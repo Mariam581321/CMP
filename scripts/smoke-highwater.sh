@@ -1,40 +1,16 @@
 #!/usr/bin/env bash
 # End-to-end smoke for the solved high-water mark (runner/highwater.js).
 #
-# Solving a couple of problems does NOT exercise this: the branch that matters is an
-# agent that reaches a verified proof and then wrecks it, which essentially never
-# happens on its own (the corpus scan found zero cases in 759 attempts). So the fixtures
-# below instruct the agent to do it, and the four attempts cover every branch:
+#   smokehw_1  proves it and stops           -> solved, first == last
+#   smokehw_2  proves, improves, then sorry  -> unsolved, first != last
+#   smokehw_3  leaves the sorry alone
+#   smokehw_4  statement is false            -> high_water: null
 #
-#   smokehw_1  proves it and stops            -> solved, one green, first == last
-#   smokehw_2  proves it, improves it, then
-#              replaces the proof with sorry  -> UNSOLVED + `⚑ had a proof`, first != last,
-#                                               both snapshots graded separately
-#   smokehw_3  told to leave the sorry alone  -> whatever it does, a second normal case
-#   smokehw_4  statement is FALSE             -> never green, high_water: null, no snapshots
-#
-# The STOP files are the load-bearing trick: without them the supervisor nudges a broken
-# file back to green (that is its job) and the attempt ends solved, so the interesting
-# branch never lands. STOP is the documented per-attempt abort — the supervisor stops
-# nudging, the attempt drains and grades normally (extensions/supervisor.ts). It is
-# dropped BEFORE launch, into attempt dirs pre-created under the run dir; run.js only
-# refuses to launch if run.json/results.jsonl already exist.
-#
-#   scripts/smoke-highwater.sh          (needs the lean server up; costs ~$0.002)
-#
-# Then check: `⚑ had a proof` on smokehw_2, `lost_proofs: ["smokehw_2"]` and
-# ever_solved > solved in the summary, high_water null on smokehw_4, and
-#   node scripts/highwater-scan.mjs results/smoke-highwater-$(date +%m%d) --no-verify
-# reproducing the same first_green_check / turn_at_proof / cost_std_at_proof from the
-# session files alone.
+#   scripts/smoke-highwater.sh          (needs the lean server up)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$PWD
 DAY=$(date +%m%d)
-# NOT mktemp: run.json records problems_dir, and regrade.js / highwater-scan.mjs both
-# re-read the original statements from it long after the run. A fixture dir that is
-# cleaned up on exit leaves a run nothing downstream can read. Lives beside the run,
-# under the gitignored results/.
 FIX="$ROOT/results/smoke-highwater-$DAY-fixtures"
 rm -rf "$FIX"
 mkdir -p "$FIX/problems"
@@ -103,7 +79,7 @@ printf 'smokehw_1\nsmokehw_2\nsmokehw_3\nsmokehw_4\n' > "$FIX/list.txt"
 
 RUN="$ROOT/results/smoke-highwater-$DAY"
 rm -rf "$RUN"
-# Every attempt but smokehw_1 must be allowed to end on a file that is not green.
+# STOP files stop the supervisor nudging these attempts back to green.
 mkdir -p "$RUN/smokehw_2" "$RUN/smokehw_3" "$RUN/smokehw_4"
 touch "$RUN/smokehw_2/STOP" "$RUN/smokehw_3/STOP" "$RUN/smokehw_4/STOP"
 
@@ -124,9 +100,6 @@ for p in smokehw_1 smokehw_2 smokehw_3 smokehw_4; do
   ' "$RUN/$p" "$p" 2>/dev/null || echo "  $p — no record"
 done
 
-# The reconstruction must agree with the live stamp: the audit path for every run
-# recorded before the watermark existed is only trustworthy if it reproduces the
-# watermark exactly where both exist.
 echo
 echo "reconstructed from the session files alone (must match first=# and \$ above):"
 node scripts/highwater-scan.mjs "$RUN" --no-verify --out /dev/null --csv "$RUN/scan.csv" >/dev/null 2>&1

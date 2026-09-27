@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""Classify every retrieval query by shape: does it name a declaration, or describe one?
-
-A *name token* is one Lean would accept as an identifier and that no English writer
-would type: it is dotted, carries an underscore, or has internal CamelCase.  A *prose
-token* is an ordinary word.  Each query is then name-only, mixed, or prose-only.
-grep patterns are stripped of regex metacharacters first and alternations are counted
-as one query.  Also: for the semantic arm, whether a name the query asked for came
-back in the results at all."""
+"""Classify retrieval queries in mined/queries.jsonl as name-only, mixed or prose-only; prints a table."""
 import json, os, re, sys
 from collections import Counter, defaultdict
 
@@ -46,7 +39,6 @@ for line in open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__
     r = rows[k]
     r["shape"][s] += 1
     r["len"].append(n)
-    # did the query ask for a specific declaration, and did it come back?
     names = [t for t in tokens(d["query"], d["tool"]) if is_name(t) and ("_" in t or "." in t)]
     if names:
         r["asked"] += 1

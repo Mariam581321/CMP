@@ -1,14 +1,8 @@
 #!/usr/bin/env node
-// Replay recorded lean_check outputs through the current renderer.
+// Parse recorded lean_check outputs back into messages/sorries, re-render them with
+// runner/render.js and report truncation and size changes.
 //
-// The two block-A cells shipped 13,058 real check results into agent context; they are
-// the only corpus that says what this channel actually carries. Parse each recorded
-// rendering back into structured messages/sorries, re-render with runner/render.js, and
-// report what changed. Reconstruction is lossy in exactly one direction — a recorded
-// check that was truncated lost its tail forever — so every number here is a LOWER bound
-// on what the new renderer recovers.
-//
-//   node scripts/render-replay.mjs results/grep-fatex87-0805 [results/...]
+//   node scripts/render-replay.mjs results/<cell> [results/...]
 import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { renderCheck } from "../runner/render.js";
@@ -18,9 +12,7 @@ const SORRY = /^sorry at line (-?\d+), goal:$/;
 const LINT = /set_option linter\.(\w+) false/;
 const KEEP = /set_option linter\.dupNamespace false/;
 
-// Recorded text -> {messages, sorries}. Parts are separated by blank lines, but goals and
-// message bodies contain blank lines too, so parts are cut at the next part HEADER, not
-// at the next blank line.
+// Recorded text -> {messages, sorries}; parts are split at headers, not blank lines.
 function parseRecorded(text) {
   const lines = text.split("\n");
   const messages = [];
@@ -70,7 +62,6 @@ for (const cell of cells) {
         if (wasTrunc) truncOld++;
         if (wasTrunc && hadSorry && !showedSorry) lostOld++;
         const { messages, sorries } = parseRecorded(text);
-        // What the run WOULD have carried with the linters off at source.
         const kept = messages.filter((m) => !LINT.test(m.text) || KEEP.test(m.text));
         const r = renderCheck({
           messages: kept, sorries, maxHeartbeats: 400000, outputName: ".check/last.txt",
@@ -80,7 +71,6 @@ for (const cell of cells) {
         const cut = r.pretty.includes("[... errors truncated");
         if (cut) truncNew++;
         if (cut && sorries.length && !/^sorry at line /m.test(r.pretty)) lostNew++;
-        // The invariant the header exists for: every sorry's line number in line 1.
         if (sorries.length && sorries.every((s) => r.pretty.split("\n")[0].includes(String(s.line)))) headerOnlyDone++;
       }
     }

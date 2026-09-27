@@ -21,19 +21,16 @@ const runs = dirs.map((dir) => {
   const byProblem = {};
   for (const line of readFileSync(f, "utf8").split("\n")) {
     if (!line.trim()) continue;
-    // A torn tail line (runner killed mid-append) must not sink the whole comparison.
     let r;
     try { r = JSON.parse(line); } catch { console.error(`skipping unparseable line in ${f}`); continue; }
-    byProblem[r.problem] = r; // last record wins if rerun
+    byProblem[r.problem] = r;
   }
   return { name: basename(dir), byProblem };
 });
 
 const problems = [...new Set(runs.flatMap((r) => Object.keys(r.byProblem)))].sort();
 const shortReason = { statement_changed: "stmt", compile_error: "compile", uses_sorry: "sorry", bad_axioms: "axioms", unsafe_decl: "unsafe", timeout: "time", budget_exceeded: "budget", agent_died: "died", no_file: "nofile", runner_error: "runner", grader_error: "grader", provider_error: "provider" };
-// One label per unsolved attempt: the abnormal end (timeout/budget/provider) if there
-// was one, else the grader's verdict. Records store the two separately (schema v2);
-// the final ?? is the single legacy fallback for pre-v2 records' merged fail_reason.
+// One label per unsolved attempt: the abnormal end if any, else the grader's verdict.
 const reasonOf = (r) => (r.solved ? null : (r.end ? (r.end !== "completed" ? r.end : r.grade?.reason) : r.fail_reason) ?? "unknown");
 
 const colW = Math.max(...runs.map((r) => r.name.length), 16) + 2;
@@ -41,7 +38,6 @@ const cell = (rec) => {
   if (!rec) return dim("—".padEnd(colW));
   const cost = rec.cost_usd != null ? ` $${rec.cost_usd.toFixed(3)}` : "";
   const reason = reasonOf(rec);
-  // timeout and budget_exceeded are resource exhaustion, not wrong answers — yellow
   const plain = rec.solved ? `✓${cost}` : reason === "timeout" ? `⏱${cost}` : reason === "budget_exceeded" ? `$${cost}` : `✗ ${shortReason[reason] ?? reason}${cost}`;
   const padded = plain.padEnd(colW);
   return rec.solved ? green(padded) : ["timeout", "budget_exceeded"].includes(reason) ? yellow(padded) : red(padded);
@@ -55,24 +51,13 @@ for (const p of problems) {
 console.log("");
 for (const r of runs) {
   const all = problems.map((p) => r.byProblem[p]).filter(Boolean);
-  // Back-compat only: early runs could end an attempt "provider_error" when an outage
-  // truncated it. Nothing writes that end any more — pi-agent/settings.json retries
-  // inside the SDK instead — so for new runs both filters are no-ops.
   const aborted = all.filter((x) => reasonOf(x) === "provider_error");
   const recs = all.filter((x) => reasonOf(x) !== "provider_error");
   const solved = recs.filter((x) => x.solved);
   const cost = all.reduce((s, x) => s + (x.cost_usd ?? 0), 0);
-  // cost_std (tokens at the fixed off-peak table, common.js) is THE comparison number —
-  // peak-invariant by construction; billed cost_usd is informational only. Pre-cost_std
-  // records were all billed off-peak, where cost_usd equals it — fall back.
   const costStd = all.reduce((s, x) => s + (x.cost_std ?? x.cost_usd ?? 0), 0);
   const wall = recs.reduce((s, x) => s + (x.wall_s ?? 0), 0);
   const checks = recs.reduce((s, x) => s + (x.tool_calls?.lean_check ?? 0), 0);
-  // One "searches" number across both retrieval arms: an arm carries search_mathlib OR
-  // grep_mathlib, never both, so summing them keeps the column comparable between a
-  // semantic and a grep cell instead of showing the grep cell as having done no search.
-  // check_snippet is counted separately, so that whether snippet displaces search
-  // stays visible.
   const searches = recs.reduce((s, x) => s + (x.tool_calls?.search_mathlib ?? 0) + (x.tool_calls?.grep_mathlib ?? 0), 0);
   const snippets = recs.reduce((s, x) => s + (x.tool_calls?.check_snippet ?? 0), 0);
   const tokIn = recs.reduce((s, x) => s + (x.tokens?.in ?? 0), 0);

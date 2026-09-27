@@ -1,25 +1,4 @@
-// add_fact core: the append-only bank of verified
-// lemmas, written ONLY through this compiler gate. A candidate is compiled as
-// [current bank + candidate] on the lean server and admitted iff it produces no
-// errors, no sorry, and no axioms beyond the grader's whitelist — so everything in
-// the bank is machine-verified, and compiling against the bank prefix lets facts
-// build on earlier facts. Because every admitted fact compiled against the bank it
-// joined, any error in [bank + candidate] is attributable to the candidate, and
-// message positions are re-labeled into the candidate's own coordinates.
-//
-// The gate is deliberately STRICTER than grading. Grading treats metaprogramming
-// keywords as an advisory tripwire (a human reads each hit); the bank has no human in
-// the loop and its whole value is that its contents can be trusted blindly — by the
-// main agent, by workers, and by every later fact compiled on top. So constructs that
-// could smuggle unchecked declarations past the per-name axiom probe (macros, elab,
-// run_cmd, axiom/opaque/unsafe, env access) are rejected lexically, with the reason.
-// Honest lemmas need none of them.
-//
-// Concurrency: parent and workers are separate processes sharing one bank file, so
-// admission is serialized under an on-disk lock (mkdir is atomic). Without it, two
-// candidates could each compile green against the same prefix and append code that
-// was never compiled TOGETHER (e.g. both declaring the same name) — breaking the
-// invariant that the bank as a whole always compiles.
+// add_fact core: compile-gated, append-only bank of verified facts, serialized under an on-disk lock.
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, rmdirSync, statSync } from "node:fs";
 import { postCheck, classifyLines } from "./common.js";
@@ -28,13 +7,7 @@ import { RENDER_CAP } from "./render.js";
 import { bannedTactic } from "./stmt.js";
 import { suspiciousKeywords, ALLOWED_AXIOMS } from "./grade.js";
 
-// What a candidate may declare: named lemma/theorem/def/abbrev/instance heads,
-// optionally attributed, scanned over CODE lines only (a name inside a comment must
-// not reach `#print axioms`, where it would error as an unknown constant and reject a
-// valid fact). Same scope-stack idea as stmt.js benchmarkDecls, extended with `lemma`
-// and `instance` (facts are agent-written, not benchmark-generated) and with balance
-// tracking: a candidate that leaves a namespace/section open would silently re-scope
-// every fact appended after it, so unbalanced candidates are rejected outright.
+// Declared names in a candidate (code lines only), and whether its scopes balance.
 function scanDecls(code) {
   const codeLines = classifyLines(code).filter((l) => l.kind === "code").map((l) => l.line);
   const names = [];
@@ -58,16 +31,9 @@ function scanDecls(code) {
 }
 
 const reject = (why) => ({ ok: false, pretty: `FACT REJECTED (bank unchanged): ${why}` });
-// Same budget as a lean_check digest (runner/render.js RENDER_CAP): this is compiler
-// output about the agent's own candidate, so there is no reason for it to be a tighter
-// channel than the compiler output about its file. Unlike a check there is no `.check/
-// last.txt` to fall back on, which argues for more room here, not less.
 const cap = (s, n = RENDER_CAP) => (s.length > n ? s.slice(0, n) + "\n... (truncated)" : s);
 
-// Serialize [read bank, compile, append] across processes. The hold time is bounded by
-// one queued compile (CLIENT_WAIT_MS), so the steal threshold sits just above it: a
-// lock older than that belongs to a process that died mid-add (SIGKILL at the budget
-// cap), not to a live compile.
+// Cross-process lock around [read bank, compile, append]; stale locks are stolen.
 async function withBankLock(factsFile, fn) {
   const lockDir = `${factsFile}.lock`;
   const stale = CLIENT_WAIT_MS + 5 * 60_000;
@@ -82,12 +48,7 @@ async function withBankLock(factsFile, fn) {
   try { return await fn(); } finally { try { rmdirSync(lockDir); } catch {} }
 }
 
-// Compile-gate one candidate into the bank at factsFile. Returns {ok, pretty, ...};
-// server-level failures come back as {error, kind, ...} for the caller to word.
-// `blockedNames`: benchmark declaration names are reserved — a bank fact declaring
-// one would collide when the bank is baked into the compile env (every statement would
-// then fail to elaborate with "already been declared"), so it is rejected at admission,
-// where the fix costs one rename.
+// Compile-gates one candidate into the bank. Returns {ok, pretty, ...} or a server {error, ...}.
 export async function addFact(code, { factsFile, client, blockedNames }) {
   code = (code ?? "").trim();
   if (!code) return reject("empty code.");
@@ -130,12 +91,8 @@ export async function addFact(code, { factsFile, client, blockedNames }) {
     const fullLines = full.split("\n").length;
     const probes = scan.names.map((n) => `#print axioms ${n}`).join("\n");
     const r = await postCheck({ code: `${full}\n${probes}\n`, client }, CLIENT_WAIT_MS);
-    if (r.error) return r; // typed server failure — caller words it for the agent
+    if (r.error) return r;
 
-    // Any error rejects, wherever it lands: in the candidate (its own bug, re-labeled to
-    // its coordinates), in the bank region (only reachable as an interaction the
-    // candidate caused — the bank alone compiled when it was admitted), or in the probe
-    // region (a scanned name that never became a declaration).
     const msgs = (r.messages ?? []).filter((m) => m.severity === "error" || m.line <= fullLines);
     const errs = msgs.filter((m) => m.severity === "error");
     if (errs.length) {
@@ -150,14 +107,8 @@ export async function addFact(code, { factsFile, client, blockedNames }) {
         .join("\n\n");
       return { ok: false, pretty: `FACT REJECTED (bank unchanged) — it does not compile against Mathlib + the current bank:\n${cap(rendered)}` };
     }
-    // Sorry gate: the bank prefix is sorry-free by construction, so any sorry is the
-    // candidate's. Both surfaces checked — the sorries list catches `sorry` terms, the
-    // warning text catches anything the elaborator turned into sorryAx.
     if ((r.sorries ?? []).length || msgs.some((m) => /declaration uses 'sorry'/.test(m.text ?? "")))
       return reject("it contains `sorry`. Only fully proved facts are admitted — prove it or split off the part you can prove.");
-    // Axiom gate, same mechanics as the grader: reports are parsed only from messages
-    // past the end of the compiled code, where the appended `#print axioms` commands
-    // live, so nothing the candidate prints can spoof a verdict (grade.js's line gate).
     const probeText = (r.messages ?? []).filter((m) => (m.line ?? 0) > fullLines).map((m) => m.text).join("\n");
     for (const n of scan.names) {
       const esc = n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

@@ -1,13 +1,20 @@
-pi/
-benchmarks/
 node_modules/
 .env
-results/
+pi/
+pi-agent/auth.json
+pi-agent/sessions/
+
+# built or downloaded locally (see README)
+benchmarks/
+vendor/*
+!vendor/repl.patch
 lean-env/*
 !lean-env/lakefile.lean
 !lean-env/lean-toolchain
 !lean-env/lake-manifest.json
 !lean-env/Cmp.lean
+
+# generated problem files
 problems/
 problems-nl/
 problems-fateh/
@@ -15,25 +22,21 @@ problems-fatem/
 problems-fc/
 problems-fatex/*
 !problems-fatex/safe90.txt
-papers/
-vendor/*
-!vendor/repl.patch
-COSTS.md
-pi-agent/auth.json
-pi-agent/sessions/
-.venv-paper/
-_server-final-0827/
-_server-pull-backup-0818/
 
-# transcripts, their derivatives and working notes: contain verbatim agent content
+# run outputs, transcripts and anything derived from them
+results/
 mined/
 drafts/
-texput.log
 
-# never commit compiled papers, bundles or Windows download droppings at the root
+# papers are kept outside the repository
+papers/
+paper/
+paper-workshop/
+.venv-paper/
+
+# local backups and downloads
+/_*/
 /*.pdf
 /*.zip
 /*.lnk
 *:Zone.Identifier
-paper/
-paper-workshop/

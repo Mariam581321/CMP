@@ -1,14 +1,6 @@
 #!/usr/bin/env node
-// Sanitize benchmark problem files: strip `--` comments (in PutnamBench they
-// contain the answers) AND /-- docstrings -/ (the informal NL statement — the
-// agent should only see the formal Lean by default; pass --keep-nl to retain
-// docstrings). Writes <out-dir>/<name>.lean for every problem + <out-dir>/all.txt
-// (--out-dir, default problems/).
-// --src-dir <dir> reads another corpus of the same shape (default PutnamBench;
-// e.g. benchmarks/FATE/FATE-M/FATEM), --prefix <s> prepends to output names
-// (FATE files are bare numbers — prefix keeps names globally unique, which the
-// shared stmt-types.json cache relies on).
-// With --pick N [--seed S] [--out F], also writes a fixed random subset.
+// Strip comments and docstrings from benchmark problem files.
+// Usage: node runner/sanitize.js [--src-dir D] [--out-dir D] [--prefix S] [--keep-nl] [--pick N --seed S --out F]
 
 import { readdirSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { parseArgs } from "node:util";
@@ -23,11 +15,9 @@ export function sanitize(source, keepNl = false) {
   const kept = classifyLines(source)
     .filter(({ kind }) => !drop.includes(kind))
     .map(({ line }) => line);
-  // collapse runs of blank lines left behind by dropped lines
   return kept.join("\n").replace(/\n{3,}/g, "\n\n").replace(/^\n+/, "");
 }
 
-// deterministic PRNG so subsets are reproducible
 function mulberry32(seed) {
   return () => {
     seed = (seed + 0x6d2b79f5) | 0;
@@ -50,7 +40,7 @@ function main() {
         "out-dir": { type: "string", default: join(ROOT, "problems") },
         out: { type: "string" },
       },
-      strict: true, // a mistyped flag must error, not silently sanitize the wrong corpus
+      strict: true,
     }).values;
   } catch (e) {
     console.error(e.message);
@@ -70,7 +60,6 @@ function main() {
   let leaks = 0;
   for (const f of names) {
     const clean = sanitize(readFileSync(join(SRC, f), "utf8"), keepNl);
-    // paranoia: a sanitized file must never contain a stripped-kind line
     leaks += classifyLines(clean).filter(({ kind }) => banned.includes(kind)).length;
     writeFileSync(join(OUT, PREFIX + f), clean);
   }

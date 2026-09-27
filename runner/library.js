@@ -1,22 +1,6 @@
 #!/usr/bin/env node
-// Library phase (not part of the paper's grid): one librarian agent builds a shared
-// library for a problem set, through the same machinery attempts use — spawn_subagents
-// for parallel workers, add_fact as the only write path (the bank IS the library), the
-// run's search arms, check_snippet with the bank in scope. The phase cap is enforced
-// here by SIGKILL, silently; the librarian, like every agent, is budget-blind.
-//
-//   node runner/library.js --combo lean-search,lean-snippet \
-//     --problems problems-fatex/safe90.txt --problems-dir problems-fatex \
-//     --run-id library-fatex [--cap-std 5.00] [--worker-cap-std 1.00]
-//
-// The librarian's view is deliberately small: the problem statements (all of them,
-// inline — no fetch tools, no pagination), the add_fact contract, spawn, search. No
-// budget language, no schedule, no cluster list — which theory to build and how to
-// split it across workers is the librarian's own call; the compile gate is the only
-// hard rule. Artifacts on exit (however the phase ends): library.lean (the frozen
-// bank), library.json (sha256 + stats — the `library_sha` every consuming run must
-// record), index.md (name/signature/docstring per fact, the graded run's prompt
-// addendum).
+// Library phase: a librarian agent builds a shared fact library for a problem set.
+//   node runner/library.js --combo lean-search,lean-snippet --problems <file> --problems-dir <dir> --run-id <id>
 
 import { spawn } from "node:child_process";
 import { parseArgs } from "node:util";
@@ -84,14 +68,10 @@ mkdirSync(sessionDir, { recursive: true });
 const health = await fetch(`${LEAN_URL}/health`, { signal: AbortSignal.timeout(3000) }).then((r) => r.json()).catch(() => null);
 if (!health?.ready) { console.error("lean server not ready"); process.exit(1); }
 
-// All statements inline — the files are short, input tokens are cheap and cached,
-// and a fetch tool would only add round-trips to the librarian's view.
 const digest = problems
   .map((p) => `### ${p}\n\n\`\`\`lean\n${readFileSync(join(PROBLEMS_DIR, `${p}.lean`), "utf8").trim()}\n\`\`\``)
   .join("\n\n");
-// Benchmark declaration names are reserved: a bank fact under one of them would
-// collide with the statement itself once the library is baked (add_fact rejects
-// with a rename instruction).
+// Benchmark declaration names, reserved against add_fact.
 const blockedNames = [
   ...new Set(problems.flatMap((p) => benchmarkDecls(readFileSync(join(PROBLEMS_DIR, `${p}.lean`), "utf8")))),
 ];
@@ -116,9 +96,6 @@ ${digest}`;
 
 const PROMPT = "Survey the problems, then build the library. Delegate freely; everything durable goes through add_fact.";
 
-// Librarian toolset: read (the bank is a file worth re-reading) + snippet + the
-// combo's search arms + facts + spawn. No lean_check (nothing here is graded), no
-// write/edit (the gate is the only writer).
 const extTools = (name) => {
   const m = /^\/\/ @tools\s+(.+)$/m.exec(readFileSync(join(ROOT, "extensions", `${name}.ts`), "utf8"));
   return m ? m[1].split(",").map((s) => s.trim()).filter(Boolean) : [];
@@ -160,11 +137,11 @@ const exit = await new Promise((resolveExit) => {
       ...process.env,
       NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --max-old-space-size=8192`.trim(),
       CMP_CONFIG: JSON.stringify({
-        problem: "library", // one REPL round-robin slot for the whole phase
+        problem: "library",
         original_file: null,
         max_tokens: MAX_TOKENS > 0 ? MAX_TOKENS : null,
         tools: toolList,
-        combo: [...searchExts, "lean-facts"], // workers: snippet + searches + add_fact
+        combo: [...searchExts, "lean-facts"],
         model: A.model,
         thinking: A.thinking,
         workers_dir: workersRoot,
@@ -174,7 +151,7 @@ const exit = await new Promise((resolveExit) => {
         blocked_names: blockedNames,
       }),
     },
-    detached: true, // own process group: the cap SIGKILL takes librarian + workers together
+    detached: true,
     stdio: ["ignore", "ignore", "pipe"],
   });
   child.stderr.on("data", (d) => stderrLog.write(d));
@@ -192,19 +169,12 @@ const exit = await new Promise((resolveExit) => {
 });
 stderrLog.end();
 
-// Freeze whatever the gate admitted — the bank is valid at every prefix, so a capped
-// phase still ships a working library.
 const bankPath = join(work, "library.lean");
 const bank = existsSync(bankPath) ? readFileSync(bankPath, "utf8") : "";
 writeFileSync(join(runDir, "library.lean"), bank);
 const sha = createHash("sha256").update(bank).digest("hex");
 
-// Index: one entry per declaration — preceding docstring + the head lines up to the
-// signature-ending `:=`. A human-facing artifact (the graded run points agents at the
-// readable source instead). The cut looks for `:=` at bracket depth 0 only: named
-// arguments (`QuotientGroup.mk (s := H) a`) and structure-instance fields put `:=`
-// INSIDE brackets, and cutting at the first occurrence would truncate a signature
-// mid-term.
+// One index entry per declaration: docstring + signature up to the top-level `:=`.
 function buildIndex(source) {
   const entries = [];
   const lines = source.split("\n");

@@ -1,13 +1,5 @@
 // @tools add_fact
-// The shared, append-only bank of verified lemmas — the channel between the main agent
-// and its workers, with the compiler as the only writer. Core logic (gate, lock,
-// rendering) in runner/facts.js.
-//
-// Monotonicity is mechanical, not requested: a tool_call handler blocks write/edit
-// calls resolving to the bank file, so the bank is readable with the ordinary read
-// tool but writable only through the compile gate. Workers load this same extension
-// with cfg.facts_file pointing at the parent attempt's bank (they have no file tools
-// at all, so only the gate path exists for them).
+// Append-only fact bank: add_fact admits code only if it compiles cleanly; direct write/edit is blocked.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -18,13 +10,9 @@ import { cmpConfig, ToolFailure } from "../runner/common.js";
 export default function (pi: ExtensionAPI) {
   const cfg = cmpConfig();
   const factsFile: string = cfg.facts_file ?? join(process.cwd(), "facts.lean");
-  // Agent-facing name follows the actual file: facts.lean in attempts, library.lean
-  // in the librarian phase.
   const bankName = basename(factsFile);
   const client: string = cfg.problem ?? "anon";
   const isWorker = cfg.worker != null;
-  // The bank can run WITHOUT lean-spawn: don't promise "workers you spawn" when no
-  // spawn tool exists. Same detection lean-spawn uses for the bank.
   const hasSpawn = (cfg.tools ?? []).includes("spawn_subagents");
 
   pi.on("tool_call", (event) => {
@@ -68,8 +56,6 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_toolCallId, params, signal) {
       try {
-        // Connection-level failures retried here where waiting costs zero tokens —
-        // the same production-validated loop as lean_check/check_snippet.
         const deadline = Date.now() + 5 * 60_000;
         let r: any;
         for (;;) {

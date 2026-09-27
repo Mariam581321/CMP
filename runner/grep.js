@@ -1,10 +1,4 @@
-// grep_mathlib core (extensions/lean-grep.ts is the thin tool wrapper): search the
-// pinned local Mathlib checkout — the exact source the REPL compiles against, so a
-// hit is guaranteed to exist in the agent's environment (the public LeanSearch index
-// tracks a different Mathlib pin). Raw grep hits are expanded to whole declarations:
-// a bare matching line usually cuts the signature mid-binder, and the signature is
-// what the agent needs.
-
+// grep_mathlib core: search Mathlib source (and any baked library) and return whole declarations.
 import { spawn } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
@@ -13,32 +7,18 @@ import { fileURLToPath } from "node:url";
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "lean-env", ".lake", "packages", "mathlib");
 export const MATHLIB_SRC = join(PKG_ROOT, "Mathlib");
 
-// Library cells: when a library is baked into the compile env (CMP_LIB_FILE — run.js sets
-// it for library cells and pi children inherit it), its source is part of what
-// "exists in the agent's environment", so every rung searches it alongside Mathlib —
-// one search surface for everything ambient. Hits render as `library.lean:<line>`.
 const libFile = () => {
   const f = process.env.CMP_LIB_FILE;
   return f && existsSync(f) ? f : null;
 };
 const displayPath = (file) => (file === process.env.CMP_LIB_FILE ? "library.lean" : relative(PKG_ROOT, file));
 
-// Declaration heads sit at column 0 in Mathlib (attributes included); requiring that
-// keeps the upward scan from latching onto `have`/`let` lines inside proof bodies.
 const HEAD_RE =
   /^(?:@\[|(?:protected\s+|private\s+|noncomputable\s+|nonrec\s+|unsafe\s+|partial\s+|scoped\s+)*(?:theorem|lemma|def|abbrev|instance|structure|class|inductive|axiom|opaque)\b)/;
 
-// Raw grep lines to collect before SIGKILLing grep. grep streams in directory-traversal
-// order, so a low cap here would silently answer a query with the alphabetical prefix of
-// Mathlib; an uncapped grep over the whole checkout costs ~0.1 s even for a very common
-// token, so this is a safety net, not a budget. There are TWO cuts in this file, both
-// visible: grep stops at RAW_LINE_CAP, and the display stops at maxResults. Everything
-// grep returns is expanded, deduped and ranked.
 const RAW_LINE_CAP = 20_000;
-const ANCHOR_LINE_CAP = 20_000; // the cross-line pass filters after grep, so it needs the same net
+const ANCHOR_LINE_CAP = 20_000;
 const GREP_TIMEOUT_MS = 30_000;
-// One declaration's expanded signature. Mathlib wraps long signatures across many lines,
-// and a signature cut in half is the one thing this expansion exists to prevent.
 const DECL_MAX_LINES = 24;
 const DECL_MAX_CHARS = 1600;
 
@@ -49,25 +29,16 @@ function runGrep(pattern, { regex, ci, cap = RAW_LINE_CAP }, signal) {
     args.push("--", pattern, MATHLIB_SRC, ...(libFile() ? [libFile()] : []));
     const child = spawn("grep", args, { stdio: ["ignore", "pipe", "pipe"] });
     let out = "", err = "", done = false;
-    // UTF-8 across chunk boundaries: Mathlib source is unicode-dense, and coercing each
-    // Buffer separately turns any char split by a pipe chunk into U+FFFD in what the
-    // agent is shown.
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     const finish = (fn, v) => { if (!done) { done = true; clearTimeout(t); fn(v); } };
     const t = setTimeout(() => { child.kill("SIGKILL"); finish(reject, new Error(`grep timed out after ${GREP_TIMEOUT_MS / 1000}s`)); }, GREP_TIMEOUT_MS);
     signal?.addEventListener("abort", () => { child.kill("SIGKILL"); finish(reject, new Error("aborted")); });
-    // Count newlines incrementally. Re-splitting the whole accumulated buffer on every
-    // chunk was O(total^2) in the output and allocated a fresh array of every line each
-    // time — on a broad pattern grep floods faster than the cap can stop it.
     let lineCount = 0;
     let killed = false;
     child.stdout.on("data", (d) => {
       out += d;
       for (let i = -1; (i = d.indexOf("\n", i + 1)) !== -1; ) lineCount++;
-      // Early kill once we have plenty of raw lines; grep exits with SIGKILL but the
-      // collected prefix is a valid (truncated) result. Guarded: data keeps arriving
-      // after the kill, and re-killing per chunk is pointless work.
       if (!killed && lineCount > cap) { killed = true; child.kill("SIGKILL"); }
     });
     child.stderr.on("data", (d) => (err += d));
@@ -75,32 +46,22 @@ function runGrep(pattern, { regex, ci, cap = RAW_LINE_CAP }, signal) {
     child.on("close", (code, sig) => {
       const lines = out.split("\n").filter(Boolean);
       if (sig === "SIGKILL" || code === 0 || code === 1) return finish(resolve, { lines, truncatedRaw: sig === "SIGKILL" });
-      finish(reject, new Error(err.trim() || `grep exited ${code}`)); // code 2 = bad pattern etc.
+      finish(reject, new Error(err.trim() || `grep exited ${code}`));
     });
   });
 }
 
-// Expand a raw hit (file, 1-based line) to the whole declaration: scan up to the
-// column-0 head, then down to the line carrying `:=` (or the caps). Returns
-// { headLine, text } — headLine is the dedup key when several raw hits land in one
-// declaration.
+// Expand a hit to its enclosing declaration signature, if any.
 function expandDecl(fileLines, hitLine) {
   const i = hitLine - 1;
   let head = -1;
   for (let k = i; k >= 0 && k >= i - 12; k--) {
     if (HEAD_RE.test(fileLines[k])) { head = k; break; }
-    // A blank line above the hit means the hit was not inside a declaration signature
-    // block after all (e.g. a module docstring) — unless the hit line itself is a head.
     if (k < i && fileLines[k].trim() === "") break;
   }
   if (head === -1) return { headLine: hitLine, text: fileLines[i] ?? "" };
   const parts = [];
   for (let k = head; k < fileLines.length && parts.length < DECL_MAX_LINES; k++) {
-    // Stop at the blank line that ends the declaration, BEFORE consuming it. Mathlib
-    // never puts a blank line inside a signature and always puts one between
-    // declarations, so this is where the declaration ends — and it is what keeps an
-    // `inductive` with no `:=` from running on into the `namespace`/`variable`/
-    // next-declaration block underneath it.
     if (k > head && fileLines[k].trim() === "") break;
     parts.push(fileLines[k]);
     if (fileLines[k].includes(":=") || / by$/.test(fileLines[k])) break;
@@ -110,30 +71,7 @@ function expandDecl(fileLines, hitLine) {
   return { headLine: head + 1, text };
 }
 
-// Turn raw `file:line:` grep output into deduplicated, declaration-expanded hits.
-// inText(text) decides bucketing: the pattern visible in the expanded declaration
-// means the hit IS the declaration/signature — what a name query is after; otherwise
-// the raw match sits in the proof body below (a usage site), which is ranked after
-// definitions with its matched line appended, or the output shows a containing lemma
-// with no visible connection to the query.
-// declOnly drops anything that is not a matching declaration — the cross-line pass
-// uses it, because there grep matched an anchor fragment, not the query.
-// Ranking inside the declaration bucket. Minimal and derived from the query itself, not
-// from a similarity score: the only claim it makes is that a declaration whose NAME the
-// query names should come before one that merely mentions the query somewhere in its
-// signature. Everything else keeps grep's order.
-//
-//   0  the assembled name IS the query          (`IntermediateField.inv_mem`)
-//   1  the query is the name's last segment     (`inv_mem` -> IntermediateField.inv_mem)
-//   2  the query matches somewhere in the name  (`inv_mem` -> Foo.inv_mem_of_bar)
-//   3  the query matches only the signature
-//
-// Why it exists: results come out in `grep -rnI` order, i.e. alphabetical by path, so
-// without ranking the display cut keeps whatever happens to live earliest in the tree,
-// and an exact-name hit in `Mathlib/RingTheory/…` could be crowded out by
-// `Mathlib/Algebra/…` lemmas that merely mention the token.
-// Ties keep traversal order (the index tiebreak below), so this only ever moves an exact
-// answer UP; it never invents an order among equals.
+// Rank: 0 exact name, 1 exact last component, 2 name contains pattern, 3 other.
 function nameTier(name, { pattern, ci, inName }) {
   if (!name) return 3;
   const fold = (s) => (ci ? s.toLowerCase() : s);
@@ -143,6 +81,7 @@ function nameTier(name, { pattern, ci, inName }) {
   return inName(name) ? 2 : 3;
 }
 
+// Turn raw grep lines into deduplicated, declaration-expanded, ranked hits.
 function collectHits(rawLines, { inText, inName, pattern, ci, maxResults, truncatedRaw, declOnly = false }) {
   const fileCache = new Map();
   const seen = new Set();
@@ -150,7 +89,6 @@ function collectHits(rawLines, { inText, inName, pattern, ci, maxResults, trunca
   const usageHits = [];
   let truncated = truncatedRaw;
   for (const raw of rawLines) {
-    // grep output is file:line:text; the path contains no colons (repo-controlled).
     const m = raw.match(/^(.*?):(\d+):/);
     if (!m) continue;
     const [, file, lineStr] = m;
@@ -164,18 +102,13 @@ function collectHits(rawLines, { inText, inName, pattern, ci, maxResults, trunca
     if (seen.has(key)) continue;
     seen.add(key);
     const path = displayPath(file);
-    // Resolved from the ORIGINAL block, before the usage branch below appends its `↳`
-    // note — the note is commentary, not part of the declaration the name belongs to.
     const named = nameOfHit(fileLines, headLine, text);
     const loc = { path, line: headLine, name: named?.name ?? null, isPrivate: named?.isPrivate ?? false };
     const isDecl = HEAD_RE.test(text.split("\n")[0]);
-    // Decl bucket needs both: the pattern visible in the expanded block AND the block
-    // actually being a declaration (expandDecl falls back to the bare matched line
-    // when no head is found — those are proof-body usages, not declarations).
     if (inText(text) && isDecl) {
       declHits.push({ ...loc, text });
     } else if (declOnly) {
-      continue; // anchor hit that does not satisfy the whole query
+      continue;
     } else if (inText(text)) {
       usageHits.push({ ...loc, text });
     } else {
@@ -183,9 +116,6 @@ function collectHits(rawLines, { inText, inName, pattern, ci, maxResults, trunca
       usageHits.push({ ...loc, text: `${text}\n  ↳ matches inside its proof, line ${lineStr}: ${matched}` });
     }
   }
-  // Rank the declaration bucket, then the usage bucket after it (a usage site answers a
-  // different question and is annotated as such). Stable within a tier: the explicit
-  // index tiebreak keeps grep's traversal order rather than relying on sort stability.
   const rank = { pattern, ci, inName };
   const ranked = declHits
     .map((h, i) => ({ h, tier: nameTier(h.name, rank), i }))
@@ -196,72 +126,21 @@ function collectHits(rawLines, { inText, inName, pattern, ci, maxResults, trunca
   return { hits, truncated };
 }
 
-// --- fully-qualified names ----------------------------------------------------
-// A Lean declaration's real name is assembled by the elaborator: `namespace
-// IntermediateField` + `protected theorem inv_mem` = `IntermediateField.inv_mem`. That
-// string never appears in the source, so a text search for the name the agent must
-// WRITE finds nothing, while the declaration plainly exists. Worse, the name often does
-// appear at *usage* sites in other files, so the search half-works and returns lemmas
-// that merely mention it. This reconstructs the prefix the way Lean does.
-// A Lean identifier is not ASCII: Mathlib names carry subscripts and Greek throughout
-// (`d₁`, `ε₁`, `HomologicalComplex₂`), and `!`/`?` are ordinary name characters
-// (`Array.get!`, `List.find?`). Matching only [A-Za-z_] silently truncates such a name to
-// its ASCII prefix, which is worse than not matching at all — `def d₁` inside
-// `namespace HomologicalComplex₂` came out as `HomologicalComplex.d`, a name that EXISTS
-// (the differential field of `HomologicalComplex`) and points at an unrelated
-// declaration. A near-miss returned as a confirmed hit is precisely what rung 0 promises
-// never to do, so the classes below stay Unicode-aware everywhere a name is read.
-// `«...»` quotes a segment that would otherwise be a keyword (`namespace «Prop»`).
 const SEG = String.raw`(?:«[^»]*»|[\p{L}_][\p{L}\p{N}_'!?]*)`;
 const NAME = String.raw`${SEG}(?:\.${SEG})*`;
 const QUALIFIED = new RegExp(String.raw`^${SEG}(?:\.${SEG})+$`, "u");
-// Split a dotted name into the scopes it opens, unquoting as Lean does: the namespace
-// `«Prop»` is named `Prop`. A quoted segment may itself contain dots, so this cannot be
-// a plain split(".").
-// The same split, keeping each segment exactly as the source writes it. The assembled
-// name is what the tool now returns, so it has to parse — and whether a segment needs
-// `«»` cannot be recovered from the unquoted text: `end` and `exists` look like ordinary
-// identifiers but are Lean keywords, which is why Mathlib writes `def «end»` and
-// `namespace «Prop»`. Re-deriving the quotes by testing the shape of the segment yields
-// `Quiver.Path.end`, which does not parse; carrying the source form does.
-// `n` is the unquoted name Lean matches scopes by, `raw` is what to write in a proof.
 const splitPairs = (s) =>
   (s.match(/«[^»]*»|[^.]+/gu) ?? []).map((raw) => ({ n: raw.replace(/^«|»$/gu, ""), raw }));
 const DECL_KW = "theorem|lemma|def|abbrev|instance|structure|class|inductive|axiom|opaque";
-// Strict, JS-side: grep only generates candidates, this decides what is really a head.
-// The name stops at the last dotted segment, so a universe annotation (`theorem foo.{u}`,
-// 295 heads in Mathlib) does not leave a trailing dot glued to the captured name.
 const DECL_NAME_RE = new RegExp(
-  // `class abbrev` / `class inductive` are two-word keywords (9 in Mathlib); listed first
-  // so the alternation does not stop at `class` and read the second word as the name.
   String.raw`^(?:@\[[^\]]*\]\s*)?(?:protected\s+|private\s+|noncomputable\s+|nonrec\s+|unsafe\s+|partial\s+|scoped\s+)*(?:class\s+abbrev|class\s+inductive|${DECL_KW})\s+(${NAME})`,
   "u",
 );
-// `alias` declares a name too, and 3,254 of Mathlib's aliases write it plainly
-// (`alias foo := bar`). It is deliberately NOT added to DECL_KW — retrieval must not
-// change — but a hit on one is a real, nameable declaration, and leaving it unnamed would
-// render it as "no enclosing declaration" and drop the only thing this tool now returns.
-// The 1,253 anonymous-constructor aliases (`alias ⟨fwd, rev⟩ := h`) declare two names in
-// one line and are left unnamed rather than guessed at.
 const ALIAS_NAME_RE = new RegExp(
   String.raw`^(?:@\[[^\]]*\]\s*)?(?:protected\s+|private\s+|scoped\s+)*alias\s+(${NAME})\s*:=`,
   "u",
 );
 
-// Scope lines. Every form that Mathlib actually writes has to be recognised, because a
-// scope that is opened without being tracked gets closed by an `end` that then pops
-// something else. Counted over the checkout: `@[expose] public section` (5564),
-// `public section` (1430), `noncomputable section` (1165), `public meta section` (309),
-// `meta section` (27), the `@[expose] public noncomputable` combination (20), plus plain
-// and named sections. `mutual` opens a scope too, and like an anonymous section it is
-// closed by a bare `end` (19 files; missing it mis-attributed all 9 theorems below the
-// `mutual` in Mathlib/SetTheory/Nimber/Field.lean).
-// Scope names use the same identifier grammar as declaration names, for the same reason:
-// a name the pattern cannot represent is a push or a pop that silently goes missing.
-// Mathlib closes sections named `Foo₂`/`Foo₀` (59 of them) and opens
-// `namespace Mathlib.Tactic.Erw?`, whose `end` line failed to parse at all — leaving the
-// namespace open for the rest of the file. Trailing line comments are tolerated
-// (`end Foo -- section`).
 const NAMESPACE_RE = new RegExp(String.raw`^namespace\s+(${NAME})`, "u");
 const SECTION_RE = new RegExp(
   String.raw`^(?:@\[[^\]]*\]\s*)?(?:(?:public|meta|noncomputable|private)\s+)*section(?:\s+(${NAME}))?\s*(?:--.*)?$`,
@@ -270,46 +149,21 @@ const SECTION_RE = new RegExp(
 const MUTUAL_RE = /^mutual\s*(?:--.*)?$/;
 const END_RE = new RegExp(String.raw`^end(?:\s+(${NAME}))?\s*(?:--.*)?$`, "u");
 
-// Depth of open `/- -/` comments after this line (they nest). Prose inside a module
-// docstring is not scope structure: Mathlib/CategoryTheory/NatIso.lean wraps a line
-// beginning "namespace so that they are available..." in its `/-! -/` header, which
-// otherwise pushes a namespace called `so` and mis-qualifies all 25 declarations below it.
+// Nesting depth of `/- -/` comments after this line.
 function commentDepthAfter(line, depth) {
   for (let j = 0; j < line.length - 1; j++) {
-    if (depth === 0 && line[j] === "-" && line[j + 1] === "-") break; // rest is a line comment
+    if (depth === 0 && line[j] === "-" && line[j + 1] === "-") break;
     if (line[j] === "/" && line[j + 1] === "-") { depth++; j++; }
     else if (line[j] === "-" && line[j + 1] === "/" && depth > 0) { depth--; j++; }
   }
   return depth;
 }
 
-// The name Lean gives the declaration on `declLine`: enclosing namespaces, in order,
-// prepended to the name as written. `section`s contribute nothing to the name but DO
-// consume an `end`, so they must sit on the stack — popping a namespace on an `end` that
-// closed a section silently mis-attributes every declaration below it.
-//
-// EVERY scope has to be pushed, not just the named sections: otherwise a bare `end`
-// pops the nearest non-namespace entry, reaching past the scope it actually closed, and
-// the declarations below come out unqualified (`zero_mem` for `LieSubalgebra.zero_mem`),
-// so rung 0 misses them and the query falls through to the text rungs that answer with
-// usage sites — the exact failure rung 0 exists to prevent.
-//
-// A bare `end` pops the TOP of the stack, and only when that is a scope a bare `end` can
-// legally close (anonymous section or `mutual`). Lean rejects `end` without a name for
-// anything else — verified in the REPL: `section / namespace Foo / end` errors with
-// "Missing name after `end`" — so if the top is a named scope, our tracking has drifted
-// and the safe move is to leave the stack alone. Searching DOWN for something poppable is
-// what the old code did, and an over-eager pop deletes namespaces and yields a wrong name;
-// an under-eager one only over-qualifies, which costs a rung-0 hit and nothing else.
-//
-// `namespace A.B` opens one scope PER COMPONENT, so it is pushed as two entries and may be
-// closed either as `end A.B` or as `end B` then `end A` — Mathlib does both, and reading
-// the compound name as a single indivisible scope left `Equiv.Perm` open for the rest of
-// Mathlib/Algebra/Group/End.lean, qualifying 18 `Equiv.*` lemmas as `Equiv.Perm.*`.
+// Segments of the fully qualified name for a declaration at declLine, from the namespaces open there.
 function qualifiedSegsAt(fileLines, declLine, nameAsWritten) {
-  if (nameAsWritten.startsWith("_root_.")) return splitPairs(nameAsWritten.slice(7)); // escapes every namespace
+  if (nameAsWritten.startsWith("_root_.")) return splitPairs(nameAsWritten.slice(7));
   const stack = [];
-  let depth = 0; // open /- -/ comments (they nest)
+  let depth = 0;
   for (let i = 0; i < declLine - 1; i++) {
     const l = fileLines[i];
     const commented = depth > 0;
@@ -318,8 +172,6 @@ function qualifiedSegsAt(fileLines, declLine, nameAsWritten) {
     let m;
     if ((m = l.match(NAMESPACE_RE))) for (const part of splitPairs(m[1])) stack.push({ ns: true, name: part.n, raw: part.raw });
     else if ((m = l.match(SECTION_RE))) {
-      // A dotted section decomposes the same way a dotted namespace does: Mathlib opens
-      // `section ModuleCat.Unbundled` and closes it with `end Unbundled`.
       if (m[1] === undefined) stack.push({ ns: false, name: null });
       else for (const part of splitPairs(m[1])) stack.push({ ns: false, name: part.n, raw: part.raw });
     }
@@ -330,8 +182,6 @@ function qualifiedSegsAt(fileLines, declLine, nameAsWritten) {
         const base = stack.length - parts.length;
         if (base >= 0 && parts.every((p, k) => stack[base + k].name === p)) stack.length = base;
         else {
-          // Tracking has drifted (a push we did not see). Fall back to the outermost
-          // scope of that name, which is where the old code always looked.
           const at = stack.map((s) => s.name).lastIndexOf(parts.join("."));
           if (at >= 0) stack.length = at;
         }
@@ -344,17 +194,9 @@ function qualifiedSegsAt(fileLines, declLine, nameAsWritten) {
   return [...stack.filter((s) => s.ns).map((s) => ({ n: s.name, raw: s.raw })), ...splitPairs(nameAsWritten)];
 }
 
-// Two readings of the same assembled name. The unquoted join is the matching key — rung 0
-// compares it against the query, which arrives unquoted. The raw join is what goes back to
-// the agent: the same name, written so that it parses.
 const qualifiedNameAt = (f, l, n) => qualifiedSegsAt(f, l, n).map((q) => q.n).join(".");
 const pasteableNameAt = (f, l, n) => qualifiedSegsAt(f, l, n).map((q) => q.raw).join(".");
 
-// The name to head a hit with. `text` starts at `headLine`, but its first line can be a
-// bare attribute — `@[simp]` alone on a line is a head for HEAD_RE — so the keyword line
-// is searched for inside the block rather than assumed to be the first. Returns null when
-// the block is not a declaration at all: import lines, docstring prose, wrapped binders
-// and proof-body lines all reach here, and there is no name to give for those.
 function nameOfHit(fileLines, headLine, text) {
   const lines = text.split("\n");
   for (let k = 0; k < lines.length; k++) {
@@ -362,27 +204,15 @@ function nameOfHit(fileLines, headLine, text) {
     if (!m) continue;
     return {
       name: pasteableNameAt(fileLines, headLine + k, m[1]),
-      // `private` binds to the file it is written in, so the assembled name is real but
-      // NOT usable from problem.lean. Saying so costs a clause; letting the agent spend a
-      // check discovering it costs a compile.
       isPrivate: /(?:^|\s)private\s/.test(" " + lines[k].replace(/^@\[[^\]]*\]\s*/, " ")),
     };
   }
   return null;
 }
 
-// Declarations whose assembled name is EXACTLY the query. Exact only, by design: a
-// declaration that merely shares the final segment (`Fin.val_lt_val` vs the real
-// `Units.val_lt_val`) is a different lemma, and offering it as a lead reads as
-// confirmation of a name that does not exist.
+// Declarations whose fully qualified name equals the pattern exactly.
 async function qualifiedLookup(pattern, maxResults, signal) {
-  // `?` is a legal Lean name character (`List.find?`) and an ERE quantifier, so escape
-  // before handing the segment to grep.
   const base = pattern.split(".").pop().replace(/[.[\]{}()*+?^$|\\]/g, "\\$&");
-  // Lax ERE: grep finds lines where a declaration keyword is followed by the base name
-  // (with or without an explicit prefix). DECL_NAME_RE below throws out the rest. The
-  // prefix is any non-space run, not an ASCII identifier: `theorem HomologicalComplex₂.d₁`
-  // is written with a prefix grep must be allowed to skip over.
   const ere = `(${DECL_KW})[[:space:]]+([^[:space:]]*\\.)?${base}`;
   let r;
   try { r = await runGrep(ere, { regex: true, ci: false, cap: ANCHOR_LINE_CAP }, signal); } catch { return []; }
@@ -401,8 +231,6 @@ async function qualifiedLookup(pattern, maxResults, signal) {
     if (!fileLines) continue;
     if (qualifiedNameAt(fileLines, Number(lineStr), nm[1]) !== pattern) continue;
     const { headLine, text } = expandDecl(fileLines, Number(lineStr));
-    // Resolved the same way as every other hit rather than reusing `pattern`: the query
-    // arrives unquoted, and what goes back has to be the form that parses.
     const named = nameOfHit(fileLines, headLine, text);
     hits.push({ path: displayPath(file), line: headLine, text, name: named?.name ?? null, isPrivate: named?.isPrivate ?? false });
     if (hits.length >= maxResults) break;
@@ -413,12 +241,9 @@ async function qualifiedLookup(pattern, maxResults, signal) {
 const META = /[.*+?|()[\]{}^$\\]/;
 const META_RUN = /[.*+?|()[\]{}^$\\]+/g;
 const isValidRegex = (p) => { try { new RegExp(p); return true; } catch { return false; } };
-// Whitespace-insensitive view of a declaration: Mathlib wraps signatures across lines
-// and indents continuations, so `A.*B` can only ever match once the block is flat.
 const flatten = (t) => t.replace(/\s+/g, " ").trim();
 
-// The literal chunks of a pattern, longest first. These are what grep can search for
-// verbatim to find candidate declarations when the pattern itself spans line breaks.
+// Literal fragments of a pattern, longest first.
 function anchorsOf(pattern) {
   return (META.test(pattern) ? pattern.split(META_RUN) : pattern.split(/\s+/))
     .map((s) => s.trim())
@@ -434,34 +259,13 @@ function matcherFor(pattern, ci, regex) {
   return (t) => (ci ? t.toLowerCase() : t).includes(needle);
 }
 
-// Main entry. Returns { hits: [{path, line, text}], truncated, mode }.
-//
-// The agent does NOT choose the matching mode: given the choice, agents routinely
-// passed regex metacharacters with regex=false (so `GL.*Sylow` matched as 9 literal
-// characters) and got nothing. Mode is a property of the tool, like result depth: try
-// the interpretations in order of how literally they take the query and stop at the
-// first that finds anything.
-//
-//   1 literal                     grep -F                 (`(a * b) ^ n` stays literal)
-//   2 literal, case-insensitive   grep -F -i              (wrong-case guess)
-//   3 regex                       grep -E                 (`GL.*Sylow`, one line)
-//   4 regex, case-insensitive     grep -E -i
-//   5 across line breaks          anchor grep + whole-declaration match
-//
-// Rung 5 is what a line-based grep structurally cannot do: Mathlib signatures wrap, so
-// `card_GL.*Fin.*ZMod` never matches a single line even as a correct regex. It greps the longest
-// literal fragment to get candidate declarations, then tests the whole query against
-// each expanded declaration with its whitespace flattened.
+// Tries qualified name, then literal, case-insensitive and regex rungs, then a cross-line anchor search.
+// Returns { hits: [{path, line, text, name, isPrivate}], truncated, mode }.
 export async function grepMathlib(pattern, { maxResults = 10 } = {}, signal) {
   if (!pattern || !pattern.trim()) throw new Error("empty pattern");
   if (!existsSync(MATHLIB_SRC)) throw new Error(`Mathlib checkout not found at ${MATHLIB_SRC}`);
   const asRegex = META.test(pattern) && isValidRegex(pattern);
 
-  // A dotted identifier is a question about a NAME, so answer it as one, before any
-  // text rung. Running this last would only rescue the queries that come back empty;
-  // running it first also fixes the more common half, where the qualified string does
-  // occur at usage sites in other files and the text rungs answer a "does X exist?"
-  // question with lemmas that merely mention X and never the declaration itself.
   if (QUALIFIED.test(pattern)) {
     const exact = await qualifiedLookup(pattern, maxResults, signal);
     if (exact.length) return { hits: exact, truncated: false, mode: "qualified-name" };
@@ -472,9 +276,6 @@ export async function grepMathlib(pattern, { maxResults = 10 } = {}, signal) {
     { mode: "literal-ci", regex: false, ci: true },
     ...(asRegex ? [{ mode: "regex", regex: true, ci: false }, { mode: "regex-ci", regex: true, ci: true }] : []),
   ];
-  // A pattern grep rejects (valid JS regex, invalid POSIX ERE — `\d`, `\w`, ...) must
-  // not sink the whole call: keep the message and only surface it if nothing else hits,
-  // where it is the actionable answer.
   let regexErr = null;
   for (const rung of rungs) {
     let r;
@@ -487,9 +288,6 @@ export async function grepMathlib(pattern, { maxResults = 10 } = {}, signal) {
     }
     if (r.lines.length === 0) continue;
     const got = collectHits(r.lines, {
-      // Same matcher against the declaration's TEXT (does this hit answer the query at
-      // all) and against its NAME (does the query name it) — one definition of matching
-      // per rung, so the ranking cannot disagree with the search that produced the hits.
       inText: matcherFor(pattern, rung.ci, rung.regex),
       inName: matcherFor(pattern, rung.ci, rung.regex),
       pattern,
@@ -500,11 +298,9 @@ export async function grepMathlib(pattern, { maxResults = 10 } = {}, signal) {
     if (got.hits.length) return { ...got, mode: rung.mode };
   }
 
-  // Rung 5: only worth trying when the query is built from several fragments — a
-  // single-fragment query would already have been found above.
   const anchors = anchorsOf(pattern);
   if (anchors.length >= 2) {
-    const match = matcherFor(pattern, true, asRegex); // case-insensitive: the rungs above already tried exact case
+    const match = matcherFor(pattern, true, asRegex);
     for (const anchor of anchors.slice(0, 2)) {
       let r;
       try {
@@ -513,9 +309,6 @@ export async function grepMathlib(pattern, { maxResults = 10 } = {}, signal) {
       if (r.lines.length === 0) continue;
       const got = collectHits(r.lines, {
         inText: (text) => match(flatten(text)),
-        // A cross-line query is several fragments spanning a wrapped signature, so it
-        // never matches a bare name; the tiers collapse to "signature match" for all of
-        // them and the bucket keeps traversal order, which is the honest ordering here.
         inName: () => false,
         pattern,
         ci: true,

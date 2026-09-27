@@ -1,16 +1,5 @@
 #!/usr/bin/env node
-// Probes for runner/highwater.js — the solved high-water mark's bookkeeping. Pure
-// filesystem work: no Lean, no model, no runner.
-//
-// The end-to-end path is covered by scripts/smoke-highwater.sh, which is the real test
-// (an agent that reaches a proof and then wrecks it, graded both ways). What it CANNOT
-// reach is everything that only happens when something goes wrong: a stamp file lost
-// mid-attempt, a snapshot deleted, an unwritable directory, a corrupt stamp. Those
-// branches decide whether a lost proof is recorded or silently forgotten, and an
-// attempt only visits them once in a very bad run — so they are asserted here instead
-// of waited for.
-//
-//   node scripts/probe-highwater.mjs
+// Probes for runner/highwater.js bookkeeping and its failure branches. Filesystem only, no Lean.
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, chmodSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -42,8 +31,6 @@ const unsolved = (reason = "uses_sorry") => ({ solved: false, reason, detail: "d
   rmSync(d, { recursive: true, force: true });
 }
 
-// A single green check: first and last are the same bytes, which is what lets the
-// grader compile once instead of twice.
 {
   const d = fresh();
   recordHighWater(d, "ONLY", at(1));
@@ -53,9 +40,6 @@ const unsolved = (reason = "uses_sorry") => ({ solved: false, reason, detail: "d
 }
 
 // ------------------------------------------------------------- damage cases
-// The stamp file is lost mid-attempt but the first snapshot survived. The first proof
-// is the one ON DISK, not the next green check — otherwise a later, worse proof would
-// be recorded as the moment the attempt first succeeded.
 {
   const d = fresh();
   recordHighWater(d, "REAL FIRST", at(1));
@@ -65,7 +49,6 @@ const unsolved = (reason = "uses_sorry") => ({ solved: false, reason, detail: "d
   rmSync(d, { recursive: true, force: true });
 }
 
-// A corrupt stamp reads as "no watermark", not as a crash in the middle of a check.
 {
   const d = fresh();
   writeFileSync(join(d, STAMP_FILE), "{not json");
@@ -74,8 +57,6 @@ const unsolved = (reason = "uses_sorry") => ({ solved: false, reason, detail: "d
   rmSync(d, { recursive: true, force: true });
 }
 
-// A snapshot is a bonus record, never a reason to fail a check the agent is waiting on:
-// an unwritable attempt dir must cost the watermark, not the attempt.
 {
   const d = fresh();
   const ro = join(d, "readonly");
@@ -92,7 +73,6 @@ const unsolved = (reason = "uses_sorry") => ({ solved: false, reason, detail: "d
 check("no watermark at all reads as null", readHighWater(fresh()) === null);
 
 // ------------------------------------------------------------- the grading pass
-// Never green: no record, and no grading work attempted.
 {
   const d = fresh();
   let calls = 0;
@@ -101,7 +81,6 @@ check("no watermark at all reads as null", readHighWater(fresh()) === null);
   rmSync(d, { recursive: true, force: true });
 }
 
-// Held one proof and kept it: ONE compile, not two, because the md5s agree.
 {
   const d = fresh();
   recordHighWater(d, "P", at(1));
@@ -112,7 +91,6 @@ check("no watermark at all reads as null", readHighWater(fresh()) === null);
   rmSync(d, { recursive: true, force: true });
 }
 
-// Improved the proof: two distinct files, two compiles, both recorded separately.
 {
   const d = fresh();
   recordHighWater(d, "FIRST PROOF", at(1));
@@ -124,8 +102,6 @@ check("no watermark at all reads as null", readHighWater(fresh()) === null);
   rmSync(d, { recursive: true, force: true });
 }
 
-// THE case the whole mechanism exists for: the agent held a proof and then wrecked it.
-// The snapshot must still grade solved even though the attempt did not.
 {
   const d = fresh();
   recordHighWater(d, "GOOD", at(1));
@@ -134,9 +110,6 @@ check("no watermark at all reads as null", readHighWater(fresh()) === null);
   rmSync(d, { recursive: true, force: true });
 }
 
-// ...and the reverse: a check that passed the agent's gate but does NOT grade solved
-// must not be laundered into ever_solved. The gate and the grader agreeing is
-// probe-grade-agreement.mjs's job; this asserts the watermark believes the GRADER.
 {
   const d = fresh();
   recordHighWater(d, "LOOKED GREEN", at(1));
@@ -146,10 +119,6 @@ check("no watermark at all reads as null", readHighWater(fresh()) === null);
   rmSync(d, { recursive: true, force: true });
 }
 
-// The hole found by re-reading on 2026-08-07: the first snapshot is gone from disk but
-// the last one is there. Short-circuiting on md5 equality alone would reuse a null and
-// throw away a gradeable proof — and with both stamps absent, `undefined === undefined`
-// makes the two look equal.
 {
   const d = fresh();
   recordHighWater(d, "P", at(1));
@@ -159,7 +128,6 @@ check("no watermark at all reads as null", readHighWater(fresh()) === null);
   rmSync(d, { recursive: true, force: true });
 }
 
-// Both snapshots gone, stamp intact: nothing to grade, and no crash.
 {
   const d = fresh();
   recordHighWater(d, "P", at(1));

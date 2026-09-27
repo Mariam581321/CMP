@@ -1,10 +1,6 @@
 #!/usr/bin/env node
-// Scripted probes for the fact-bank and worker machinery: the add_fact gate, the
-// check_snippet bank prefix, and (with --worker, costs ~1 cent of DeepSeek) one real
-// worker subprocess end-to-end. Needs the lean server up.
-//
-//   node scripts/probe-blockc.mjs            # gate + prefix probes (free, REPL only)
-//   node scripts/probe-blockc.mjs --worker   # plus one live runWorker round-trip
+// Probes the fact bank: add_fact gate, check_snippet bank prefix, and (with --worker) one live worker.
+// Needs the lean server up. --worker spends DeepSeek credits.
 
 import { mkdtempSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -65,8 +61,6 @@ const opts = { factsFile, client: "probe-blockc" };
   check("compile error re-labeled to the candidate's line 1", r.ok === false && m?.[1] === "1", r.pretty);
 }
 {
-  // Two concurrent adds through the lock: both must be admitted (serialized), and the
-  // bank as a whole must still compile.
   const [r1, r2] = await Promise.all([
     addFact("theorem cmpfact_p1 : 3 + 3 = 6 := by norm_num", opts),
     addFact("theorem cmpfact_p2 : 5 + 5 = 10 := by norm_num", opts),

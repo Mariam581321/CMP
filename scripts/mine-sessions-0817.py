@@ -1,36 +1,7 @@
 #!/usr/bin/env python3
-"""Session miner — recompute everything from raw events, trusting nothing.
+"""Mine raw session events (main + workers) for every attempt in CELLS.
 
-For every attempt in the 13 fatex90 cells (patched views, snippetonly-r2 glue),
-parse the session event logs (main + workers) and extract:
-
-  * cumulative cost_std timeline (assistant usage re-priced at STD_PRICES,
-    worker spend merged by timestamp for spawn arms)
-  * the full check trajectory: every lean_check result parsed into
-    (status, errors, sorries, stmt flag, md5, cost-at-check, turn)
-  * first green (first COMPLETE lean_check) — recomputed, then cross-checked
-    against the recorded high_water stamp
-  * user messages ≥2 classified: real nudge / output-cutoff nudge / other; each nudge
-    also carries whether it named a modified statement and what ended the turn before
-    it (stopReason). A GIVE-UP is a nudge after a turn the agent ended itself
-    (stopReason == "stop") with the statement intact: cutoffs, transport errors and
-    statement-restore nudges are the harness's business, not the agent giving up
-    (Mariam, 2026-08-29). first_giveup is what the paper's harness scores on.
-  * post-green segment: cost, tool calls, checks, wrecks, final vs green md5
-  * error fingerprints (normalized body hash) for stuck-loop detection
-  * spawn usage: calls, worker count, worker cost/tools, task text heads
-  * pre_giveup: the same tool / turn / compaction / worker counts restricted to what
-    happened before the first give-up -- the no-nudge harness's view of the attempt's
-    behaviour, which is what paper/data/behaviour.csv reports
-
-Selection of session files: an attempt dir may hold several session files
-(promptless resume, or a discarded earlier attempt superseded by keep-last).
-We pick the suffix of the time-sorted file list whose summed assistant usage
-best matches the row's recorded tokens; the match quality is recorded so
-validation can flag the attempts where this was ambiguous.
-
-Writes mined/attempts.jsonl, mined/catalog.json, mined/validation.json
-(all under the worktree the script lives in).
+Writes mined/attempts.jsonl, mined/catalog.json, mined/validation.json.
 """
 
 import json, os, re, sys, glob, hashlib
@@ -74,7 +45,6 @@ def load_rows(path):
     return out
 
 def cell_rows(name):
-    """Resolve the patched view of a cell (context-wall rerun > false-green rerun > raw)."""
     d, patched = {}, None
     for rid in CELLS[name]:
         base = os.path.join(RES, rid)
@@ -89,8 +59,6 @@ def cell_rows(name):
             d[r["problem"]] = r
     return d, patched
 
-# ---------------------------------------------------------------- check parsing
-
 CAT = {"unknown_check_heads": Counter(), "other_user_heads": Counter(),
        "stop_reasons": Counter(), "session_pick": Counter()}
 
@@ -101,7 +69,6 @@ RE_FAILED1 = re.compile(r"^FAILED — (\d+) errors?")
 RE_INC = re.compile(r"^INCOMPLETE — no errors, (\d+) sorr")
 
 def parse_check(txt):
-    """-> dict(status, errors, sorries, stmt_mod, md5, noop) status in C/I/F/S/X"""
     md5 = (RE_MD5.search(txt) or [None, None])[1]
     lines = [l.strip() for l in txt.split("\n") if l.strip()]
     head = ""
@@ -132,11 +99,11 @@ def parse_check(txt):
     elif (head.startswith("lean_check could not compile") or
           head.startswith("lean_check unavailable") or
           head.startswith("CHECK REJECTED")):
-        status = "U"  # infrastructure-unavailable / policy rejection, not a compile verdict
+        status = "U"
     else:
         status = "X"
         CAT["unknown_check_heads"][head[:80]] += 1
-    # fingerprint: body minus the volatile "checked <path> (bytes, md5)" line
+    # fingerprint ignores the "checked <path> (bytes, md5)" line
     body = "\n".join(l for l in lines if not l.startswith("checked "))
     fp = hashlib.md5(body.encode()).hexdigest()[:10]
     return {"status": status, "errors": errors, "sorries": sorries,
@@ -149,8 +116,6 @@ def classify_user(txt):
     if t.startswith("Your last message hit the output-token limit"):
         return "cutoff"
     return "other"
-
-# ---------------------------------------------------------------- session parsing
 
 def read_events(path):
     ev = []
@@ -186,14 +151,12 @@ def session_usage_sum(events):
     return tin, tout, tcr
 
 def pick_session_files(sdir, want):
-    """Choose the suffix of time-sorted session files whose usage best matches
-    the recorded tokens (want = dict in/out/cache_read or None). Returns
-    (events, pick_desc, rel_err)."""
+    # pick the suffix of session files whose usage best matches the recorded tokens
     files = sorted(glob.glob(os.path.join(sdir, "*.jsonl")))
     if not files:
         return [], "none", None
     per_file = [read_events(f) for f in files]
-    # dedupe across files by event id (promptless resume may replay history)
+    # dedupe across files by event id
     def merged(suffix):
         seen, out = set(), []
         for evs in suffix:
@@ -222,12 +185,11 @@ def pick_session_files(sdir, want):
     return evs, desc, round(err, 5)
 
 def mine_worker_curve(wdir):
-    """-> (cost_curve [(ts, cum_cost)], summary dict) for one worker."""
     sessions = sorted(glob.glob(os.path.join(wdir, "session", "*.jsonl")))
     pts, tin = [], 0
     tout = tcr = 0
     tools = Counter()
-    call_ts = []          # (ts, tool name) for every tool call, for the give-up censor
+    call_ts = []
     for f in sessions:
         for e in read_events(f):
             if e.get("type") != "message":
@@ -246,8 +208,6 @@ def mine_worker_curve(wdir):
     return pts, {"tokens": {"in": tin, "out": tout, "cache_read": tcr},
                  "cost_std": cost_std(tin, tout, tcr), "tool_calls": dict(tools),
                  "_call_ts": call_ts}
-
-# ---------------------------------------------------------------- attempt miner
 
 def mine_attempt(arm, prob, row):
     rid = row.get("run_id")
@@ -270,7 +230,6 @@ def mine_attempt(arm, prob, row):
         out["no_session"] = True
         return out
 
-    # worker cost curves (spawn arms)
     wcurves, workers = [], []
     for wdir in sorted(glob.glob(os.path.join(pdir, "workers", "w*"))):
         pts, summ = mine_worker_curve(wdir)
@@ -282,25 +241,24 @@ def mine_attempt(arm, prob, row):
             summ["worker_json"]["task"] = (summ["worker_json"].get("task") or "")[:120]
         workers.append(summ)
     def wcost_at(ts):
-        # cumulative across workers: sum of each worker's cost at ts
         return sum(max((c for t, c in cur if t <= ts), default=0.0) for cur in wcurves)
 
     tin = tout = tcr = 0
     turns = 0
     cur_cost = 0.0
-    checks = []           # per lean_check dicts
+    checks = []
     snippet_checks = 0
     tools = Counter()
-    call_ts = []          # (ts, tool name) for every main-agent tool call
+    call_ts = []
     compaction_ts = []
     stop_reasons = Counter()
     truncations = 0
-    last_sr = None        # stopReason of the latest assistant message
-    users = []            # (idx, ts, class, cost_at, head)
+    last_sr = None
+    users = []
     first_green = None
     compactions = 0
     first_ts = last_ts = None
-    cost_curve = []       # sparse (turn, ts, cum_cost) every assistant msg
+    cost_curve = []
 
     for e in events:
         ts = e.get("timestamp") or ""
@@ -359,7 +317,7 @@ def mine_attempt(arm, prob, row):
         elif role == "user":
             txt = content_text(m.get("content"))
             cls = classify_user(txt)
-            if users:  # beyond the first (the prompt)
+            if users:
                 if cls == "other":
                     CAT["other_user_heads"][txt.lstrip()[:80]] += 1
             users.append({"idx": len(users), "ts": ts, "class": cls,
@@ -375,7 +333,6 @@ def mine_attempt(arm, prob, row):
     cutoffs = [u for u in interventions if u["class"] == "cutoff"]
     others = [u for u in interventions if u["class"] == "other"]
 
-    # post-green segment
     post = None
     if first_green is not None:
         gi = first_green_idx
@@ -396,7 +353,7 @@ def mine_attempt(arm, prob, row):
             "nudges_after": sum(1 for u in nudges if u["turn"] >= gturn),
         }
 
-    # stuck loops: longest run of identical fingerprints among non-C checks
+    # longest run of identical fingerprints among non-COMPLETE checks
     max_streak, cur_s, prev_fp = 0, 0, None
     n_noop = 0
     for c in checks:
@@ -409,10 +366,8 @@ def mine_attempt(arm, prob, row):
         prev_fp = c["fp"]
         max_streak = max(max_streak, cur_s)
 
-    # trajectory (compact): cost, errors, sorries, status per check
     traj = [[c["cost_at"], c["errors"], c["sorries"], c["status"]] for c in checks]
 
-    # greens before first intervention (for the no-nudge counterfactual)
     fi_any = interventions[0] if interventions else None
     fi_nudge = nudges[0] if nudges else None
     fi_give = giveups[0] if giveups else None
@@ -421,10 +376,7 @@ def mine_attempt(arm, prob, row):
             return None
         return bool(first_green and first_green["ts"] <= u["ts"])
 
-    # The no-nudge view: everything the attempt did strictly before its first give-up
-    # (the give-up nudge is a user message, so every call of the turn before it sorts
-    # earlier). Without a give-up the view is the whole attempt. Worker calls are
-    # censored on the same clock; a worker's cost is its curve at the give-up.
+    # counts restricted to before the first give-up
     give_ts = fi_give["ts"] if fi_give else None
     before = lambda t: give_ts is None or t < give_ts
     pre_workers = []
@@ -501,7 +453,6 @@ def main():
     cat = {k: dict(v.most_common(40)) for k, v in CAT.items()}
     json.dump(cat, open(os.path.join(OUTDIR, "catalog.json"), "w"), indent=2)
 
-    # validation summary
     val = {"n": len(attempts), "no_session": 0, "tok_relerr_gt_1pct": [],
            "solve_mismatch": [], "green_vs_hw_cost": [], "nudge_mismatch": [],
            "turn_mismatch": []}
@@ -511,7 +462,6 @@ def main():
             val["no_session"] += 1
             continue
         if a.get("tok_relerr") is not None and a["tok_relerr"] > 0.01:
-            # spawn arms: row tokens may include worker tokens — recheck with workers added
             mt, rt_ = a["mined_tokens"], a.get("row_tokens") or {}
             wtok = {"in": 0, "out": 0, "cache_read": 0}
             for w in a.get("workers") or []:
