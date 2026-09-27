@@ -1,12 +1,21 @@
-# CMP
+# Harness effects in agentic theorem proving
 
-A harness for running a Lean 4 theorem-proving agent with different toolsets and
-comparing them. We used it to test which tools help the [pi](https://github.com/earendil-works/pi)
-coding agent, driven by DeepSeek V4 Flash, prove graduate-level algebra problems from
-[FATE-X](https://github.com/frenzymath/FATE).
+A harness for testing which tools help a fixed Lean agent prove theorems, and how
+much its results vary from run to run.
+
+Components common to theorem-proving harnesses (retrieval, scratch compilation,
+subagents and memory) are represented as tools available to a fixed baseline agent:
+the [pi](https://github.com/earendil-works/pi) coding agent with DeepSeek V4 Flash and
+a `lean_check` tool that compiles the solution. A *design* is a set of these tools.
+Designs are evaluated on 90 formalised abstract-algebra problems from
+[FATE-X](https://github.com/frenzymath/FATE), excluding ten whose formal statements
+did not pass our audit, with a $1 cap per problem. Runs are compared problem by
+problem, not only by solve rate: the problems solved in only one of two runs (their
+*discordance*) measure run-to-run variability and support exact paired tests between
+designs.
 
 - `data/`: the per-attempt result tables the papers are built from, numbers only.
-  Transcripts and proofs are not released, to keep FATE-X uncontaminated.
+  Transcripts and accepted proofs are withheld to avoid contaminating FATE-X.
 - `docs/HARNESS.md`: how an attempt runs, the Lean server, grading, budget.
 - `docs/ANALYSIS.md`: how attempts are scored and how `data/` is produced.
 
@@ -21,11 +30,11 @@ extension adds one tool the agent can call; the extension name is what you pass 
 
 | extension (`--combo` name) | tool added | what it does |
 |---|---|---|
-| `lean-search` | `search_mathlib` | semantic search over Mathlib via the LeanSearch API |
-| `lean-grep` | `grep_mathlib` | text search over the local Mathlib source, plus `read` on it |
-| `lean-snippet` | `check_snippet` | compile a scratch snippet without touching the solution file |
-| `lean-spawn` | `spawn_subagents` | run worker agents in parallel on subtasks |
-| `lean-facts` | `add_fact` | add a verified lemma to a bank shared with the workers |
+| `lean-search` | `search_mathlib` | semantic search through LeanSearch |
+| `lean-grep` | `grep_mathlib` | searches the Mathlib source for matching declarations; the agent may then open the files |
+| `lean-snippet` | `check_snippet` | compiles a proof fragment against Mathlib, separately from the solution file |
+| `lean-spawn` | `spawn_subagents` | delegates to worker agents |
+| `lean-facts` | `add_fact` | stores proved lemmas in a fact bank shared with the workers |
 
 A design is a comma-separated list of extensions. The paper's eight designs are the
 empty list, each of `lean-grep`, `lean-search` and `lean-snippet` alone,
